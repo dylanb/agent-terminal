@@ -234,3 +234,18 @@ it('registers a terminal that predates title and branch and shows its work witho
   const olderWork = server.terminals().find(t => t.launchDirectory === '/work/older')?.work;
   expect([olderWork?.title, olderWork?.branch]).toEqual([undefined, undefined]);
 });
+
+it.each([CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_IDENTITY_MINOR - 1])('records the status changes of a terminal at minor %i in its timeline', async minor => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const older = await connectScriptedTerminal(root, { launchDirectory: '/work/older-timeline', repositoryRoot: null }, minor);
+  cleanups.push(() => older.close());
+  const terminal = () => server.terminals().find(t => t.launchDirectory === '/work/older-timeline');
+  await older.sendStatus(workStatus({ activity: 'active' }));
+  await vi.waitFor(() => expect(terminal()?.work?.activity).toBe('active'));
+  expect(terminal()?.timeline ?? []).toEqual([]);
+  await older.sendStatus(workStatus({ activity: 'quiet' }));
+  await vi.waitFor(() => expect(terminal()?.work?.activity).toBe('quiet'));
+  expect(terminal()?.timeline).toEqual([{ kind: 'status', text: expect.stringContaining('Idle'), receivedAt: expect.any(Number) }]);
+});

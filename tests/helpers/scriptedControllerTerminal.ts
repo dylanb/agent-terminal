@@ -1,11 +1,16 @@
 import WebSocket from 'ws';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, encodeControllerMessage, parseControllerMessage } from '../../src/shared/controllerProtocol';
+import type { NotificationCondition } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
 import { connectWebSocket } from './controllerWebSocket';
 
 export interface ScriptedControllerTerminal {
   sendStatus(work: ControllerWorkStatus): Promise<void>;
+  /** A needs-a-human request as the terminal raises it. */
+  raise(notification: NotificationCondition): Promise<void>;
+  /** The request currently standing, as the terminal reports it at registration or when it clears. */
+  reportCurrent(notification: NotificationCondition | null): Promise<void>;
   activations(): number;
   /** The loop message ids the controller asked this terminal to dismiss, in order. */
   loopMessageDismissals(): string[];
@@ -49,10 +54,15 @@ export async function connectScriptedTerminal(
     await close();
     throw error;
   }
+  const send = (message: { type: 'notification'; notification: NotificationCondition } | { type: 'notification-current'; notification: NotificationCondition | null }) => new Promise<void>((resolve, reject) => {
+    socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, ...message }), error => (error ? reject(error) : resolve()));
+  });
   return {
     sendStatus: work => new Promise<void>((resolve, reject) => {
       socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => (error ? reject(error) : resolve()));
     }),
+    raise: notification => send({ type: 'notification', notification }),
+    reportCurrent: notification => send({ type: 'notification-current', notification }),
     activations: () => activations,
     loopMessageDismissals: () => [...loopMessageDismissals],
     close,

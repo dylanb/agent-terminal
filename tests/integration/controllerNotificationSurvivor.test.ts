@@ -6,6 +6,7 @@ import { startControllerTransport } from '../../src/main/controllerTransport';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { createLoopNotifier } from '../../src/main/loopNotifier';
 import type { FlowStateView } from '../../src/shared/ipc';
+import { notificationEntries } from '../helpers/controllerHistory';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
 it('does not reconstruct an ended survivor request when overlap clears through the real source and client', async () => {
@@ -24,7 +25,7 @@ it('does not reconstruct an ended survivor request when overlap clears through t
   }, () => {}, source);
   let stopPeer = () => {};
   try {
-    await expect.poll(() => registry.terminals()[0]?.notifications?.[0]?.message).toBe('complete · iter 1');
+    await expect.poll(() => notificationEntries(registry.terminals()[0])[0]?.message).toBe('complete · iter 1');
     const survivorId = registry.terminals()[0].id;
     stopPeer = registerControllerTerminal(home, identity, () => 'activated');
     await expect.poll(() => registry.terminals().length).toBe(2);
@@ -33,8 +34,7 @@ it('does not reconstruct an ended survivor request when overlap clears through t
     await expect.poll(() => registry.terminals().find(t => t.id === survivorId)?.work?.error?.reason).toBe('barrier after ended request');
     stopPeer();
     await expect.poll(() => registry.terminals().length).toBe(1);
-    expect(registry.terminals()[0].notifications ?? []).toEqual([]);
-    expect(registry.terminals()[0].notifications?.[0]).toBeUndefined();
+    expect(notificationEntries(registry.terminals()[0])).toEqual([]);
   } finally {
     stopPeer(); stop(); await registry.dispose(); rmSync(home, { recursive: true, force: true });
   }
@@ -55,13 +55,13 @@ it('current-condition changes preserve legacy qualification instead of creating 
   try {
     await expect.poll(() => registry.terminals()[0]?.work).toEqual(workStatus());
     source.observe('/work', view(true));
-    await expect.poll(() => registry.terminals()[0]?.notifications?.[0]?.count).toBe(1);
-    const first = registry.terminals()[0].notifications;
+    await expect.poll(() => notificationEntries(registry.terminals()[0])[0]?.count).toBe(1);
+    const first = notificationEntries(registry.terminals()[0]);
     source.observe('/work', view(false));
     source.observe('/work', view(true));
     publish!(workStatus({ error: { reason: 'barrier after current refresh' } }));
     await expect.poll(() => registry.terminals()[0]?.work?.error?.reason).toBe('barrier after current refresh');
-    expect(registry.terminals()[0].notifications).toEqual(first);
+    expect(notificationEntries(registry.terminals()[0])).toEqual(first);
   } finally {
     stop(); await registry.dispose(); rmSync(home, { recursive: true, force: true });
   }

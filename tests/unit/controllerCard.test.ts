@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
+import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -338,5 +339,89 @@ describe('controller card identity', () => {
     const title = '<b>bold</b> & "quoted"';
     const { element } = mount(withWork({ title, branch: 'a<b' }));
     expect({ text: element ? cardHeaderTextIn(element).includes(title) : false, injected: element?.querySelector('header b') ?? null }).toEqual({ text: true, injected: null });
+  });
+});
+
+describe('controller card timeline', () => {
+  const at = (hour: number, minute: number) => new Date(2026, 9, 28, hour, minute).getTime();
+  const timeline = [
+    statusItem('Turned quiet at the newest moment', at(15, 43)),
+    notificationItem('Review the release proposal', at(13, 24), 2),
+    statusItem('Started the oldest retained change', at(10, 17)),
+  ];
+  const withTimeline = (items: readonly unknown[], work: Partial<WorkStatus> = {}) => ({ ...statusTerminal(work), timeline: items }) as ControllerTerminal;
+  function mountWithClear(terminal: ControllerTerminal) {
+    const host = document.createElement('div');
+    document.body.append(host);
+    let cleared = 0;
+    const card = createControllerCard(host, {
+      card: directoryCards([terminal])[0], expandedByDefault: true,
+      onAction() {}, onDismissLoopMessage() {}, onClearHistory() { cleared += 1; },
+    });
+    return { card, element: cardIn(host, terminal.launchDirectory)!, cleared: () => cleared };
+  }
+
+  it('shows every entry newest first, each with its time, and no History control', () => {
+    const { element } = mountWithClear(withTimeline(timeline));
+    const entries = timelineEntriesIn(element);
+    expect.soft(entries).toHaveLength(3);
+    expect.soft(missingInOrder(element.textContent ?? '', ['Turned quiet at the newest moment', 'Review the release proposal', 'Started the oldest retained change'])).toEqual([]);
+    expect.soft(entries.map(entry => entryTimesIn(entry).length)).toEqual([1, 1, 1]);
+    const clocks = [/\b(?:15|3):43\b/, /\b(?:13|1):24\b/, /\b10:17\b/];
+    clocks.forEach((clock, index) => expect.soft(entries[index]?.textContent ?? '').toMatch(clock));
+    expect.soft(historyIn(element)).toBeUndefined();
+  });
+
+  it('identifies a notification entry to assistive technology and does not label a status entry as one', () => {
+    const { element } = mountWithClear(withTimeline(timeline));
+    const [newestStatus, notification, oldestStatus] = timelineEntriesIn(element);
+    expect.soft(entryAccessibleText(notification ?? element)).toContain('Review the release proposal');
+    expect.soft(notification && entryIsNotification(notification)).toBe(true);
+    expect.soft(entryAccessibleText(newestStatus ?? element)).toContain('Turned quiet at the newest moment');
+    expect.soft(newestStatus && entryIsNotification(newestStatus)).toBe(false);
+    expect.soft(oldestStatus && entryIsNotification(oldestStatus)).toBe(false);
+  });
+
+  it('shows how many times a notification arrived only when more than once', () => {
+    const { element } = mountWithClear(withTimeline([notificationItem('Seen once', at(9, 5)), notificationItem('Seen twelve times', at(8, 5), 12)]));
+    const [once, many] = timelineEntriesIn(element);
+    expect.soft(many?.textContent ?? '').toMatch(/12\s*(?:arrivals|times|×)|(?:×|received)\s*12/i);
+    expect.soft(once?.textContent ?? '').not.toMatch(/\b1\s*(?:arrivals|times|×)|(?:×|received)\s*1\b/i);
+  });
+
+  it('shows Clear history whenever the timeline has entries, status entries alone included, and reports its use once', () => {
+    const { element, cleared } = mountWithClear(withTimeline([statusItem('Turned quiet', at(9, 5))]));
+    const clear = clearHistoryIn(element);
+    expect.soft(clear).toBeDefined();
+    clear?.click();
+    expect.soft(cleared()).toBe(1);
+  });
+
+  it('shows no entries and no Clear history when the timeline is empty or absent', () => {
+    for (const items of [[], undefined]) {
+      const terminal = items ? withTimeline(items) : statusTerminal();
+      const { element, card } = mountWithClear(terminal);
+      expect.soft(timelineEntriesIn(element)).toEqual([]);
+      expect.soft(clearHistoryIn(element)).toBeUndefined();
+      card.dispose();
+    }
+  });
+
+  it('shows terminal-supplied entry text as plain text', () => {
+    const { element } = mountWithClear(withTimeline([statusItem('<img src=x onerror=alert(1)> became idle', at(9, 5)), notificationItem('<b>approve</b>', at(8, 5))]));
+    expect.soft(element.querySelector('img')).toBeNull();
+    expect.soft(element.querySelector('b')).toBeNull();
+    expect.soft(timelineEntriesIn(element)[0]?.textContent).toContain('<img src=x onerror=alert(1)> became idle');
+    expect.soft(timelineEntriesIn(element)[1]?.textContent).toContain('<b>approve</b>');
+  });
+
+  it('shows no timeline on a card for terminals that conflict', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const [a, b] = [withTimeline(timeline), { ...withTimeline(timeline), id: 'peer' }];
+    const component = createControllerCard(host, { card: directoryCards([a, b])[0], expandedByDefault: true, onAction() {}, onDismissLoopMessage() {} });
+    try {
+      expect(timelineEntriesIn(cardIn(host, a.launchDirectory)!)).toEqual([]);
+    } finally { component.dispose(); }
   });
 });

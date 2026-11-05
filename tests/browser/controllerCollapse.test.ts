@@ -1,13 +1,14 @@
 import { afterEach, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import '../../src/renderer/src/styles.css';
-import { cardHeaderIn, cardIn, cardLocator, headerActivationIn, historyLocator, statusRowIn } from '../helpers/controllerCards';
+import { cardHeaderIn, cardIn, cardLocator, headerActivationIn, clearHistoryLocator, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
+import { statusItem } from '../helpers/controllerHistory';
 
 afterEach(() => document.body.replaceChildren());
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)] };
 const DIRECTORY = working.launchDirectory;
 
 async function tabTo(target: HTMLElement | undefined): Promise<boolean> {
@@ -29,7 +30,7 @@ it('toggles a card once per click, Enter and Space on its header, flipping its e
     return {
       expanded: control?.getAttribute('aria-expanded') ?? 'no header',
       bodyPainted: Boolean(card && statusRowIn(card)?.checkVisibility({ visibilityProperty: true })),
-      bodyInTree: historyLocator(cardLocator(page.elementLocator(host), DIRECTORY)).query() !== null,
+      bodyInTree: clearHistoryLocator(cardLocator(page.elementLocator(host), DIRECTORY)).query() !== null,
       focused: control !== undefined && document.activeElement === control,
     };
   };

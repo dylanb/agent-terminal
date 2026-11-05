@@ -8,7 +8,7 @@ export const CARD_STATUS_TEST_ID = 'card-status';
 
 export interface RoleScope<L> {
   getByRole(
-    role: 'article' | 'button' | 'heading' | 'switch' | 'region',
+    role: 'article' | 'button' | 'heading' | 'switch' | 'region' | 'list' | 'listitem',
     options?: { name?: string | RegExp; exact?: boolean; expanded?: boolean; pressed?: boolean; checked?: boolean },
   ): L;
   getByTestId(testId: string): L;
@@ -53,10 +53,10 @@ export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector:
 export const accentLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_ACCENT_TEST_ID);
 export const statusRowLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_STATUS_TEST_ID);
 
-type DomRole = 'article' | 'button' | 'switch' | 'heading' | 'region';
+type DomRole = 'article' | 'button' | 'switch' | 'heading' | 'region' | 'list' | 'listitem';
 const implicitRoles: Record<string, DomRole> = {
   ARTICLE: 'article', BUTTON: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
-  H4: 'heading', H5: 'heading', H6: 'heading',
+  H4: 'heading', H5: 'heading', H6: 'heading', OL: 'list', UL: 'list', LI: 'listitem',
 };
 const roleOf = (node: Element): string | undefined => node.getAttribute('role') ?? implicitRoles[node.tagName];
 const nameText = (node: Node): string => {
@@ -180,11 +180,21 @@ export function showsFullReason(control: Element | undefined): boolean {
   return state === 'true';
 }
 
-export const receivedNotificationLocator = <L>(card: RoleScope<L>): L => card.getByRole('region', { name: /received notification/i });
-export const receivedNotificationIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['region'], /received notification/i)[0];
-
 export const historyLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /History\s+\d\s*\/\s*3/i });
 export const historyIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /History\s+\d\s*\/\s*3/i);
+
+/** The card's timeline: its one list of entries, newest first. */
+export const timelineLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => card.getByRole('list');
+export const timelineEntriesLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => timelineLocator(card).getByRole('listitem');
+export const timelineIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['list'])[0];
+export const timelineEntriesIn = (card: ParentNode): HTMLElement[] => {
+  const list = timelineIn(card);
+  return list ? roleMatches(list, ['listitem']) : [];
+};
+/** The text assistive technology reads for an entry; a notification entry's identifies it as one and a status entry's does not. */
+export const entryAccessibleText = (entry: Element): string => controlName(entry);
+export const entryTimesIn = (entry: ParentNode): HTMLTimeElement[] => [...entry.querySelectorAll('time')];
+export const entryIsNotification = (entry: Element): boolean => /notification/i.test(entryAccessibleText(entry));
 
 export const clearHistoryLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /Clear history/i });
 export const clearHistoryIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /Clear history/i);
