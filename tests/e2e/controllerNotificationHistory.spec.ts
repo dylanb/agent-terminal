@@ -75,7 +75,7 @@ test('a condition ending during outage is not revived and earns no second receip
     await g.disconnect(); await g.resolve(); await g.reconnect();
     await waitForConnections(g.controller().page, g.repo, 1);
     await expect.poll(async () => (await controllerSnapshot(g.controller().page)).find(t => t.launchDirectory === g.repo)?.work?.flow).toMatchObject({ step: 'verify' });
-    expect.soft((await g.entries()).every(item => item.message === g.first.message && item.receivedAt === g.first.receivedAt && item.count === 1)).toBe(true);
+    expect.soft(await g.entries()).toEqual([{ message: g.first.message, receivedAt: g.first.receivedAt, count: 1 }]);
     await expect.soft(statusRowLocator(cardLocator(g.controller().page, g.repo))).not.toContainText(/human/i);
   } finally { await g.dispose(); }
 });

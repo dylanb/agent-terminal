@@ -281,8 +281,9 @@ describe('the title a terminal reports', () => {
   it.each([
     ['ticket', (now: { repoKey: string; refs: Refs }) => { now.refs = { ticket: 220 }; }, '#220'],
     ['repository', (now: { repoKey: string; refs: Refs }) => { now.repoKey = '/other'; }, '#219'],
-  ])('is not relabelled by a late result for a replaced %s', async (_, replace, expected) => {
-    const { now, shown, seen, source, titleRequests } = identitySource({ refs: { ticket: 219 } });
+    ['pull request', (now: { repoKey: string; refs: Refs }) => { now.refs = { pr: 302 }; }, 'PR #302', { pr: 301 }],
+  ])('is not relabelled by a late result for a replaced %s', async (_, replace, expected, refs: Refs = { ticket: 219 }) => {
+    const { now, shown, seen, source, titleRequests } = identitySource({ refs });
     replace(now);
     source.refresh();
     expect(shown()?.title).toBe(expected);
