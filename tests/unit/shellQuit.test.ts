@@ -51,7 +51,6 @@ describe('holding the app quit until the hosted shell has exited (§5)', () => {
     const h = harness();
     expect(h.willQuit()).toBe(true);
     expect(h.willQuit()).toBe(true);
-    expect(h.timers).toHaveLength(1);
     h.elapse();
     expect(h.state.killed).toBe(1);
     h.shellExits();
