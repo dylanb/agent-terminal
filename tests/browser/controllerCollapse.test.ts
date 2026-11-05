@@ -8,7 +8,7 @@ import { statusItem } from '../helpers/controllerHistory';
 
 afterEach(() => document.body.replaceChildren());
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)] };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
 const DIRECTORY = working.launchDirectory;
 
 async function tabTo(target: HTMLElement | undefined): Promise<boolean> {

@@ -20,7 +20,7 @@ export const CONTROLLER_CHANNELS = {
   },
   clearHistory: {
     name: 'controller:clearHistory',
-    does: 'The controller window clears retained notifications for the observed terminal without changing its live work.',
+    does: 'The controller window clears the retained timeline of notifications and status changes for the observed terminal without changing its live work.',
   },
   dismissLoopMessage: {
     name: 'controller:dismissLoopMessage',
@@ -69,7 +69,9 @@ export type ControllerWorkStatus = {
   branch?: string | null;
 };
 
-export interface ControllerNotificationEntry { message: string; receivedAt: number; count: number }
+export type ControllerTimelineEntry =
+  | { kind: 'notification'; message: string; receivedAt: number; count: number }
+  | { kind: 'status'; text: string; receivedAt: number };
 
 export interface ControllerClearTarget { id: string; launchDirectory: string; revision: string }
 /** The latest loop-mechanics failure or benign no-op the terminal reported, until the operator dismisses or a newer one replaces it. */
@@ -77,7 +79,8 @@ export interface ControllerLoopMessage { id: string; kind: 'error' | 'notice'; r
 
 export interface ControllerTerminal {
   clearHistoryTarget?: ControllerClearTarget;
-  notifications?: ControllerNotificationEntry[];
+  /** Newest first, at most three entries across both kinds. */
+  timeline?: ControllerTimelineEntry[];
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';
   id: string;

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bodyControlIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
+import { statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -23,8 +24,8 @@ function expanded(host: HTMLElement, directory: string): boolean | string {
   return state === 'true' || state === 'false' ? state === 'true' : `aria-expanded is ${state}`;
 }
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
-const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working' };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
+const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
 const peer = { ...statusTerminal({ activity: 'quiet' }), id: 'peer', launchDirectory: '/cards/peer' };
 
 describe('the default collapse rule', () => {

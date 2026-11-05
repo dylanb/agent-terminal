@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
-import { directoryCards } from '../../src/shared/controllerCards';
+import { directoryCards, type ControllerDirectoryCard } from '../../src/shared/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
@@ -20,7 +20,7 @@ afterEach(() => { document.body.replaceChildren(); document.documentElement.remo
 it.each(['light', 'dark'])('an expanded card lists every timeline entry newest first with its time and no History control in the %s theme', async theme => {
   document.documentElement.dataset.theme = theme;
   const terminal = statusTerminal({ attention: { status: 'review', reasons: ['Live gate reason'] } });
-  const card = { ...directoryCards([terminal])[0], timeline };
+  const card = { ...directoryCards([terminal])[0], timeline } as ControllerDirectoryCard;
   const host = document.createElement('main'); document.body.append(host);
   let activated = false;
   const component = createControllerCard(host, { card, expandedByDefault: true, onDismissLoopMessage() {}, onAction() { activated = true; } });
@@ -44,11 +44,11 @@ it.each(['light', 'dark'])('an expanded card lists every timeline entry newest f
 
 it('lists a single entry and lists nothing for an empty timeline', async () => {
   const host = document.createElement('main'); document.body.append(host);
-  const one = createControllerCard(host, { card: { ...directoryCards([statusTerminal()])[0], timeline: timeline.slice(0, 1) }, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
+  const one = createControllerCard(host, { card: { ...directoryCards([statusTerminal()])[0], timeline: timeline.slice(0, 1) } as ControllerDirectoryCard, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
   try {
     expect.soft(timelineEntriesIn(cardIn(host, directory)!).map(entry => entry.innerText)).toEqual([expect.stringContaining('Newest proposal')]);
   } finally { one.dispose(); }
-  const empty = createControllerCard(host, { card: { ...directoryCards([statusTerminal()])[0], timeline: [] }, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
+  const empty = createControllerCard(host, { card: { ...directoryCards([statusTerminal()])[0], timeline: [] } as ControllerDirectoryCard, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
   try {
     expect.soft(timelineEntriesIn(host)).toEqual([]);
   } finally { empty.dispose(); }

@@ -16,11 +16,11 @@ export interface ControllerCardDeps {
 }
 
 type Action = 'bring-forward' | 'dismiss' | 'dismiss-loop-message';
-type Focus = 'header' | 'history' | 'clear' | Action | { reason: string };
+type Focus = 'header' | 'clear' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
 export interface CardState {
-  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; historyExpanded: boolean; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
+  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
 }
 
 export interface ControllerCard {
@@ -135,56 +135,32 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     actions.bind(actionButton, deps.onAction, { key: actionKind });
     header.append(actionButton);
   }
-  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? [];
-  if (notifications[0]) {
-    const notification = notifications[0];
-    const box = element('section', 'controller-notification');
-    box.setAttribute('role', 'region');
-    box.setAttribute('aria-label', 'Received notification');
-    const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    bell.classList.add('controller-notification-bell');
-    bell.setAttribute('viewBox', '0 0 24 24');
-    bell.setAttribute('aria-hidden', 'true');
-    bell.setAttribute('focusable', 'false');
-    const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-    outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
-    bell.append(outline);
-    const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-    time.dateTime = new Date(notification.receivedAt).toISOString();
-    box.append(bell, ' ', element('p', 'controller-card-line', notification.message), ' ', time);
-    if (notification.count > 1) box.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
-    body.append(' ', box);
-  }
   if (actionKind === 'dismiss') body.append(' ', actionButton);
-  let history: HTMLButtonElement | undefined;
+  const timeline = model.kind === 'conflict' ? [] : model.timeline ?? [];
   let clear: HTMLButtonElement | undefined;
-  let historyExpanded = carried?.historyExpanded ?? false;
-  if (!duplicate) {
-    history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
-    history.type = 'button';
-    history.setAttribute('aria-expanded', String(historyExpanded));
-    const earlier = element('ol', 'controller-notification-history');
-    earlier.id = `${cardId}-history`;
-    earlier.hidden = !historyExpanded;
-    history.setAttribute('aria-controls', earlier.id);
-    for (const notification of notifications.slice(1)) {
-      const item = element('li', 'controller-card-line');
-      const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-      time.dateTime = new Date(notification.receivedAt).toISOString();
-      item.append(element('p', 'controller-card-line', notification.message), ' ', time);
-      if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
-      earlier.append(item);
+  if (timeline.length) {
+    const entries = element('ol', 'controller-timeline');
+    for (const entry of timeline) {
+      const item = element('li', `controller-timeline-entry controller-timeline-${entry.kind}`);
+      if (entry.kind === 'notification') {
+        const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        bell.classList.add('controller-notification-bell');
+        bell.setAttribute('viewBox', '0 0 24 24');
+        bell.setAttribute('aria-hidden', 'true');
+        bell.setAttribute('focusable', 'false');
+        const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+        outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
+        bell.append(outline);
+        item.append(bell, element('span', 'controller-visually-hidden', 'Notification: '));
+      }
+      const time = element('time', 'controller-muted', new Date(entry.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      time.dateTime = new Date(entry.receivedAt).toISOString();
+      item.append(element('span', 'controller-timeline-text', entry.kind === 'notification' ? entry.message : entry.text), ' ', time);
+      if (entry.kind === 'notification' && entry.count > 1) item.append(' ', element('span', 'controller-muted', `${entry.count} arrivals`));
+      entries.append(item);
     }
-    clear = notifications.length && deps.onClearHistory
-      ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
-    if (clear) clear.hidden = !historyExpanded;
-    actions.bind(history, () => {
-      historyExpanded = !historyExpanded;
-      earlier.hidden = !historyExpanded;
-      if (clear) clear.hidden = earlier.hidden;
-      history!.setAttribute('aria-expanded', String(historyExpanded));
-    });
-    body.append(' ', history, ' ', earlier);
+    body.append(' ', entries);
+    clear = deps.onClearHistory ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
     if (clear) body.append(' ', clear);
   }
 
@@ -249,7 +225,6 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   function focused(): Focus | undefined {
     const active = doc.activeElement;
     if (active === toggle) return 'header';
-    if (history && active === history) return 'history';
     if (clear && active === clear) return 'clear';
     if (active === actionButton) return actionKind;
     if (active && active === loopMessageDismiss) return 'dismiss-loop-message';
@@ -261,8 +236,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (want === 'header') return toggle;
     if (want === 'bring-forward') return actionKind === 'bring-forward' ? actionButton : undefined;
     if (body.hidden) return undefined;
-    if (want === 'history') return history;
-    if (want === 'clear') return historyExpanded ? clear : undefined;
+    if (want === 'clear') return clear;
     if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
     if (want === 'dismiss-loop-message') return loopMessageDismiss;
     return want === actionKind ? actionButton : undefined;
@@ -272,7 +246,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, historyExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
+    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {

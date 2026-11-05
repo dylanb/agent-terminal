@@ -2,9 +2,9 @@ import type { ControllerTerminal, ControllerTimelineEntry } from '../../src/shar
 
 export interface ReceivedEntry { message: string; receivedAt: number; count: number }
 export type HistoryTerminal = ControllerTerminal;
-type Timelined = { timeline?: ControllerTimelineEntry[] };
+type Timelined = { timeline?: ControllerTimelineEntry[] } | { kind: 'conflict' };
 
-export const timelineOf = (holder: Timelined | undefined): ControllerTimelineEntry[] => holder?.timeline ?? [];
+export const timelineOf = (holder: Timelined | undefined): ControllerTimelineEntry[] => (holder && 'timeline' in holder ? holder.timeline : undefined) ?? [];
 export const notificationEntries = (holder: Timelined | undefined): ReceivedEntry[] =>
   timelineOf(holder).flatMap(item => (item.kind === 'notification' ? [{ message: item.message, receivedAt: item.receivedAt, count: item.count }] : []));
 export const statusEntries = (holder: Timelined | undefined): Array<{ text: string; receivedAt: number }> =>

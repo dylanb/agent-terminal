@@ -27,15 +27,17 @@ test('a real terminal that went idle and then needed a human lists the request a
       return { texts, kinds };
     };
 
-    await expect.poll(async () => (await read()).texts.some(text => /idle/i.test(text)), { timeout: 60_000 }).toBe(true);
+    await expect.poll(async () => {
+      const { texts, kinds } = await read();
+      return texts.length > 0 && !kinds[0] && /idle/i.test(texts[0]);
+    }, { timeout: 60_000 }).toBe(true);
     await gate.release();
     const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
     expect(source.loop?.humanNeeded).toBe(true);
     await expect.poll(async () => {
       const { texts, kinds } = await read();
       const request = texts.findIndex((text, index) => kinds[index] && text.includes(source.loop!.status));
-      const idle = texts.findIndex((text, index) => !kinds[index] && /idle/i.test(text));
-      return request >= 0 && idle >= 0 && request < idle;
+      return request >= 0 && request + 1 < texts.length && !kinds[request + 1] && /idle/i.test(texts[request + 1]);
     }, { timeout: 60_000 }).toBe(true);
     await expect.soft(historyLocator(card)).toHaveCount(0);
     for (const entry of await entries.all()) await expect.soft(entry.locator('time')).toHaveCount(1);
