@@ -65,14 +65,17 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   if (model.kind === 'disconnected') card.classList.add('is-disconnected');
   const cardId = `controller-card-${nextCardId += 1}`;
   const headingId = `${cardId}-heading`;
-  card.setAttribute('aria-labelledby', headingId);
+  const toggleId = `${cardId}-toggle`;
+  const directoryId = `${cardId}-directory`;
+  card.setAttribute('aria-labelledby', `${headingId} ${directoryId}`);
 
   const header = element('header', 'controller-card-header');
   const accent = element('span', 'controller-card-accent');
   accent.dataset.testid = 'card-accent';
   const heading = element('h2', 'controller-card-heading');
   heading.id = headingId;
-  const directory = element('span', 'controller-card-directory mono');
+  const directory = element('p', 'controller-card-directory mono');
+  directory.id = directoryId;
   directory.title = model.launchDirectory;
   const directoryText = element('bdi', '', model.launchDirectory);
   directoryText.dir = 'ltr';
@@ -80,8 +83,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const statusLabel = element('span', 'controller-card-label', statusText);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
+  toggle.id = toggleId;
   toggle.setAttribute('aria-controls', `${cardId}-body`);
-  toggle.append(element('span', 'controller-card-name', finalSegment(model.repositoryRoot ?? model.launchDirectory)), ' ', directory);
+  toggle.setAttribute('aria-labelledby', `${toggleId} ${directoryId}`);
+  const repositoryName = finalSegment(model.repositoryRoot ?? model.launchDirectory);
+  toggle.append(element('span', 'controller-card-name', repositoryName));
   for (const text of model.kind === 'single' ? [work?.title, work?.branch] : []) {
     if (text) toggle.append(' · ', element('span', 'controller-card-identity', text));
   }
@@ -92,7 +98,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   body.id = `${cardId}-body`;
   const statusRow = element('p', 'controller-card-status', statusText);
   statusRow.dataset.testid = 'card-status';
-  body.append(statusRow);
+  body.append(directory, ' ', statusRow);
   card.append(header, ' ', body);
   host.append(card);
 
@@ -113,8 +119,21 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (duplicate) body.append(' ', element('p', 'controller-card-line', 'Bring the terminals forward and close extra instances so only one remains.'));
     else if (work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
     else if (work) appendWork(work);
-    const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
-    actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
+    const label = count > 1 ? `Bring all ${count} terminals forward` : 'Bring forward';
+    actionButton = element('button', 'controller-card-bring');
+    actionButton.type = 'button';
+    actionButton.title = count > 1 ? 'Bring all of these terminals forward' : 'Bring this terminal forward';
+    actionButton.setAttribute('aria-label', `${label} ${repositoryName} ${model.launchDirectory}`);
+    const arrow = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    arrow.setAttribute('viewBox', '0 0 24 24');
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.setAttribute('focusable', 'false');
+    const arrowPath = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    arrowPath.setAttribute('d', 'M7 17L17 7M9 7h8v8');
+    arrow.append(arrowPath);
+    actionButton.append(arrow);
+    actions.bind(actionButton, deps.onAction, { key: actionKind });
+    header.append(actionButton);
   }
   const notifications = model.kind === 'conflict' ? [] : model.notifications ?? [];
   if (notifications[0]) {
@@ -136,7 +155,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (notification.count > 1) box.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
     body.append(' ', box);
   }
-  body.append(' ', actionButton);
+  if (actionKind === 'dismiss') body.append(' ', actionButton);
   let history: HTMLButtonElement | undefined;
   let clear: HTMLButtonElement | undefined;
   let historyExpanded = carried?.historyExpanded ?? false;
@@ -240,6 +259,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   function shown(want: Focus): HTMLElement | undefined {
     if (want === 'header') return toggle;
+    if (want === 'bring-forward') return actionKind === 'bring-forward' ? actionButton : undefined;
     if (body.hidden) return undefined;
     if (want === 'history') return history;
     if (want === 'clear') return historyExpanded ? clear : undefined;
