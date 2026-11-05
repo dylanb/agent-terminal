@@ -1,16 +1,19 @@
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CH, SESSION_ID, type FlowBootstrapErrorMsg } from '../../src/shared/ipc';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
+import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { writeRepoConditions, type RepoConditionsFixture } from '../helpers/setupRepoConditions';
 import { snapshotTree } from '../helpers/treeSnapshot';
 import { createWorktreeFixture, type WorktreeFixture } from '../helpers/worktreeFixture';
 import { electron } from './registeredElectron';
+import { seedFakeAgentV2 } from './fakeTools';
 import { createSetupCheckMachine, failingCheckIgnoreGit, type SetupCheckMachine } from './setupCheckEnv';
 
 // The startup setup check (#290): a repository that fails a condition raises a blocking popup listing each
@@ -506,4 +509,49 @@ test("a repository dismissal for a repository the app has not entered is refused
   expect.soft(refused).toMatchObject({ ok: false });
   await expect.poll(namedAmong(seen, [start, probe])).toEqual([probe]);
   await expect(entriesOf(popupFor(page, probe))).toHaveCount(2);
+});
+
+const pickerHost = (page: Page): Locator => page.locator('#app .rail:has(#flow-strip) #flow-picker');
+const flowControl = (page: Page): Locator => page.locator('#flow-strip .flow-control');
+const flowError = (page: Page): Locator => page.locator('#flow-strip .flow-error');
+
+/** A fake agent on the launched app's PATH that logs every line it is handed and answers none, keyed to a step
+ *  no shipped flow has, so no shipped step id is typed in here. Returns its injected-line log for `repo`. */
+function seedLoggingAgent(repo: string): { env: Record<string, string | undefined>; injectedLog: () => string } {
+  const binDir = mkdtempSync(join(tmpdir(), 'setup-check-agent-'));
+  scratch.push(binDir);
+  seedFakeAgentV2(binDir, { stepId: 'no-shipped-step', artifactRel: '.agent-terminal/loop/artifacts/unused.md', work: 'noop', logInjected: true });
+  const log = join(repo, '.agent-terminal', 'injected-log');
+  return {
+    env: { ...machine.env, APP_SETUP_CHECK: 'off', PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` },
+    injectedLog: () => (existsSync(log) ? readFileSync(log, 'utf8') : ''),
+  };
+}
+
+test('after Install examples through the app, the flow picker lists the repo-setup flow (AC24)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: true, capabilities: 'valid' });
+  await installExamplesThroughApp();
+  const page = await launchIn(repo, { ...machine.env, APP_SETUP_CHECK: 'off' });
+
+  await pickerHost(page).getByRole('button', { name: /flow/i }).click();
+
+  await expect(pickerHost(page).getByRole('option', { name: new RegExp(REPO_SETUP_FLOW_ID) })).toBeVisible();
+});
+
+test('the installed repo-setup flow, once selected, starts with no flow-load error and its work turn begins (AC24)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  writeActiveFlow(repo, REPO_SETUP_FLOW_ID);
+  const agent = seedLoggingAgent(repo);
+  const page = await launchIn(repo, agent.env);
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type('fake-agent', { delay: 20 });
+  await page.keyboard.press('Enter');
+
+  await expect.soft(flowError(page)).toHaveCount(0);
+  await expect(flowControl(page)).toHaveText('Start');
+  await flowControl(page).click();
+
+  await expect.poll(agent.injectedLog, { timeout: 40_000 }).toContain('turn-done:work-');
+  await expect(flowError(page)).toHaveCount(0);
 });

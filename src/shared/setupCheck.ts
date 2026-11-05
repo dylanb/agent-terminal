@@ -1,3 +1,6 @@
+/** The catalog id of the bundled repo-setup flow, the one the setup popup's Run setup loop starts. */
+export const REPO_SETUP_FLOW_ID = 'repo-setup';
+
 export type SetupConditionEntry =
   | { condition: 'examples'; failure: 'stale' | 'unchecked' }
   | { condition: 'ignore'; failure: 'not-ignored' | 'unchecked' }

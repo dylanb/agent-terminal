@@ -93,6 +93,10 @@ export function requiresResultBinding(mode: WorkCompletion): boolean {
   return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);
 }
 
+/** The checks a work turn's agent can be handed to run on what it wrote (§29). Prompt-only: no engine gate. */
+export const SELF_CHECKS = ['loop-capabilities'] as const;
+export type SelfCheck = (typeof SELF_CHECKS)[number];
+
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
  *  §28.4 — the optional completion mode (absent for the existing §27 loops). */
 export interface WorkRecipe {
@@ -105,6 +109,7 @@ export interface WorkRecipe {
   checkpoint?: { passes: number };
   /** §28.5.1 */
   frozenCheck?: true;
+  selfCheck?: SelfCheck;
 }
 
 /** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the

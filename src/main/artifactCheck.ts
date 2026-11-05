@@ -11,6 +11,7 @@ import { goalLegEnd } from '../shared/goalProgress';
 import { phaseOutputRel, phaseResultEnd, type PhaseResultWant } from '../shared/phaseResult';
 import { isPhaseOutcome } from '../shared/phaseOutcome';
 import { isBuildOutcome, type BuildOutcome } from '../shared/buildOutcome';
+import type { LoopCapabilitiesLoad } from './loopCapabilities';
 
 /** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, a
  *  goal session's progress file against the leg it is on (§27.3), or a phase result against what completes its
@@ -19,7 +20,15 @@ export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
   | { kind: 'verdict'; rel: string; catalog: string[] }
   | { kind: 'progress'; rel: string; leg: number; legs: boolean }
-  | ({ kind: 'result'; rel: string } & PhaseResultWant);
+  | ({ kind: 'result'; rel: string } & PhaseResultWant)
+  | { kind: 'capabilities' };
+
+/** What a check reads: a file by its repo-relative path (null = missing), and the repository's capabilities
+ *  through the app's own reader. */
+export interface ArtifactCheckInputs {
+  read(rel: string): string | null;
+  loadCapabilities(): LoopCapabilitiesLoad;
+}
 
 const IN_LEGS = 'legs';
 const ONE_LEG = 'one-leg';
@@ -60,6 +69,8 @@ function checkArgv(check: ArtifactCheck): string[] {
       return ['progress', check.rel, String(check.leg), check.legs ? IN_LEGS : ONE_LEG];
     case 'result':
       return ['result', check.rel, check.outcome, check.build ?? NO_BUILD, ...(check.acceptsVerificationOnly ? [VERIFICATION_ONLY] : [])];
+    case 'capabilities':
+      return [];
   }
 }
 
@@ -92,7 +103,7 @@ const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <fil
 
 /** Run the check `argv` describes against the file `read` returns (null = missing). Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
-export function runArtifactCheck(argv: string[], read: (rel: string) => string | null): { exitCode: 0 | 1 | 2; output: string } {
+export function runArtifactCheck(argv: string[], { read }: ArtifactCheckInputs): { exitCode: 0 | 1 | 2; output: string } {
   const [kind, rel, ...rest] = argv;
   let problems: string[];
   if (kind === 'report' && rel !== undefined && rest.length === 2) {

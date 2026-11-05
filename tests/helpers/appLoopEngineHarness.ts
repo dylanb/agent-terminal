@@ -32,6 +32,8 @@ import { roundReportWithStatuses } from './roundReports';
 import { verdictOutput } from './consolidatorOutputs';
 
 export const STEP = 'plan';
+/** The command the harness hands a work turn for the capabilities self-check. */
+export const CAPABILITIES_CHECK_COMMAND = 'check-artifact capabilities';
 // §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
 // step, so a baseline the RED step recorded is found by the GREEN step (different step, same branch). This
 // fake branch differs from STEP so a lingering step-match would fail these branch-keyed tests.
@@ -257,7 +259,9 @@ export class AppLoopEngineHarness {
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
             : check.kind === 'progress'
               ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
-              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
+              : check.kind === 'capabilities'
+                ? CAPABILITIES_CHECK_COMMAND
+                : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);

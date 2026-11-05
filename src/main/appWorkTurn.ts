@@ -111,6 +111,8 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  /** §29 */
+  selfCheck?: { kind: 'loop-capabilities'; checkCommand: string };
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
