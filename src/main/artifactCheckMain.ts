@@ -1,6 +1,6 @@
 // Standalone installed runtime for format checks and finalization access.
-import { readFileSync } from 'node:fs';
 import os from 'node:os';
+import { readNamedLoopArtifact } from './appLoopPaths';
 import { runArtifactCheck } from './artifactCheck';
 import { runFinalizeAccess } from './finalizeAccess';
 import { errMsg } from './errno';
@@ -27,13 +27,7 @@ if (args[0] === 'audit-evidence' || args[0] === 'publish-flow-audit') {
   process.stderr.write(stderr);
   process.exitCode = exitCode;
 } else {
-  const { exitCode, output } = runArtifactCheck(args, (rel) => {
-    try {
-      return readFileSync(rel, 'utf8');
-    } catch {
-      return null;
-    }
-  });
+  const { exitCode, output } = runArtifactCheck(args, readNamedLoopArtifact);
   process.stdout.write(output);
   process.exitCode = exitCode;
 }

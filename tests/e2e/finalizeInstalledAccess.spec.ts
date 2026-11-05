@@ -1,30 +1,18 @@
 import { expect, test } from '@playwright/test';
-import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { resolveArtifactCheckScript } from '../../src/main/artifactCheck';
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { seedAuditPublicationGh } from '../helpers/auditPublicationGh';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
+import { useInstalledRuntime, type RunOptions } from './installedRuntime';
 
-const requirePackage = createRequire(__filename);
-let root: string;
+const runtime = useInstalledRuntime();
 let repo: string;
-let home: string;
-let runtimeMain: string;
 let git: GitRepoFixture;
 
 test.beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'installed-finalize-'));
-  home = join(root, 'home');
-  mkdirSync(home);
-  runtimeMain = join(root, 'installed-app', 'out', 'main');
-  cpSync(resolve('out/main'), runtimeMain, { recursive: true });
-  cpSync(dirname(requirePackage.resolve('js-yaml/package.json')), join(root, 'installed-app', 'node_modules', 'js-yaml'), { recursive: true });
   git = createGitRepoFixture();
   repo = realpathSync(git.makeGitRepo('finalize target'));
   git.git(repo, ['remote', 'add', 'origin', 'https://github.com/fixture/project.git']);
@@ -32,22 +20,22 @@ test.beforeEach(() => {
 
 test.afterEach(() => {
   git?.cleanup();
-  rmSync(root, { recursive: true, force: true });
 });
 
-function invoke(args: string[], environment: NodeJS.ProcessEnv = {}) {
-  return spawnSync(requirePackage('electron') as string, [resolveArtifactCheckScript(runtimeMain), ...args], {
-    cwd: repo,
-    env: { ...process.env, HOME: home, NODE_PATH: '', ELECTRON_RUN_AS_NODE: '1', ...environment },
-    encoding: 'utf8', timeout: 15_000,
-  });
+const invoke = (args: string[], env: RunOptions['env'] = {}) => runtime.runRaw(args, { cwd: repo, env });
+
+/** A PATH whose first entry is `bin`, with this test run's own `node` in it for the `gh` stand-ins' shebang. */
+function pathWith(bin: string): string {
+  symlinkSync(process.execPath, join(bin, 'node'));
+  return `${bin}:/usr/bin:/bin`;
 }
 
 function response(stdout: string): unknown {
   try { return JSON.parse(stdout); } catch { return { invalidJsonResponse: stdout }; }
 }
 
-test('#251 installed evidence access reads the current recorder-created run without the source checkout', () => {
+test('#251 installed evidence access reads the current recorder-created run without the source checkout', async () => {
+  const { home } = runtime.world();
   const flow = 'feature-dev-v3';
   const startedAt = Date.parse('2026-10-24T10:00:00Z');
   let time = startedAt;
@@ -61,8 +49,7 @@ test('#251 installed evidence access reads the current recorder-created run with
   time += 60_000;
   recorder.recordTransition(repo, 'advance', { status: 'in_progress', stepName: 'plan' }, { status: 'in_progress', stepName: 'finalize' });
 
-  const result = invoke(['audit-evidence', repo]);
-  expect.soft(result.error).toBeUndefined();
+  const result = await invoke(['audit-evidence', repo], { APP_HOME_DIR: undefined });
   test.info().attach('runtime-stderr', { body: result.stderr, contentType: 'text/plain' });
   expect.soft(result.status).toBe(0);
   expect(response(result.stdout)).toMatchObject({
@@ -75,16 +62,16 @@ test('#251 installed evidence access reads the current recorder-created run with
   });
 });
 
-test('#251 installed evidence access follows the app home when it differs from the shell home', () => {
+test('#251 installed evidence access follows the app home when it differs from the shell home', async () => {
+  const { appHome } = runtime.world();
   const flow = 'feature-dev-v3';
   const startedAt = Date.parse('2026-10-24T10:00:00.684Z');
   createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', flow, startedAt });
-  const recorder = createAuditRecorder({ root: auditRootDir(home), now: () => new Date(startedAt), flowName: () => flow });
+  const recorder = createAuditRecorder({ root: auditRootDir(appHome), now: () => new Date(startedAt), flowName: () => flow });
   recorder.recordTransition(repo, 'start', { status: 'not_started', stepName: 'finalize' }, { status: 'in_progress', stepName: 'finalize' }, { flow, startedAt });
 
-  const result = invoke(['audit-evidence', repo], { HOME: join(root, 'shell-home'), APP_HOME_DIR: home });
+  const result = await invoke(['audit-evidence', repo]);
 
-  expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
   expect(response(result.stdout)).toMatchObject({
     coverage: 'complete',
@@ -92,10 +79,10 @@ test('#251 installed evidence access follows the app home when it differs from t
   });
 });
 
-test('#251 installed work-time publication reads the actual artifact and appends it to the associated PR', () => {
-  const bin = join(root, 'bin');
-  mkdirSync(bin);
-  const stateFile = join(root, 'github.json');
+test('#251 installed work-time publication reads the actual artifact and appends it to the associated PR', async () => {
+  const world = runtime.world();
+  const bin = world.dir('bin');
+  const stateFile = join(world.root, 'github.json');
   const original = '# Implementation\n\nKeep operator context.\n\nCloses #251\n';
   const report = '# Flow audit\n\nDevelopment complete; human completion and merge remain.\n';
   writeFileSync(stateFile, JSON.stringify({ body: original, writes: [] }));
@@ -123,9 +110,8 @@ if (args[0] === 'repo' && args[1] === 'view') {
   mkdirSync(dirname(artifact), { recursive: true });
   writeFileSync(artifact, report);
 
-  const result = invoke(['publish-flow-audit', repo, '41', artifact], { PATH: `${bin}:${process.env.PATH}`, FINALIZE_GH_STATE: stateFile });
+  const result = await invoke(['publish-flow-audit', repo, '41', artifact], { PATH: pathWith(bin), FINALIZE_GH_STATE: stateFile });
   const published = JSON.parse(readFileSync(stateFile, 'utf8'));
-  expect.soft(result.error).toBeUndefined();
   test.info().attach('runtime-stderr', { body: result.stderr, contentType: 'text/plain' });
   expect.soft(result.status).toBe(0);
   expect.soft(response(result.stdout)).toEqual({ outcome: 'done' });
@@ -136,40 +122,41 @@ if (args[0] === 'repo' && args[1] === 'view') {
 });
 
 function publication(body: string) {
-  const bin = join(root, 'publication-bin');
+  const bin = runtime.world().dir('publication-bin');
   const gh = seedAuditPublicationGh(bin, body);
   const artifact = join(repo, '.agent-terminal', 'loop', 'artifacts', 'flow-audit.md');
   mkdirSync(dirname(artifact), { recursive: true });
   writeFileSync(artifact, 'Current report\n');
-  return { gh, artifact, run: () => invoke(['publish-flow-audit', repo, '41', artifact], { PATH: `${bin}:${process.env.PATH}` }) };
+  return { gh, artifact, run: () => invoke(['publish-flow-audit', repo, '41', artifact], { PATH: pathWith(bin) }) };
 }
 
-test('#251 installed publication cannot claim success for mismatching remote readback', () => {
+test('#251 installed publication cannot claim success for mismatching remote readback', async () => {
   const fx = publication('Operator context\n');
   fx.gh.set({ discard: true });
-  const result = fx.run();
+  const result = await fx.run();
   expect.soft(result.status).not.toBe(0);
   expect.soft(response(result.stdout)).not.toEqual({ outcome: 'done' });
   expect(fx.gh.read().writes).toHaveLength(1);
 });
 
-test('#251 installed evidence access marks missing, unreadable and mismatched history unavailable', () => {
+test('#251 installed evidence access marks missing, unreadable and mismatched history unavailable', async () => {
+  const { appHome: home } = runtime.world();
   const flow = 'feature-dev-v3';
   const started = new Date('2026-10-24T10:00:00Z');
   createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', flow, startedAt: started.getTime() });
   const file = auditFilePath(auditRootDir(home), repo, flow, started);
-  const unavailable = () => {
-    const result = invoke(['audit-evidence', repo]);
+  const unavailable = async () => {
+    const result = await invoke(['audit-evidence', repo]);
     expect(result.status).toBe(0);
     expect(response(result.stdout)).toMatchObject({ coverage: 'unavailable', header: null, events: [] });
   };
-  unavailable();
+  await unavailable();
   mkdirSync(file, { recursive: true });
-  unavailable();
+  await unavailable();
   rmSync(file, { recursive: true });
   const recorder = createAuditRecorder({ root: auditRootDir(home), now: () => started, flowName: () => flow });
   recorder.recordTransition(repo, 'start', { status: 'not_started', stepName: 'finalize' }, { status: 'in_progress', stepName: 'finalize' }, { flow, startedAt: started.getTime() });
   const recorded = readFileSync(file, 'utf8');
   writeFileSync(file, recorded.replace('feature-dev-v3', 'another-flow'));
-  unavailable();
+  await unavailable();
 });

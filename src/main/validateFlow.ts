@@ -1,15 +1,15 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
-import { flowCatalogDir, flowDefinitionFile, flowHomeDir, loadFlowDefinition, loadUntrustedFlowDefinition, stepTemplateRef, type FlowDefinition, type FlowLoad } from './flow';
-import { FLOW_DEF_FILE } from './flowHome';
-import { probeTier, resolveCatalogEntry } from './flowCatalog';
+import { flowCatalogDir, flowCatalogRoot, flowDefinitionFile, loadFlowDefinition, loadUntrustedFlowDefinition, stepTemplateRef, type FlowDefinition, type FlowLoad } from './flow';
+import { FLOW_DEF_FILE, flowHomeDir, flowHomeRoot } from './flowHome';
+import { resolveBundledEntry, resolveCatalogEntry } from './flowCatalog';
 import { catalogRefusalReason, UNSAFE_NAME_REASON } from './resolveRunDefinition';
-import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from './exampleAssets';
-import { realpathBounded, resolveJail, resolveOwnedDirJail } from './confinedPath';
+import { exampleFlowsBundleRoot, resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from './exampleAssets';
+import { realpathBounded, resolveJail, resolveJailBelow, resolveOwnedDirJail } from './confinedPath';
 import { CLI_COMMAND_NAME, VALIDATE_FLOW_FLAG } from './cliShim';
 import { errMsg, isErrno } from './errno';
-import { resolveLoopDefV2, type LoopDefV2, type LoopDefV2Context, type LoopDefV2Tiers } from './loopDefV2';
-import { todoTemplateResolves, todoTemplatesDir } from './todoTemplate';
+import { resolveLoopDefV2, type LoopDefV2, type LoopDefV2Lookup, type LoopDefV2Tiers } from './loopDefV2';
+import { loadTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isReadableRegularFile } from './regularFile';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { stripDisplayControlChars } from '../shared/controlChars';
@@ -36,7 +36,7 @@ interface Problem {
   text: string;
 }
 
-type LoopScope = Omit<LoopDefV2Context, 'flow'>;
+type LoopScope = Omit<LoopDefV2Lookup, 'flow'>;
 
 type Located = { ok: true; flowFile: string; load: FlowLoad; loops: LoopScope } | { ok: false; reason: string };
 
@@ -65,17 +65,17 @@ function validate(folder: string, deps: ValidateFlowDeps): Problem | null {
   const located = locate(folder, deps);
   if (!located.ok) return { file: folder, text: located.reason };
   if (!located.load.ok) return { file: located.flowFile, text: located.load.error };
-  return stepProblem(located.load.definition, located.load.flowDir, located.flowFile, { ...located.loops, flow: located.load.definition.name, refuseSpecialFiles: true });
+  return stepProblem(located.load.definition, located.load.flowDir, located.flowFile, { ...located.loops, flow: located.load.definition.name });
 }
 
-function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Context): Problem | null {
+function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Lookup): Problem | null {
   const templatesDir = todoTemplatesDir(flowDir);
   for (const step of definition.steps) {
     if (step.loop !== undefined && bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) {
       return { file: flowFile, text: `step ${step.id}: ${MARKED_BINDING_REASON}` };
     }
     const templateRef = stepTemplateRef(step);
-    if (templateRef !== null && !todoTemplateResolves(templatesDir, templateRef)) {
+    if (templateRef !== null && loadTodoTemplateFile(templatesDir, templateRef) === null) {
       return { file: flowFile, text: `step ${step.id}: todo template ${templateRef} does not resolve in ${templatesDir}` };
     }
     if (step.loop === undefined) continue;
@@ -87,8 +87,7 @@ function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: stri
   return null;
 }
 
-/** The first file reference of `def` that names no readable regular file. It is checked with `stat`, never
- *  opened, so a named pipe cannot block it. */
+/** The first file reference of `def` that names no readable regular file. */
 function unreadableReference(def: LoopDefV2, defDir: string): string | null {
   const refs: { what: string; file: string }[] = [
     ...(def.brief === undefined ? [] : [{ what: 'brief', file: def.brief }]),
@@ -117,26 +116,35 @@ function folderRefusal(folder: string): string | null {
   return null;
 }
 
-/** The jail at `dir` with only `anchor` resolved: the segments below it stay unresolved, so a linked one cannot become the jail. */
-const jailBelow = (anchor: string, dir: string): string | null => resolveJail(anchor, ...path.relative(anchor, dir).split(path.sep));
-
 /** The tier comes from where the folder sits; only its anchor (the repository, A or the bundle root) is
  *  resolved, so the app's own resolvers judge every segment below it, links included (CWE-59). */
 function locate(folder: string, deps: ValidateFlowDeps): Located {
   const { appHome } = deps;
-  const homeAnchor = path.dirname(folder);
-  const entryAnchor = path.dirname(path.dirname(path.dirname(folder)));
-  const id = path.basename(folder);
-  if (flowHomeDir(homeAnchor) === folder) {
-    return isAppHome(homeAnchor, appHome)
-      ? locateFlowHome(appHome, globalScope(folder, deps.loopTiers))
-      : locateFlowHome(homeAnchor, { tiers: deps.loopTiers, repoDir: homeAnchor });
+  const homeRoot = flowHomeRoot(folder);
+  if (homeRoot !== null) {
+    return isAppHome(homeRoot, appHome)
+      ? locateFlowHome(appHome, globalScope(deps.loopTiers))
+      : locateFlowHome(homeRoot, { tiers: deps.loopTiers, repoDir: homeRoot });
   }
-  const catalogEntry = flowCatalogDir(entryAnchor) === path.dirname(folder);
-  const bundledEntry = resolveExampleFlowsDir({ packaged: false, appPath: entryAnchor }) === path.dirname(folder);
-  if (!catalogEntry && !bundledEntry) return { ok: false, reason: notInTierReason(appHome) };
+  const entry = catalogOf(path.dirname(folder));
+  if (entry === null) return { ok: false, reason: notInTierReason(appHome) };
+  const id = path.basename(folder);
   if (!isSafeCatalogId(id)) return { ok: false, reason: `its name ${UNSAFE_NAME_REASON}` };
-  return catalogEntry ? locateCatalogEntry(entryAnchor, id, deps) : locateBundledEntry(entryAnchor, id);
+  switch (entry.kind) {
+    case 'catalog':
+      return locateCatalogEntry(entry.root, id, deps);
+    case 'bundled':
+      return locateBundledEntry(entry.root, id);
+    default:
+      return entry.kind satisfies never;
+  }
+}
+
+function catalogOf(dir: string): { kind: 'catalog' | 'bundled'; root: string } | null {
+  const catalogRoot = flowCatalogRoot(dir);
+  if (catalogRoot !== null) return { kind: 'catalog', root: catalogRoot };
+  const bundleRoot = exampleFlowsBundleRoot(dir);
+  return bundleRoot === null ? null : { kind: 'bundled', root: bundleRoot };
 }
 
 function isAppHome(anchor: string, appHome: string): boolean {
@@ -144,9 +152,8 @@ function isAppHome(anchor: string, appHome: string): boolean {
   return real !== null && real === resolveOwnedDirJail(appHome);
 }
 
-/** No repository override registry applies to a global flow, even when A is a repository, so none is read and
- *  the flow's own folder anchors the resolver's artifact paths. */
-const globalScope = (folder: string, tiers: LoopDefV2Tiers): LoopScope => ({ tiers, repoDir: folder, skipRepoOverrides: true });
+/** A global flow is checked for no repository, even when A is one. */
+const globalScope = (tiers: LoopDefV2Tiers): LoopScope => ({ tiers, repoDir: null });
 
 function locateFlowHome(root: string, loops: LoopScope): Located {
   const file = flowDefinitionFile(root);
@@ -157,24 +164,19 @@ function locateCatalogEntry(anchor: string, id: string, deps: ValidateFlowDeps):
   const tier = isAppHome(anchor, deps.appHome) ? 'global' : 'repo';
   const entry = resolveCatalogEntry({ worktreeDir: anchor, globalRoot: deps.appHome }, id, tier);
   if (!entry.ok) return { ok: false, reason: `this catalog entry ${catalogRefusalReason(entry.cause)}` };
-  const loops = tier === 'global' ? globalScope(entry.flowDir, deps.loopTiers) : { tiers: deps.loopTiers, repoDir: anchor };
+  const loops = tier === 'global' ? globalScope(deps.loopTiers) : { tiers: deps.loopTiers, repoDir: anchor };
   return loadEntry(entry.flowDir, loops);
 }
 
-/** A bundle root is repository content when it is a source tree, so it is confined as untrusted ground. */
 function locateBundledEntry(root: string, id: string): Located {
-  const bundle = { packaged: false, appPath: root } as const;
-  const flowsDir = resolveExampleFlowsDir(bundle);
-  const probe = probeTier(jailBelow(root, flowsDir), id, path.join(flowsDir, id, FLOW_DEF_FILE));
-  if (probe.kind !== 'entry') {
-    return { ok: false, reason: `this bundled flow ${catalogRefusalReason(probe.kind === 'refused' ? probe.cause : 'unknown')}` };
-  }
-  const loopsDir = resolveExampleLoopsV2Dir(bundle);
-  const loopsJail = jailBelow(root, loopsDir);
+  const entry = resolveBundledEntry(root, id);
+  if (!entry.ok) return { ok: false, reason: `this bundled flow ${catalogRefusalReason(entry.cause)}` };
+  const loopsDir = resolveExampleLoopsV2Dir({ packaged: false, appPath: root });
+  const loopsJail = resolveJailBelow(root, loopsDir);
   if (loopsJail === null || realpathBounded(loopsJail) !== loopsJail || !isDirectory(loopsJail)) {
     return { ok: false, reason: `its bundle has no loop tree inside it at ${loopsDir}` };
   }
-  return loadEntry(probe.flowDir, { tiers: { operator: null, appBundled: loopsJail, retired: null }, repoDir: probe.flowDir, skipRepoOverrides: true });
+  return loadEntry(entry.flowDir, { tiers: { operator: null, appBundled: loopsJail, retired: null }, repoDir: null });
 }
 
 function loadEntry(flowDir: string, loops: LoopScope): Located {

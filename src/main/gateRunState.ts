@@ -2,13 +2,12 @@
 // so a turn-status persist can neither clobber nor resurrect it.
 
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
-import { APP_LOOP_STATE_SCHEMA, loopAreaFile } from './appLoopState';
+import { APP_LOOP_STATE_SCHEMA, loopAreaFile, MAX_LOOP_AREA_FILE_BYTES } from './appLoopState';
+import { readBoundedNoFollow } from './boundedRead';
 import { createFlowStateStore } from './flowState';
 import { isRecord } from './yamlRecord';
-import { isErrno } from './errno';
 import { isAutoHaltReason, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 
 const GATE_RUN_FILE = 'gate-run.yaml';
@@ -81,15 +80,21 @@ export function writeGateRunState(repoDir: string, state: GateRunState): void {
 export function readGateRunState(repoDir: string): GateRunRead {
   const file = loopAreaFile(repoDir, GATE_RUN_FILE);
   if (file === null) return { kind: 'unreadable' };
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch (e) {
-    return isErrno(e, 'ENOENT') ? { kind: 'absent' } : { kind: 'unreadable' };
+  const read = readBoundedNoFollow(file, MAX_LOOP_AREA_FILE_BYTES);
+  if (!read.ok) {
+    switch (read.cause) {
+      case 'absent':
+        return { kind: 'absent' };
+      case 'over-cap':
+      case 'unreadable':
+        return { kind: 'unreadable' };
+      default:
+        return read.cause satisfies never;
+    }
   }
   let doc: unknown;
   try {
-    doc = yaml.load(text);
+    doc = yaml.load(read.text);
   } catch {
     return { kind: 'unreadable' };
   }

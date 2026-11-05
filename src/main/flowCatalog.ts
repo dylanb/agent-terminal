@@ -6,9 +6,10 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { FLOW_HOME_SUBDIR, catalogEntryDefFile, flowCatalogDir } from './flow';
-import { confinedRealPathResult, resolveJail, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
+import { confinedRealPathResult, resolveJail, resolveJailBelow, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
+import { resolveExampleFlowsDir } from './exampleAssets';
 import { isSafeCatalogId } from '../shared/pathSegment';
-import { type CatalogResolution, type CatalogTier } from './resolveRunDefinition';
+import { type CatalogRefusalCause, type CatalogResolution, type CatalogTier } from './resolveRunDefinition';
 import { FLOWS_CATALOG_SUBDIR, FLOW_DEF_FILE } from './flowHome';
 
 /** The two roots a pointer-named id is resolved against: the untrusted worktree, and the app-owned global. */
@@ -34,7 +35,7 @@ type TierProbe =
  *  that does not exist) is `absent` — the caller falls through to the next tier; a jail that will not resolve,
  *  or a path escaping/unresolvable under it, is `refused` — an unreadable tier is never treated as empty (the
  *  precedence-inversion guard, §18.7.6). */
-export function probeTier(jail: string | null, id: string, defFile: string): TierProbe {
+function probeTier(jail: string | null, id: string, defFile: string): TierProbe {
   if (jail === null) return { kind: 'refused', cause: 'unresolvable' };
   const res = confinedRealPathResult(jail, defFile);
   if (!res.ok) return { kind: 'refused', cause: res.cause };
@@ -68,4 +69,16 @@ export function resolveCatalogEntry(roots: CatalogRoots, id: string, tier?: Cata
   if (glob.kind === 'refused') return { ok: false, cause: glob.cause };
 
   return { ok: false, cause: 'unknown' };
+}
+
+export type BundledEntryResolution = { ok: true; flowDir: string } | { ok: false; cause: CatalogRefusalCause };
+
+/** Resolve `id` in the bundled flow catalog of the unpackaged bundle at `bundleRoot`. That root may be a
+ *  checked-out source tree, so it is confined as untrusted ground: only `bundleRoot` itself is resolved. */
+export function resolveBundledEntry(bundleRoot: string, id: string): BundledEntryResolution {
+  if (!isSafeCatalogId(id)) return { ok: false, cause: 'unknown' };
+  const flowsDir = resolveExampleFlowsDir({ packaged: false, appPath: bundleRoot });
+  const probe = probeTier(resolveJailBelow(bundleRoot, flowsDir), id, path.join(flowsDir, id, FLOW_DEF_FILE));
+  if (probe.kind === 'entry') return { ok: true, flowDir: probe.flowDir };
+  return { ok: false, cause: probe.kind === 'refused' ? probe.cause : 'unknown' };
 }

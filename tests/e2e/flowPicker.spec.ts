@@ -19,8 +19,8 @@ import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
 let h: FlowPickerHarness | undefined;
-test.afterEach(async () => {
-  await h?.dispose();
+test.afterEach(async ({}, testInfo) => {
+  await h?.dispose(testInfo);
   h = undefined;
 });
 

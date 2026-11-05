@@ -3,7 +3,7 @@
 // failure mode returns a surfaced reason (AC 6). The declared version and the tier a def resolves from are
 // the two things engine selection keys on.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -14,8 +14,8 @@ import {
 } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
-import { errMsg, isErrno } from './errno';
-import { isSpecialFile } from './regularFile';
+import { errMsg } from './errno';
+import { readBoundedNoFollow, readBoundedResolved, type BoundedRead } from './boundedRead';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
@@ -190,17 +190,26 @@ export type LoopDefV2Result =
   | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile: string }
   | { ok: false; reason: string; defFile?: string };
 
-export interface LoopDefV2Context {
+interface LoopDefV2Scope {
   tiers: LoopDefV2Tiers;
-  repoDir: string;
   /** The running flow's name: its own loop folder in the operator tier is consulted before the shared one. */
   flow?: string;
-  /** Set when no repository override registry applies to the flow (a global or bundled flow): `repoDir`'s
-   *  registry is then never read. */
-  skipRepoOverrides?: true;
-  /** Set to refuse a registry or definition that is a named pipe or a device instead of reading it. */
-  refuseSpecialFiles?: true;
 }
+
+/** A definition resolved for a run in the repository `repoDir`: its `.agent-loop.yaml` overrides apply, and its
+ *  loop artifacts folder holds the definition's artifact paths. */
+export interface LoopDefV2Context extends LoopDefV2Scope {
+  repoDir: string;
+}
+
+/** A definition resolved for no repository, as when a global or bundled flow is checked on its own: no
+ *  repository's overrides apply. Its artifact paths are confined under the definition's own tier, so they are
+ *  fit for checking only: a run that wrote them would write into that tier. */
+export interface RepolessLoopDefV2Context extends LoopDefV2Scope {
+  repoDir: null;
+}
+
+export type LoopDefV2Lookup = LoopDefV2Context | RepolessLoopDefV2Context;
 
 /** §27.8. */
 export function flowLoopsDir(loopsRoot: string, flow: string): string | null {
@@ -503,19 +512,37 @@ interface DefCandidate {
   jail: string;
 }
 
-function repoCandidate(name: string, repoDir: string, refuseSpecialFiles: boolean): DefCandidate | { reason: string } | null {
-  const registry = path.join(repoDir, LOOP_OVERRIDE_FILE);
-  if (refuseSpecialFiles && isSpecialFile(registry)) return { reason: `cannot read repo loop registry: ${LOOP_OVERRIDE_FILE} is not a regular file` };
-  let raw: string;
-  try {
-    raw = readFileSync(registry, 'utf8');
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return null;
-    return { reason: `cannot read repo loop registry: ${errMsg(e)}` };
+export const MAX_LOOP_DEF_BYTES = 256 * 1024;
+export const MAX_LOOP_REGISTRY_BYTES = 64 * 1024;
+export const MAX_LOOP_RECIPE_BYTES = 256 * 1024;
+
+function unreadReason(read: Exclude<BoundedRead, { ok: true }>, limit: number): string {
+  switch (read.cause) {
+    case 'absent':
+      return 'it does not exist';
+    case 'over-cap':
+      return `it is larger than ${limit} bytes`;
+    case 'unreadable':
+      return read.error === undefined ? 'it is not a regular file' : errMsg(read.error);
+    default:
+      return read.cause satisfies never;
   }
+}
+
+/** A link at the registry's own name is followed, so a repository may keep its registry elsewhere. */
+function readRegistry(repoDir: string): { text: string } | { reason: string } | null {
+  const read = readBoundedResolved(path.join(repoDir, LOOP_OVERRIDE_FILE), MAX_LOOP_REGISTRY_BYTES);
+  if (read.ok) return { text: read.text };
+  if (read.cause === 'absent') return null;
+  return { reason: `cannot read repo loop registry ${LOOP_OVERRIDE_FILE}: ${unreadReason(read, MAX_LOOP_REGISTRY_BYTES)}` };
+}
+
+function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
+  const registry = readRegistry(repoDir);
+  if (registry === null || 'reason' in registry) return registry;
   let doc: unknown;
   try {
-    doc = yaml.load(raw);
+    doc = yaml.load(registry.text);
   } catch {
     return null;
   }
@@ -535,10 +562,10 @@ function repoCandidate(name: string, repoDir: string, refuseSpecialFiles: boolea
   return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
 }
 
-export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
+export function resolveLoopDefV2(name: string, ctx: LoopDefV2Lookup): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
   const candidates: DefCandidate[] = [];
-  const repo = ctx.skipRepoOverrides ? null : repoCandidate(name, ctx.repoDir, ctx.refuseSpecialFiles === true);
+  const repo = ctx.repoDir === null ? null : repoCandidate(name, ctx.repoDir);
   if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
   if (repo) candidates.push(repo);
   // The operator and app-bundled tier roots are ground the app derives itself and either may be absent (the
@@ -576,16 +603,11 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       };
     }
     const defFile = confinedDefPath.path;
-    if (ctx.refuseSpecialFiles && isSpecialFile(defFile)) return { ok: false, reason: `cannot read def ${name}: it is not a regular file`, defFile };
-    let body: string;
+    const read = readBoundedNoFollow(defFile, MAX_LOOP_DEF_BYTES);
+    if (!read.ok && read.cause === 'absent') continue;
+    if (!read.ok) return { ok: false, reason: `cannot read def ${name}: ${unreadReason(read, MAX_LOOP_DEF_BYTES)}`, defFile };
     try {
-      body = readFileSync(defFile, 'utf8');
-    } catch (e) {
-      if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${errMsg(e)}`, defFile };
-    }
-    try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, defFile };
+      return { ok: true, def: parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), tierRoot, defDir, defFile };
     } catch (e) {
       return { ok: false, reason: errMsg(e), defFile };
     }

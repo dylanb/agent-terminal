@@ -1,17 +1,18 @@
 // `agent-terminal --validate-flow <dir>` on a flow whose loops, loop references, todo templates or engine
-// bindings are broken, and the tier a flow's loops resolve in. Every test asserts only what the command prints,
-// its exit status and, for the writes-nothing case, the state of the files around the run.
+// bindings are broken, and one case per tier of where a flow's loops resolve, run through the installed runtime so
+// the app's own home and loop tiers reach the check.
+// Every test asserts only what the command prints, its exit status and, for the writes-nothing case, the state of
+// the files around the run.
 
 import { expect, test } from '@playwright/test';
-import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { loopDefRelPath } from '../../src/main/appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from '../../src/main/loopDefV2';
 import { loadTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../src/main/todoTemplate';
 import { userConfigLoopsDir } from '../../src/main/userConfig';
 import { EXEC_SIDE_EFFECT_KIND, REQUEST_CHANGES_OPTION } from '../../src/shared/engineCapabilities/loop';
 import { MARKED_BINDING_REASON, RETIRED_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
-import { flowLocations, writeFifo, writeFlow, writeLoopDef, writeLoopRegistry, type FlowSpec, type FlowStepSpec, type LoopDefSpec } from '../helpers/flowFixtures';
+import { fixtureResolves, flowLocations, writeFifo, writeFlow, writeLoopDef, writeLoopRegistry, type FlowSpec, type FlowStepSpec, type LoopDefSpec } from '../helpers/flowFixtures';
 import { snapshotTree } from '../helpers/treeSnapshot';
 import { PASSED, passOutcome, problemLine, problemOutcome, useValidateRuntime, type RunResult } from './validateFlowHarness';
 
@@ -40,11 +41,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
     flow,
   });
 
-  /** Throws unless the app resolves `loop` in `ctx` as `expected` says, so a fixture means what its test says. */
-  const fixtureResolves = (loop: string, ctx: LoopDefV2Context, expected: boolean): void => {
-    if (resolveLoopDefV2(loop, ctx).ok !== expected) throw new Error(`fixture: the app ${expected ? 'does not resolve' : 'resolves'} ${loop} for ${ctx.repoDir}`);
-  };
-
   const validateIn = (folder: string, cwd: string): Promise<RunResult> => runtime.validate([folder], { cwd });
 
   test.describe('each defect fails on one line naming its file', () => {
@@ -55,50 +51,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
       fixtureResolves('missing-loop', appContext(repo, 'f'), false);
       const result = await validateIn(folder, repo);
       expect(problemOutcome(result, realpathSync(flowFile))).toEqual(naming('missing-loop'));
-    });
-
-    test('a loop definition that links out of its tier root is a flow.yaml problem naming the loop', async () => {
-      const world = runtime.world();
-      const repo = world.dir('repo');
-      const outside = writeLoopDef(world.dir('stray-loops'), 'linked-loop');
-      const inTier = join(operatorLoops(), loopDefRelPath('linked-loop'));
-      mkdirSync(dirname(inTier), { recursive: true });
-      symlinkSync(outside, inTier);
-      const folder = flowLocations.repoCatalogEntry(repo, 'f');
-      const flowFile = writeFlow(folder, loopFlow('f', ['linked-loop']));
-      const verdict = resolveLoopDefV2('linked-loop', appContext(repo, 'f'));
-      const never = resolveLoopDefV2('never-written-loop', appContext(repo, 'f'));
-      if (verdict.ok || never.ok || verdict.reason === never.reason.split('never-written-loop').join('linked-loop')) {
-        throw new Error('fixture: the app does not refuse the linked definition as escaping its tier');
-      }
-      const outcome = problemOutcome(await validateIn(folder, repo), realpathSync(flowFile));
-      expect.soft(outcome).toEqual(naming('linked-loop'));
-      expect.soft(outcome.problem).not.toContain(dirname(outside));
-    });
-
-    test('a repository override that maps a loop out of the repository is a flow.yaml problem naming the loop', async () => {
-      const world = runtime.world();
-      const repo = world.dir('repo');
-      const outside = writeLoopDef(world.dir('outside-loops'), 'escaping-loop');
-      writeLoopRegistry(repo, { 'escaping-loop': relative(repo, outside) });
-      const folder = flowLocations.repoCatalogEntry(repo, 'f');
-      const flowFile = writeFlow(folder, loopFlow('f', ['escaping-loop']));
-      fixtureResolves('escaping-loop', appContext(repo, 'f'), false);
-      const outcome = problemOutcome(await validateIn(folder, repo), realpathSync(flowFile));
-      expect.soft(outcome).toEqual(naming('escaping-loop'));
-      expect.soft(outcome.problem).not.toContain(dirname(outside));
-    });
-
-    test('a loop definition that is reached but cannot be read is a problem naming that definition', async () => {
-      const repo = runtime.world().dir('repo');
-      const defFile = join(operatorLoops(), loopDefRelPath('unreadable-loop'));
-      mkdirSync(defFile, { recursive: true });
-      const folder = flowLocations.repoCatalogEntry(repo, 'f');
-      writeFlow(folder, loopFlow('f', ['unreadable-loop']));
-      const verdict = resolveLoopDefV2('unreadable-loop', appContext(repo, 'f'));
-      if (verdict.ok) throw new Error('fixture: the app reads a directory as a loop definition');
-      const result = await validateIn(folder, repo);
-      expect(problemOutcome(result, realpathSync(defFile))).toEqual(naming(verdict.reason));
     });
 
     const rejected: readonly { what: string; spec: LoopDefSpec }[] = [
@@ -222,24 +174,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
       await passesThenNamesOnly(flowLocations.repoCatalogEntry(repo, 'f'), ['override-loop'], 'nowhere-loop', [repo, runtime.world().dir('elsewhere')]);
     });
 
-    test('a local <repo>/.agent-terminal/ flow resolves a loop through the repository\'s override registry', async () => {
-      const repo = runtime.world().dir('repo');
-      overrideLoop(repo, 'override-loop');
-      await passesThenNamesOnly(flowLocations.repoLocal(repo), ['override-loop'], 'nowhere-loop', [repo, runtime.world().dir('elsewhere')]);
-    });
-
-    test('a repository inside the app-state home keeps the repository tier', async () => {
-      const repo = join(runtime.world().appHome, 'projects', 'r');
-      overrideLoop(repo, 'override-loop');
-      await passesThenNamesOnly(flowLocations.repoCatalogEntry(repo, 'f'), ['override-loop'], 'nowhere-loop', [repo, runtime.world().dir('elsewhere')]);
-    });
-
-    test('a repository flow resolves a loop held only in the operator tier', async () => {
-      const repo = runtime.world().dir('repo');
-      writeLoopDef(operatorLoops(), 'operator-loop');
-      await passesThenNamesOnly(flowLocations.repoCatalogEntry(repo, 'f'), ['operator-loop'], 'nowhere-loop', [repo, runtime.world().dir('elsewhere')]);
-    });
-
     /** A is itself a repository whose override maps `overridden`, and so is a second working directory; the
      *  operator tier holds `operator-loop`. */
     const globalWorld = (): { cwds: string[] } => {
@@ -258,32 +192,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
       await passesThenNamesOnly(flowLocations.globalCatalogEntry(runtime.world().appHome, 'f'), ['operator-loop'], 'overridden-loop', cwds);
     });
 
-    test('the global fallback <A>/.agent-terminal/ consults no repository override, from any working directory', async () => {
-      const { cwds } = globalWorld();
-      await passesThenNamesOnly(flowLocations.globalFallback(runtime.world().appHome), ['operator-loop'], 'overridden-loop', cwds);
-    });
-
-    test('a source tree\'s example flow resolves loops in its own loops tree and not in the operator tier', async () => {
-      const tree = runtime.world().dir('tree');
-      writeLoopDef(flowLocations.bundledLoops(tree), 'tree-loop');
-      writeLoopDef(operatorLoops(), 'operator-only-loop');
-      fixtureResolves('tree-loop', appContext(runtime.world().dir('other'), 'f'), false);
-      fixtureResolves('operator-only-loop', appContext(runtime.world().dir('other'), 'f'), true);
-      await passesThenNamesOnly(flowLocations.bundledEntry(tree, 'f'), ['tree-loop'], 'operator-only-loop', [tree]);
-    });
-
-    test('a source tree\'s example flow consults no repository override, neither the tree\'s nor the working directory\'s', async () => {
-      const world = runtime.world();
-      const tree = world.dir('tree');
-      writeLoopDef(flowLocations.bundledLoops(tree), 'tree-loop');
-      overrideLoop(tree, 'tree-override-loop');
-      const cwdRepo = world.dir('cwd-repo');
-      overrideLoop(cwdRepo, 'tree-override-loop');
-      fixtureResolves('tree-override-loop', appContext(tree, 'f'), true);
-      fixtureResolves('tree-override-loop', appContext(cwdRepo, 'f'), true);
-      await passesThenNamesOnly(flowLocations.bundledEntry(tree, 'f'), ['tree-loop'], 'tree-override-loop', [tree, cwdRepo]);
-    });
-
     /** Writes `name` into the installed copy's bundled loop tree, which this worker's tests share, and removes it
      *  after the test. */
     const shippedLoop = (name: string): void => {
@@ -300,12 +208,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
       await passesThenNamesOnly(flowLocations.repoCatalogEntry(repo, 'f'), ['shipped-loop'], 'nowhere-loop', [repo]);
     });
 
-    test('a global catalog flow resolves a loop held only in the app\'s bundled loop tree', async () => {
-      const world = runtime.world();
-      shippedLoop('shipped-loop');
-      await passesThenNamesOnly(flowLocations.globalCatalogEntry(world.appHome, 'f'), ['shipped-loop'], 'nowhere-loop', [world.root]);
-    });
-
     test('one of the app\'s own bundled flows resolves loops in the app\'s bundled loop tree and not in the operator tier', async () => {
       const world = runtime.world();
       shippedLoop('shipped-loop');
@@ -314,36 +216,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
       const folder = flowLocations.bundledEntry(runtime.runtimeMain(), 'probe-flow');
       runtime.onTeardown(async () => { rmSync(folder, { recursive: true, force: true }); });
       await passesThenNamesOnly(folder, ['shipped-loop'], 'operator-only-loop', [world.root]);
-    });
-
-    /** A loop held only in the operator tier's folder for flows named `scoped-flow`. */
-    const scopedOperatorLoop = (): void => {
-      writeLoopDef(operatorLoops(), 'scoped-loop', {}, { flow: 'scoped-flow' });
-      const other = runtime.world().dir('other');
-      fixtureResolves('scoped-loop', appContext(other, 'scoped-flow'), true);
-      fixtureResolves('scoped-loop', appContext(other, 'entry-id'), false);
-    };
-
-    test('a repository catalog flow resolves a loop in the operator tier\'s folder for its flow name, not its folder id', async () => {
-      const repo = runtime.world().dir('repo');
-      scopedOperatorLoop();
-      await passesThenNamesOnly(flowLocations.repoCatalogEntry(repo, 'entry-id'), ['scoped-loop'], 'nowhere-loop', [repo, runtime.world().dir('elsewhere')], 'scoped-flow');
-    });
-
-    test('a global catalog flow resolves a loop in the operator tier\'s folder for its flow name, not its folder id', async () => {
-      const world = runtime.world();
-      scopedOperatorLoop();
-      await passesThenNamesOnly(flowLocations.globalCatalogEntry(world.appHome, 'entry-id'), ['scoped-loop'], 'nowhere-loop', [world.root], 'scoped-flow');
-    });
-
-    test('a source tree\'s example flow resolves a loop in its loops tree\'s folder for its flow name, not its folder id', async () => {
-      const world = runtime.world();
-      const tree = world.dir('tree');
-      writeLoopDef(flowLocations.bundledLoops(tree), 'scoped-loop', {}, { flow: 'scoped-flow' });
-      const bundled: LoopDefV2Context = { tiers: { operator: null, appBundled: flowLocations.bundledLoops(tree), retired: null }, repoDir: world.dir('other') };
-      fixtureResolves('scoped-loop', { ...bundled, flow: 'scoped-flow' }, true);
-      fixtureResolves('scoped-loop', { ...bundled, flow: 'entry-id' }, false);
-      await passesThenNamesOnly(flowLocations.bundledEntry(tree, 'entry-id'), ['scoped-loop'], 'nowhere-loop', [tree], 'scoped-flow');
     });
   });
 

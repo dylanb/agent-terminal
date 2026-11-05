@@ -10,11 +10,17 @@ import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 import { isTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../src/main/todoTemplate';
 import { LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from '../../src/main/appLoopPaths';
-import { flowLoopsDir } from '../../src/main/loopDefV2';
+import { flowLoopsDir, resolveLoopDefV2, type LoopDefV2Lookup } from '../../src/main/loopDefV2';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { APP_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
 import { LOOP_DEF_V2_VERSION } from '../../src/shared/engineCapabilities/loop';
+
+/** Throws unless the app resolves `loop` in `ctx` as `expected` says, so a fixture means what its test says. */
+export function fixtureResolves(loop: string, ctx: LoopDefV2Lookup, expected: boolean): void {
+  if (resolveLoopDefV2(loop, ctx).ok === expected) return;
+  throw new Error(`fixture: the app ${expected ? 'does not resolve' : 'resolves'} ${loop} for ${ctx.repoDir ?? 'no repository'}`);
+}
 
 /** Where each tier keeps a flow folder or a loop tree. `repo` is the directory holding `.agent-terminal/`,
  *  `appHome` is the app-state home A, `tree` is the X of an `<X>/example/` bundle layout. */

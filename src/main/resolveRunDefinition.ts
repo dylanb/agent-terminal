@@ -26,7 +26,7 @@ export type CatalogResolution =
   | { ok: true; tier: CatalogTier; flowDir: string }
   | { ok: false; cause: 'unknown' | 'escapes' | 'unresolvable' };
 
-type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
+export type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
 
 /** §18.7.3 — the run-scoped source binding a begun run resolves instead of the live pointer. A validated closed
  *  disposition (its field-local validation is the read boundary's): a catalog run carries the tier it was bound

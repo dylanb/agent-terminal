@@ -2,6 +2,7 @@ import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
@@ -193,10 +194,10 @@ test.beforeEach(async ({}, testInfo) => {
   await openQuickSend('capture');
 });
 
-test.afterEach(async () => {
-  // An @ownapp test that threw before launching leaves `app` as the previous test's, already closed —
-  // close() is then a no-op. Never leave an instance running: a stranded one is what kills a worker.
-  await app?.close(); // stop writes before removing the userData dir
+test.afterEach(async ({}, testInfo) => {
+  // An @ownapp test that threw before launching leaves `app` as the previous test's, already exited.
+  // Never leave an instance running: a stranded one is what kills a worker.
+  await stopApp(app, testInfo);
   rmSync(userDataDir, { recursive: true, force: true });
 });
 

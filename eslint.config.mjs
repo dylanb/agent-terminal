@@ -77,20 +77,20 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const VALIDATE_FLOW_HARNESS_MESSAGE =
-  'Run the command through tests/e2e/validateFlowHarness.ts (installed launcher: tests/e2e/installedLauncher.ts), which gives every run a fully specified environment and owns every process it starts; wait for an observed state, never a fixed time.';
-const VALIDATE_FLOW_SPEC_RULES = {
+const INSTALLED_RUNTIME_MESSAGE =
+  'Run the installed runtime through tests/e2e/installedRuntime.ts (--validate-flow: tests/e2e/validateFlowHarness.ts; installed launcher: tests/e2e/installedLauncher.ts), which gives every run a fully specified environment and owns every process it starts; wait for an observed state, never a fixed time.';
+const INSTALLED_RUNTIME_SPEC_RULES = {
   'no-restricted-imports': ['error', {
     paths: [
-      ...['child_process', 'node:child_process'].map((name) => ({ name, message: VALIDATE_FLOW_HARNESS_MESSAGE })),
-      ...['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: VALIDATE_FLOW_HARNESS_MESSAGE })),
-      ...['process', 'node:process'].map((name) => ({ name, importNames: ['env'], message: VALIDATE_FLOW_HARNESS_MESSAGE })),
-      { name: './registeredElectron', message: VALIDATE_FLOW_HARNESS_MESSAGE },
-      { name: '@playwright/test', importNames: ['_electron'], message: VALIDATE_FLOW_HARNESS_MESSAGE },
+      ...['child_process', 'node:child_process'].map((name) => ({ name, message: INSTALLED_RUNTIME_MESSAGE })),
+      ...['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: INSTALLED_RUNTIME_MESSAGE })),
+      ...['process', 'node:process'].map((name) => ({ name, importNames: ['env'], message: INSTALLED_RUNTIME_MESSAGE })),
+      { name: './registeredElectron', message: INSTALLED_RUNTIME_MESSAGE },
+      { name: '@playwright/test', importNames: ['_electron'], message: INSTALLED_RUNTIME_MESSAGE },
     ],
   }],
-  'no-restricted-properties': ['error', { object: 'process', property: 'env', message: VALIDATE_FLOW_HARNESS_MESSAGE }],
-  'no-restricted-syntax': ['error', ...[NO_SLEEP, NO_PROMISE_SLEEP].map(({ selector }) => ({ selector, message: VALIDATE_FLOW_HARNESS_MESSAGE }))],
+  'no-restricted-properties': ['error', { object: 'process', property: 'env', message: INSTALLED_RUNTIME_MESSAGE }],
+  'no-restricted-syntax': ['error', ...[NO_SLEEP, NO_PROMISE_SLEEP].map(({ selector }) => ({ selector, message: INSTALLED_RUNTIME_MESSAGE }))],
 };
 const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts'];
 
@@ -174,8 +174,8 @@ export default [
     },
   },
   {
-    files: ['tests/e2e/validateFlow*.spec.ts'],
-    rules: VALIDATE_FLOW_SPEC_RULES,
+    files: ['tests/e2e/validateFlow*.spec.ts', 'tests/e2e/finalizeInstalledAccess.spec.ts'],
+    rules: INSTALLED_RUNTIME_SPEC_RULES,
   },
   {
     files: ['src/main/controller*.ts'],

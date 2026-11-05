@@ -6,7 +6,8 @@ import yaml from 'js-yaml';
 import { confinedRealPathResult, resolveOwnedDirJail } from './confinedPath';
 import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
-import { resolveLoopDefV2, type ReviewerTools } from './loopDefV2';
+import { MAX_LOOP_RECIPE_BYTES, resolveLoopDefV2, type ReviewerTools } from './loopDefV2';
+import { readBoundedNoFollow } from './boundedRead';
 
 const NAME_SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -113,6 +114,21 @@ export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentForma
   return [...byName.values()].map(({ rel, src, bytes }) => ({ rel, src, bytes }));
 }
 
+function readCharter(file: string): { ok: true; text: string } | { ok: false; problem: string } {
+  const read = readBoundedNoFollow(file, MAX_LOOP_RECIPE_BYTES);
+  if (read.ok) return read;
+  switch (read.cause) {
+    case 'absent':
+      return { ok: false, problem: `cannot read the charter ${file}: it does not exist` };
+    case 'over-cap':
+      return { ok: false, problem: `the charter ${file} is larger than ${MAX_LOOP_RECIPE_BYTES} bytes` };
+    case 'unreadable':
+      return { ok: false, problem: `cannot read the charter ${file}: ${read.error === undefined ? 'it is not a regular file' : errMsg(read.error)}` };
+    default:
+      return read.cause satisfies never;
+  }
+}
+
 const AGENT_FILE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 
 export interface InstalledReviewer {
@@ -149,13 +165,9 @@ export function installedReviewerProblem(agentsDir: string | null, reviewer: Ins
   if (m === null || typeof front !== 'object' || front === null) return `${file} is not a sub-agent definition`;
   const fields = front as Record<string, unknown>;
   if (fields.name !== agent) return `${file} defines the sub-agent ${String(fields.name)}, not ${agent}`;
-  let charter: string;
-  try {
-    charter = readFileSync(reviewer.charter, 'utf8');
-  } catch (e) {
-    return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
-  }
-  if (m[2] !== charter) return `the sub-agent ${agent} carries a different charter than ${reviewer.charter}`;
+  const charter = readCharter(reviewer.charter);
+  if (!charter.ok) return charter.problem;
+  if (m[2] !== charter.text) return `the sub-agent ${agent} carries a different charter than ${reviewer.charter}`;
   const named = (t: ReviewerTools): string => (t === 'all' ? 'every tool' : t.join(', '));
   const tools: ReviewerTools = fields.tools === undefined ? 'all' : typeof fields.tools === 'string' ? fields.tools.split(',').map((t) => t.trim()) : [];
   if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${agent} has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
@@ -178,15 +190,11 @@ export function installedCodexReviewerProblem(agentsDir: string | null, reviewer
   } catch (e) {
     return isErrno(e, 'ENOENT') ? missing : `cannot read the Codex agent ${file}: ${errMsg(e)}`;
   }
-  let charter: string;
-  try {
-    charter = readFileSync(reviewer.charter, 'utf8');
-  } catch (e) {
-    return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
-  }
+  const charter = readCharter(reviewer.charter);
+  if (!charter.ok) return charter.problem;
   let expected: string;
   try {
-    expected = renderCodexReviewerAgent({ loop: reviewer.loop, persona: reviewer.persona, tools: reviewer.tools, charter });
+    expected = renderCodexReviewerAgent({ loop: reviewer.loop, persona: reviewer.persona, tools: reviewer.tools, charter: charter.text });
   } catch (e) {
     return errMsg(e);
   }

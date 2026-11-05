@@ -41,7 +41,7 @@ The shipped flows are in `example/flows/`.
 
 - `skill:` and `todo_template:` are **always references**, never inline bodies: they can be large and shared, and inlining would bloat the YAML.
 - `skill:` names a **Claude Code skill** (a registered name **or** a file path, repo-relative against the worktree); on step entry the app injects the skill invocation so the agent loads its playbook.
-- `todo_template:` names a **markdown-list** template (§21.2) by its file name, with or without `.md`, in the flow's own `todo-templates/`. A reference that leaves that folder does not resolve; there is no repository-relative path form and no global template folder. It is not an auto-run entry action: it is the **default selection** of the on-demand template picker, which lists every template under the flow's `todo-templates/`, so the human chooses and instantiates rather than the app auto-filling the list.
+- `todo_template:` names a **markdown-list** template (§21.2) by its file name, with or without `.md`, in the flow's own `todo-templates/`. A reference that leaves that folder, names a named pipe or a device rather than a regular file, or names a file larger than 256 KiB, does not resolve; there is no repository-relative path form and no global template folder. It is not an auto-run entry action: it is the **default selection** of the on-demand template picker, which lists every template under the flow's `todo-templates/`, so the human chooses and instantiates rather than the app auto-filling the list.
 
 ### 18.7 Flow catalog & per-worktree flow selection
 

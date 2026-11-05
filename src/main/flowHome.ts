@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import { confinedRealPath, resolveJail } from './confinedPath';
+import { layoutRoot } from './layoutRoot';
 
 export const FLOW_HOME_SUBDIR = '.agent-terminal';
 export const FLOW_DEF_FILE = 'flow.yaml';
@@ -12,6 +13,10 @@ export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
 /** Where a root keeps its flow definition and app state (§18.1/§19.1/§23.4). */
 export function flowHomeDir(root: string): string {
   return path.join(root, FLOW_HOME_SUBDIR);
+}
+
+export function flowHomeRoot(dir: string): string | null {
+  return layoutRoot(flowHomeDir, dir);
 }
 
 /** The own-file `name` directly under a worktree's flow home, as an UNRESOLVED leaf under a symlink-free flow

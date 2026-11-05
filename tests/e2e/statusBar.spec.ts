@@ -1,6 +1,7 @@
 import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,8 +104,8 @@ test.beforeEach(async () => {
   await launch();
 });
 
-test.afterEach(async () => {
-  await app.close();
+test.afterEach(async ({}, testInfo) => {
+  await stopApp(app, testInfo);
   for (const dir of cleanup.reverse()) rmSync(dir, { recursive: true, force: true });
 });
 

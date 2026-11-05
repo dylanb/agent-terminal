@@ -1,10 +1,10 @@
 // Todo templates: a template is a markdown list parsed per §21.2.
 
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
 import { TODO_TEMPLATES_SUBDIR } from './flowHome';
-import { isReadableRegularFile } from './regularFile';
+import { readBoundedNoFollow } from './boundedRead';
 
 /** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
  *  by the reader that lists them and the installer that seeds them — two copies would let the installer
@@ -46,33 +46,20 @@ function resolveContained(root: string, candidate: string): string | null {
   }
 }
 
+export const MAX_TODO_TEMPLATE_BYTES = 256 * 1024;
+
 /**
  * Resolve a step's `todo_template` ref to a file inside the templates dir (§18.6/§21.2) — the one
  * `todoTemplatesDir` returns, which is how callers name it. Returns the markdown, or null for a missing or
- * escaping path (never throws).
+ * escaping path, or one that is not a regular file or is larger than `MAX_TODO_TEMPLATE_BYTES` (never throws).
  */
 export function loadTodoTemplateFile(baseDir: string, ref: string): string | null {
-  const read = (real: string): string | null => {
-    try {
-      return readFileSync(real, 'utf8');
-    } catch {
-      return null;
-    }
-  };
-  return firstTemplate(baseDir, ref, read);
-}
-
-/** Whether `loadTodoTemplateFile` finds `ref`, decided without opening any file, so a named pipe cannot block it. */
-export function todoTemplateResolves(baseDir: string, ref: string): boolean {
-  return firstTemplate(baseDir, ref, (real) => (isReadableRegularFile(real) ? real : null)) !== null;
-}
-
-function firstTemplate<T>(baseDir: string, ref: string, take: (real: string) => T | null): T | null {
   const root = path.resolve(baseDir);
   for (const name of isTodoTemplateFile(ref) ? [ref] : [ref, todoTemplateFile(ref)]) {
     const real = resolveContained(root, name);
-    const taken = real === null ? null : take(real);
-    if (taken !== null) return taken;
+    if (real === null) continue;
+    const read = readBoundedNoFollow(real, MAX_TODO_TEMPLATE_BYTES);
+    if (read.ok) return read.text;
   }
   return null;
 }
@@ -102,12 +89,9 @@ export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
     if (real === null) continue;
     const ref = todoTemplateRef(file);
     let name = humanize(ref);
-    try {
-      const h1 = readFileSync(real, 'utf8').match(/^#\s+(.+?)\s*$/m);
-      if (h1) name = h1[1].trim();
-    } catch {
-      /* unreadable file → keep the humanized fallback */
-    }
+    const read = readBoundedNoFollow(real, MAX_TODO_TEMPLATE_BYTES);
+    const h1 = read.ok ? read.text.match(/^#\s+(.+?)\s*$/m) : null;
+    if (h1) name = h1[1].trim();
     refs.push({ ref, name });
   }
   return refs;

@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import { auditTimestamp, reconstructTimeline, type RunTimeline } from '../shared/audit';
 import { auditFilePath, auditRootDir } from './auditPaths';
 import { createFlowStateStore } from './flowState';
+import { MAX_LOOP_ARTIFACT_BYTES } from './appLoopPaths';
+import { readBoundedNoFollow } from './boundedRead';
+import { errMsg } from './errno';
 import { confinedRealPath, resolveJail, resolveOwnedDirJail } from './confinedPath';
 import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { publishFlowAudit } from './flowAuditPublication';
@@ -27,6 +30,21 @@ export function readCurrentAudit(repoDir: string): RunTimeline {
   }
 }
 
+function auditArtifactText(file: string): string {
+  const read = readBoundedNoFollow(file, MAX_LOOP_ARTIFACT_BYTES);
+  if (read.ok) return read.text;
+  switch (read.cause) {
+    case 'absent':
+      throw new Error('audit artifact does not exist');
+    case 'over-cap':
+      throw new Error(`audit artifact is larger than ${MAX_LOOP_ARTIFACT_BYTES} bytes`);
+    case 'unreadable':
+      throw new Error(read.error === undefined ? 'audit artifact is unreadable: not a regular file' : errMsg(read.error));
+    default:
+      return read.cause satisfies never;
+  }
+}
+
 export async function runFinalizeAccess(args: string[]): Promise<unknown> {
   const [operation, repoDir, prText, artifact] = args;
   if (operation === 'audit-evidence' && repoDir && args.length === 2) return readCurrentAudit(repoDir);
@@ -37,7 +55,7 @@ export async function runFinalizeAccess(args: string[]): Promise<unknown> {
     const jail = resolveJail(repo, '.agent-terminal', 'loop', 'artifacts');
     const file = jail && confinedRealPath(jail, resolve(repo, artifact));
     if (!file) throw new Error('audit artifact is outside the flow artifacts directory or unreadable');
-    await publishFlowAudit(createGitHubPullRequestBodies(repo), pr, readFileSync(file, 'utf8'));
+    await publishFlowAudit(createGitHubPullRequestBodies(repo), pr, auditArtifactText(file));
     return { outcome: 'done' };
   }
   throw new Error('expected audit-evidence <repo> or publish-flow-audit <repo> <PR> <artifact>');

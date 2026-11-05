@@ -10,7 +10,9 @@ import { join } from 'node:path';
 import { isErrno } from '../../src/main/errno';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { electron } from './registeredElectron';
-import { OwnedProcesses, runEnv, settleAll, type RunResult, type ValidateRuntime, type ValidateWorld } from './validateFlowHarness';
+import { stopApp } from './stopApp';
+import type { RunResult } from '../helpers/validateOutcome';
+import { OwnedProcesses, runEnv, settleAll, type InstalledRuntime, type RuntimeWorld } from './installedRuntime';
 
 const RUN_MARKER_ENV = 'AGENT_TERMINAL_TEST_RUN';
 const INSTALL_BUTTON = 'Install the agent-terminal command-line launcher';
@@ -32,7 +34,7 @@ export interface OwnApp {
 
 /** Launches this build with the world's homes and config dir, `bash` as its shell and the run PATH, so neither
  *  the host's shell nor its PATH can change where the install lands. */
-async function launchOwnApp(world: ValidateWorld, own: (app: ElectronApplication) => void): Promise<OwnApp> {
+async function launchOwnApp(world: RuntimeWorld, own: (app: ElectronApplication) => void): Promise<OwnApp> {
   const app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -49,7 +51,7 @@ async function launchOwnApp(world: ValidateWorld, own: (app: ElectronApplication
 }
 
 /** Presses the Settings install control and returns the absolute path of the command it reports installing. */
-async function installLauncher(page: Page, world: ValidateWorld): Promise<string> {
+async function installLauncher(page: Page, world: RuntimeWorld): Promise<string> {
   await page.locator('[data-viewbtn="4"]').click();
   const view = page.locator('#cli-install-view');
   await view.getByRole('button', { name: INSTALL_BUTTON }).click();
@@ -115,7 +117,7 @@ class InstalledRuns {
   /** A group seen empty is never consulted again: its id may since belong to an unrelated process. */
   private readonly emptied = new Set<number>();
 
-  constructor(private readonly world: ValidateWorld, private readonly platform: Platform) {}
+  constructor(private readonly world: RuntimeWorld, private readonly platform: Platform) {}
 
   /** Runs `command` with `args` from `cwd`, in a new process group, with the world's run environment. */
   async run(command: string, args: readonly string[], cwd: string): Promise<InstalledRun> {
@@ -193,14 +195,14 @@ export interface InstalledLauncher {
 
 /** Call once at the top of a spec, after `useValidateRuntime()`. After each test, before the world is removed, it
  *  kills and confirms gone everything an installed run started, and closes every app `launch()` started. */
-export function useInstalledLauncher(runtime: ValidateRuntime, platform: NodeJS.Platform): InstalledLauncher {
+export function useInstalledLauncher(runtime: InstalledRuntime, platform: NodeJS.Platform): InstalledLauncher {
   let runs: InstalledRuns | undefined;
   const apps: ElectronApplication[] = [];
   test.beforeEach(() => { runs = new InstalledRuns(runtime.world(), platform); });
-  runtime.onTeardown(async () => {
+  runtime.onTeardown(async (testInfo) => {
     const finished = runs;
     runs = undefined;
-    await settleAll([...(finished ? [finished.cleanup()] : []), ...apps.splice(0).map((app) => app.close())], 'teardown of the installed launcher failed');
+    await settleAll([...(finished ? [finished.cleanup()] : []), ...apps.splice(0).map((app) => stopApp(app, testInfo))], 'teardown of the installed launcher failed');
   });
   const current = (): InstalledRuns => {
     if (runs === undefined) throw new Error('useInstalledLauncher(): used outside a test');
