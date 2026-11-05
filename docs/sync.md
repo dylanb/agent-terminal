@@ -38,7 +38,7 @@ software-factory is internal, so its record carries `"urlEnv": "SOFTWARE_FACTORY
   gh secret set SOFTWARE_FACTORY_URL --repo dylanb/agent-terminal
   ```
 
-The `sync-status` workflow (weekly, or run by hand) writes each source's count of unpulled commits to its job summary. It prints counts only, because a public repo's Actions logs are public. A source without its secret is reported as not configured.
+The `sync-status` workflow (weekly, or run by hand) writes each source's count of unpulled commits to its job summary: commits since `lastSync` that this repo does not already have. It prints counts only, because a public repo's Actions logs are public. A source without its secret is reported as not configured. A failed fetch from a source configured with `urlEnv` prints only the source name and its env var, never git's output, because git's errors show the URL with its credentials stripped, so the masked secret no longer matches it.
 
 ## Procedure
 

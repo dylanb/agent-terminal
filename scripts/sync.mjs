@@ -60,14 +60,24 @@ function readRecord(source) {
 }
 
 // Returns false when the remote does not exist and no URL is configured for it.
-function fetchSource(rec) {
-  if (!git('remote').split('\n').includes(rec.remote)) {
-    const url = rec.url ?? process.env[rec.urlEnv]
-    if (!url) return false
-    git('remote', 'add', rec.remote, url)
-  }
-  git('fetch', '--quiet', rec.remote, rec.branch)
+function fetchSource(source, rec) {
+  const hasRemote = git('remote').split('\n').includes(rec.remote)
+  const url = rec.url ?? process.env[rec.urlEnv]
+  if (!hasRemote && !url) return false
+  const run = rec.urlEnv ? privateGit(source, rec) : git
+  if (!hasRemote) run('remote', 'add', rec.remote, url)
+  run('fetch', '--quiet', rec.remote, rec.branch)
   return true
+}
+
+// git's diagnostics name the URL with its credentials stripped, which no longer matches the masked secret.
+const privateGit = (source, rec) => (...args) => {
+  try {
+    return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim()
+  } catch {
+    console.error(`sync/${source}.json: git ${args[0]} failed for remote "${rec.remote}"; check ${rec.urlEnv}`)
+    process.exit(1)
+  }
 }
 
 function notConfigured(source, rec) {
@@ -75,7 +85,8 @@ function notConfigured(source, rec) {
 }
 
 const sourceRef = (rec) => `${rec.remote}/${rec.branch}`
-const pendingRange = (rec) => (rec.lastSync?.commit ? `${rec.lastSync.commit}..${sourceRef(rec)}` : sourceRef(rec))
+// Excludes HEAD: a source that merged commits back from this repo has them too, and they need no pulling.
+const pendingRange = (rec) => [rec.lastSync?.commit ? `${rec.lastSync.commit}..${sourceRef(rec)}` : sourceRef(rec), '^HEAD']
 
 function list() {
   for (const source of sources()) {
@@ -86,10 +97,10 @@ function list() {
 
 function status(source) {
   const rec = readRecord(source)
-  if (!fetchSource(rec)) usage(notConfigured(source, rec))
+  if (!fetchSource(source, rec)) usage(notConfigured(source, rec))
   console.log(`source:    ${source} (${sourceRef(rec)})`)
   console.log(`last sync: ${rec.lastSync?.commit ?? '(never)'} on ${rec.lastSync?.syncedAt ?? '-'}`)
-  const pending = git('log', '--oneline', '--no-decorate', pendingRange(rec))
+  const pending = git('log', '--oneline', '--no-decorate', ...pendingRange(rec))
   if (!pending) {
     console.log('up to date: no source commits since the last sync')
     return
@@ -111,11 +122,11 @@ function report() {
   console.log('## Sync sources\n')
   for (const source of sources()) {
     const rec = readRecord(source)
-    if (!fetchSource(rec)) {
+    if (!fetchSource(source, rec)) {
       console.log(`- **${source}**: not configured here (no \`${rec.urlEnv}\` secret)`)
       continue
     }
-    const count = Number(git('rev-list', '--count', pendingRange(rec)))
+    const count = Number(git('rev-list', '--count', ...pendingRange(rec)))
     const since = rec.lastSync?.syncedAt ? ` since the sync on ${rec.lastSync.syncedAt}` : ''
     console.log(`- **${source}**: ${count} commit(s) to pull in${since}`)
   }
