@@ -15,7 +15,7 @@ import { SESSION_ID, type CliInstallResult } from '../../src/shared/ipc';
 // "does the command resolve from a new shell", never by asserting an intermediate target shape.
 
 let root: string;
-const inv = (execPath: string): LaunchInvocation => ({ execPath, appArgs: [] });
+const inv = (execPath: string): LaunchInvocation => ({ kind: 'packaged', execPath });
 const binOf = (home: string): string => join(home, '.agent-terminal', 'bin');
 const cmdOf = (home: string): string => join(binOf(home), CLI_COMMAND_NAME);
 const isExecutable = (p: string): boolean => (statSync(p).mode & 0o111) !== 0;

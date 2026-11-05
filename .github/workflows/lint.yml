@@ -28,7 +28,9 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      # Lint and typecheck read only sources and type declarations, so skip the install scripts: postinstall
+      # would download the Electron binary and compile node-pty, neither of which this job uses.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
       # Fails the build on any code TODO/FIXME comment (local/no-todo-comments), catching a --no-verify
       # bypass of the husky pre-commit hook before a deferral marker reaches the default branch.
