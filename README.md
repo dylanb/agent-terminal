@@ -21,6 +21,18 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 
 ![The Agent Terminal window: the flow rail on the left at step 13 of 15 (impl-approve) with the loop awaiting a decision, Claude Code working in the terminal in the centre under a red "Loop needs you" status bar, and the Todo overlay on the right listing review questions to send to the agent](docs/images/screenshot.png)
 
+## Getting started
+
+**Prerequisite:** install both apps and the tools they need, as described in [Install](#install), including [Before you use it](#before-you-use-it).
+
+1. **Launch the controller and Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
+2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux, read [The `agent-terminal` command](#the-agent-terminal-command) first: the `.deb` needs `~/.local/bin` on your `PATH`, and an AppImage alone cannot keep a working command.
+3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
+4. **Pick a flow and start it.** Open a terminal in your repo (`agent-terminal ~/path/to/repo`), choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`.
+5. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
+
+For what each bundled flow does, which one fits your ticket, and what you decide at each gate, see [Bundled flows](#bundled-flows).
+
 ## Features
 
 ### Terminal and agent hosting
@@ -200,15 +212,6 @@ pnpm run package    # dmg/zip on macOS, AppImage/deb on Linux
 ```
 
 This builds the terminal into `dist/` and the controller (`electron-builder.controller.yml`) into `dist/controller/`. `node-pty` ships as a native binary per platform, so build on (or cross-build for) each target OS.
-
-## Getting started
-
-1. **Launch Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
-2. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
-3. **Pick a flow and start it.** Choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), so install it and sign in with `gh auth login` first.
-4. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
-
-For what each bundled flow does, which one fits your ticket, and what you decide at each gate, see [Bundled flows](#bundled-flows).
 
 ## Bundled flows
 
