@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/renderer/src/setupCheckDialog';
-import { ENTRY, REPO, fakeSetupDeps, repoStatus } from '../helpers/setupCheckFixtures';
+import { ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
 import { recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
 
 // The setup-check popup lists each condition the checked repository fails, in plain words, one message per
@@ -40,8 +40,16 @@ describe('a check whose status lists conditions', () => {
     expect(screen.entries()).toHaveLength(2);
   });
 
-  it('gives each failure kind its own message (AC1, AC2, AC3, AC6)', async () => {
-    const kinds = [ENTRY.absent, ENTRY.malformed, ENTRY.confinement, ENTRY.notIgnored, ENTRY.unchecked];
+  it('gives each failure kind its own message (AC1, AC2, AC3, AC6, AC7)', async () => {
+    const kinds = [
+      ENTRY.absent,
+      ENTRY.malformed,
+      ENTRY.confinement,
+      ENTRY.notIgnored,
+      ENTRY.unchecked,
+      ENTRY.examplesStale,
+      ENTRY.examplesUnchecked,
+    ];
     const messages: string[] = [];
     for (const entry of kinds) {
       const fake = fakeSetupDeps();
@@ -438,4 +446,99 @@ describe('checks run one at a time, each repository at most once', () => {
       expect(seen()).toEqual([REPO.bravo, REPO.alpha, REPO.charlie]);
     });
   }
+});
+
+const INSTALL = 'Install/update examples';
+
+describe('the examples entry and Install/update examples (AC12, AC17)', () => {
+  it('shows Install/update examples when the examples entry is listed', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale]));
+    const { dialog, screen } = mountDialog(fake);
+
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    expect(screen.hasControl(INSTALL)).toBe(true);
+  });
+
+  it('hides Install/update examples when only repository entries are listed (AC12)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.notIgnored]));
+    const { dialog, screen } = mountDialog(fake);
+
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    expect(screen.hasControl(INSTALL)).toBe(false);
+  });
+
+  it('pressing it closes the popup, then opens the install-examples flow (AC17)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale]));
+    const { dialog, screen } = mountDialog(fake);
+    fake.whenInstallOpens(() => ({ popupOpen: screen.isOpen() }));
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(INSTALL).click();
+
+    await vi.waitFor(() =>
+      expect({ open: screen.isOpen(), installOpens: fake.installOpens() }).toEqual({
+        open: false,
+        installOpens: [{ popupOpen: false }],
+      }),
+    );
+  });
+
+  it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(INSTALL).click();
+
+    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
+  });
+});
+
+describe('the examples entry after startup', () => {
+  /** Runs the startup check of `dir`, outside a git repository with the examples entry listed, and closes its
+   *  popup. */
+  async function closedStartupPopup(fake: ReturnType<typeof fakeSetupDeps>, dir: string) {
+    fake.answer(dir, plainStatus(dir, [ENTRY.examplesStale]));
+    const mountedDialog = mountDialog(fake);
+    void mountedDialog.dialog.check(dir);
+    await vi.waitFor(() => expect(mountedDialog.screen.isOpen()).toBe(true));
+    mountedDialog.screen.pressEscape();
+    return mountedDialog;
+  }
+
+  it('entering a directory that is not a git repository raises no popup, even with the examples entry listed', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.bravo, plainStatus(REPO.bravo, [ENTRY.examplesStale]));
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+    const { host, dialog } = await closedStartupPopup(fake, REPO.alpha);
+    const seen = namedIn(recordSetupDialogs(host));
+
+    void dialog.check(REPO.bravo);
+    void dialog.check(REPO.charlie);
+
+    await vi.waitFor(() => expect(seen()[0]).toBe(REPO.charlie));
+  });
+
+  it('entering a new git repository whose status lists only the examples entry raises a popup listing it', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.examplesStale]));
+    const { dialog, screen } = await closedStartupPopup(fake, REPO.alpha);
+
+    void dialog.check(REPO.bravo);
+    await shownFor(screen, REPO.bravo);
+
+    expect(screen.entries()).toHaveLength(1);
+  });
 });

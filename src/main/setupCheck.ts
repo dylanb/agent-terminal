@@ -1,9 +1,11 @@
 import type { SetupStatusReply } from '../shared/ipc';
 import type { SetupConditionEntry } from '../shared/setupCheck';
 import type { IgnoreAnswer } from './gitIgnoreCheck';
+import type { ExamplesCurrency } from './installExamples';
 import type { LoopCapabilitiesLoad } from './loopCapabilities';
 
 export interface SetupCheckDeps {
+  examplesCurrent(): ExamplesCurrency;
   isGitRepository(dir: string): boolean;
   agentTerminalIgnored(repoDir: string): Promise<IgnoreAnswer>;
   loadCapabilities(repoDir: string): LoopCapabilitiesLoad;

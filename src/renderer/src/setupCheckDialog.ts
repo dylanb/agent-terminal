@@ -4,6 +4,8 @@ import { createModalShell } from './modalShell';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
+  /** Opens the Settings view's install-examples flow. */
+  openInstallExamples(): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
   onFocusLost(): void;
   /** Whether another app dialog is open, so this one waits instead of opening over it. */
@@ -33,6 +35,8 @@ const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
 
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
+    case 'examples':
+      return '';
     case 'capabilities':
       return CAPABILITIES_MESSAGES[entry.failure];
     case 'ignore':
@@ -97,7 +101,12 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
       close.className = 'pill';
       close.textContent = 'Close';
       presses.bind(close, dismiss);
-      foot.append(close);
+      const install = doc.createElement('button');
+      install.type = 'button';
+      install.className = 'pill';
+      install.textContent = 'Install/update examples';
+      presses.bind(install, () => undefined);
+      foot.append(install, close);
       card.append(title, body, foot);
       return { card, initialFocus: null, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
     });

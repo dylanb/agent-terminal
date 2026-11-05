@@ -17,6 +17,8 @@ export const ENTRY = {
   confinement: { condition: 'capabilities', failure: 'confinement' },
   notIgnored: { condition: 'ignore', failure: 'not-ignored' },
   unchecked: { condition: 'ignore', failure: 'unchecked' },
+  examplesStale: { condition: 'examples', failure: 'stale' },
+  examplesUnchecked: { condition: 'examples', failure: 'unchecked' },
 } as const satisfies Record<string, SetupConditionEntry>;
 
 export const repoStatus = (repoKey: string, entries: SetupConditionEntry[]): SetupStatusReply => ({
@@ -26,11 +28,20 @@ export const repoStatus = (repoKey: string, entries: SetupConditionEntry[]): Set
   entries,
 });
 
+/** The status of a directory that is not a git repository. */
+export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupStatusReply => ({
+  ok: true,
+  repoKey: dir,
+  isRepository: false,
+  entries,
+});
+
 type Scripted = SetupStatusReply | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
- *  whatever `landFocusOn` names, as the composition root's fallback does. */
+ *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
+ *  recorded with what `whenInstallOpens` reports at that moment. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -38,6 +49,8 @@ export function fakeSetupDeps() {
   let blocking = false;
   const closedListeners = new Set<() => void>();
   let landing: HTMLElement | null = null;
+  const installOpens: unknown[] = [];
+  let atInstallOpen: () => unknown = () => null;
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       const held = holds.get(repoKey);
@@ -50,6 +63,9 @@ export function fakeSetupDeps() {
       if (next === undefined) return { ok: false, reason: `no status scripted for ${repoKey}` };
       if ('reject' in next) throw new Error(next.reject);
       return next;
+    },
+    openInstallExamples: () => {
+      installOpens.push(atInstallOpen());
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -76,6 +92,12 @@ export function fakeSetupDeps() {
       holds.set(repoKey, new Promise<void>((resolve) => (release = resolve)));
       return release;
     },
+    /** What each `openInstallExamples` call records about the moment it was made. */
+    whenInstallOpens(probe: () => unknown): void {
+      atInstallOpen = probe;
+    },
+    /** One record per `openInstallExamples` call, in order. */
+    installOpens: (): unknown[] => [...installOpens],
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {
       landing = el;

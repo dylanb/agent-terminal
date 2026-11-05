@@ -341,7 +341,12 @@ async function createWindow(): Promise<void> {
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   const isGitRepository = (dir: string): boolean => findRepoRoot(dir) === dir;
-  const setupCheck = createSetupCheck({ isGitRepository, agentTerminalIgnored, loadCapabilities: loadLoopCapabilities });
+  const setupCheck = createSetupCheck({
+    examplesCurrent: () => ({ ok: true, current: true }),
+    isGitRepository,
+    agentTerminalIgnored,
+    loadCapabilities: loadLoopCapabilities,
+  });
   const setupStatus: (repoKey: string) => Promise<SetupStatusReply> = setupCheckEnabled(process.env)
     ? (repoKey) => setupCheck.status(repoKey)
     : async (repoKey) => ({ ok: true, repoKey, isRepository: isGitRepository(repoKey), entries: [] });

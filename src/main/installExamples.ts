@@ -633,6 +633,12 @@ export function previewInstallExamples(
   };
 }
 
+export type ExamplesCurrency = { ok: true; current: boolean } | { ok: false; error: string };
+
+export function inspectExamplesCurrency(_destinations: InstallDestination[]): ExamplesCurrency {
+  return { ok: true, current: true };
+}
+
 export interface ApplyOptions {
   removeRetired: boolean;
 }

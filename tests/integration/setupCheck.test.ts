@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentTerminalIgnored } from '../../src/main/gitIgnoreCheck';
+import type { ExamplesCurrency } from '../../src/main/installExamples';
 import { loadLoopCapabilities } from '../../src/main/loopCapabilities';
 import { findRepoRoot } from '../../src/main/repoKey';
 import { createSetupCheck, type SetupCheckDeps } from '../../src/main/setupCheck';
@@ -31,7 +32,10 @@ afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+const CURRENT: ExamplesCurrency = { ok: true, current: true };
+
 const realDeps: SetupCheckDeps = {
+  examplesCurrent: () => CURRENT,
   isGitRepository: (dir) => findRepoRoot(dir) === dir,
   agentTerminalIgnored,
   loadCapabilities: loadLoopCapabilities,
@@ -180,5 +184,72 @@ describe('a directory that is not a git repository (AC9, repository half)', () =
     scratch.push(dir);
     writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs: 42\n');
     expect(await statusOf(dir)).toEqual({ ok: true, repoKey: dir, isRepository: false, entries: [] });
+  });
+});
+
+describe('the examples condition, for any directory (AC7, AC9 examples half)', () => {
+  const STALE: ExamplesCurrency = { ok: true, current: false };
+
+  it('lists examples stale when installing the bundled examples would change something', async () => {
+    const repo = repoIn({ ignored: true, capabilities: 'valid' });
+    expect(await statusOf(repo, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
+      ok: true,
+      repoKey: repo,
+      isRepository: true,
+      entries: [{ condition: 'examples', failure: 'stale' }],
+    });
+  });
+
+  it('lists examples unchecked when the installer could not inspect the installation', async () => {
+    const repo = repoIn({ ignored: true, capabilities: 'valid' });
+    const status = await statusOf(repo, { ...realDeps, examplesCurrent: () => ({ ok: false, error: 'bundle missing' }) });
+    expect(status).toEqual({
+      ok: true,
+      repoKey: repo,
+      isRepository: true,
+      entries: [{ condition: 'examples', failure: 'unchecked' }],
+    });
+  });
+
+  it('lists examples unchecked when the inspection itself throws', async () => {
+    const repo = repoIn({ ignored: true, capabilities: 'valid' });
+    const status = await statusOf(repo, {
+      ...realDeps,
+      examplesCurrent: () => {
+        throw new Error('scripted inspection failure');
+      },
+    });
+    expect(status).toEqual({
+      ok: true,
+      repoKey: repo,
+      isRepository: true,
+      entries: [{ condition: 'examples', failure: 'unchecked' }],
+    });
+  });
+
+  it('lists the examples entry beside the repository entries a failing repository lists', async () => {
+    const repo = repoIn({ ignored: false, capabilities: 'absent' });
+    expect(await statusOf(repo, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
+      ok: true,
+      repoKey: repo,
+      isRepository: true,
+      entries: [
+        { condition: 'capabilities', failure: 'absent' },
+        { condition: 'examples', failure: 'stale' },
+        { condition: 'ignore', failure: 'not-ignored' },
+      ],
+    });
+  });
+
+  it('lists only the examples entry for a directory that is not a git repository', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'setup-check-plain-')));
+    scratch.push(dir);
+    writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs: 42\n');
+    expect(await statusOf(dir, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
+      ok: true,
+      repoKey: dir,
+      isRepository: false,
+      entries: [{ condition: 'examples', failure: 'stale' }],
+    });
   });
 });

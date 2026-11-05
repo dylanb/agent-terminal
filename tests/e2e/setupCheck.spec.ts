@@ -87,6 +87,22 @@ async function recordDialogs(page: Page): Promise<() => Promise<string[]>> {
   return () => page.evaluate(() => [...(window as unknown as { setupDialogsSeen: string[] }).setupDialogsSeen]);
 }
 
+const installView = (page: Page): Locator => page.locator('#install-examples-view');
+
+/** Installs the bundled examples on this case's machine through the Settings view's Install examples action, in
+ *  a launch with the setup check off so no popup stands over the view, and closes that launch. Every launch after
+ *  it finds the examples condition passing. */
+async function installExamplesThroughApp(): Promise<void> {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'setup-check-install-')));
+  scratch.push(dir);
+  const page = await launchIn(dir, { ...machine.env, APP_SETUP_CHECK: 'off' });
+  await page.locator('[data-viewbtn="4"]').click();
+  await installView(page).getByRole('button', { name: /^Install examples/ }).click();
+  await expect(installView(page).getByRole('status')).toContainText('Installed examples');
+  await app?.close();
+  app = undefined;
+}
+
 test('e2e launches leave the setup check off unless the test turns it on', { tag: '@ownapp' }, async () => {
   const repo = repoIn({ ignored: false, capabilities: 'absent' });
   const { APP_SETUP_CHECK: _on, ...defaultEnv } = machine.env;
@@ -106,11 +122,11 @@ const FAILING_KINDS: Array<{ title: string; conditions: RepoConditionsFixture }>
 ];
 
 for (const { title, conditions } of FAILING_KINDS) {
-  test(`starting in a repository that ${title} raises the setup popup listing it`, { tag: '@ownapp' }, async () => {
+  test(`starting in a repository that ${title} raises the setup popup listing it, beside the examples entry`, { tag: '@ownapp' }, async () => {
     const repo = repoIn(conditions);
     const page = await launchIn(repo);
 
-    await expect(entriesOf(popupFor(page, repo))).toHaveCount(1);
+    await expect(entriesOf(popupFor(page, repo))).toHaveCount(2);
   });
 }
 
@@ -120,17 +136,17 @@ test("starting in a repository where git cannot answer the ignore question lists
   cleanups.push(() => failingGit.dispose());
   const page = await launchIn(repo, { ...machine.env, PATH: `${failingGit.binDir}${delimiter}${process.env.PATH ?? ''}` });
 
-  await expect(entriesOf(popupFor(page, repo))).toHaveCount(1);
+  await expect(entriesOf(popupFor(page, repo))).toHaveCount(2);
 });
 
-test('a repository failing both repository conditions lists each with its own message', { tag: '@ownapp' }, async () => {
+test('a repository failing both repository conditions lists each with its own message, beside the examples entry', { tag: '@ownapp' }, async () => {
   const repo = repoIn({ ignored: false, capabilities: 'absent' });
   const page = await launchIn(repo);
   const entries = entriesOf(popupFor(page, repo));
 
   await expect
     .poll(async () => new Set((await entries.allTextContents()).map((t) => t.trim()).filter(Boolean)).size)
-    .toBe(2);
+    .toBe(3);
 });
 
 test('starting outside a git repository raises no repository popup; the first cd into a failing one does (AC9)', { tag: '@ownapp' }, async () => {
@@ -138,6 +154,7 @@ test('starting outside a git repository raises no repository popup; the first cd
   writeRepoConditions(start, { ignored: false, capabilities: 'malformed' });
   worktrees.writeFlowHome(start, { name: 'start-dir-flow', stepIds: ['start-dir-step'] });
   const probe = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
   const page = await launchIn(start);
   await expect(page.locator('#flow-strip')).toContainText('start-dir-step');
   const seen = await recordDialogs(page);
@@ -164,6 +181,7 @@ test('re-entering a repository already checked this session raises no second pop
   const passing = repoIn({ ignored: true, capabilities: 'valid' });
   const failing = repoIn({ ignored: false, capabilities: 'absent' });
   const probe = repoIn({ ignored: true, capabilities: 'absent' });
+  await installExamplesThroughApp();
   const page = await launchIn(passing);
   const seen = await recordDialogs(page);
   await cdInto(page, failing);
@@ -185,6 +203,7 @@ test('re-entering a repository already checked this session raises no second pop
 test('the popup is announced as a modal dialog, keeps Tab inside, and Escape returns focus to the terminal (AC11)', { tag: '@ownapp' }, async () => {
   const passing = repoIn({ ignored: true, capabilities: 'valid' });
   const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
   const page = await launchIn(passing);
   await cdInto(page, failing);
   const popup = popupFor(page, failing);
@@ -207,14 +226,14 @@ test('Close dismisses nothing: a restart with the same failures lists them again
   const failing = repoIn({ ignored: false, capabilities: 'absent' });
   let page = await launchIn(failing);
   const popup = popupFor(page, failing);
-  await expect(entriesOf(popup)).toHaveCount(2);
+  await expect.soft(entriesOf(popup)).toHaveCount(3);
 
   await popup.getByRole('button', { name: 'Close' }).click();
   await expect.soft(popup).toBeHidden();
   await app?.close();
   page = await launchIn(failing);
 
-  await expect(entriesOf(popupFor(page, failing))).toHaveCount(2);
+  await expect(entriesOf(popupFor(page, failing))).toHaveCount(3);
 });
 
 /** Raises the app's own bootstrap-failure alertdialog, through the push main sends when a bootstrap fails. */
@@ -244,6 +263,7 @@ async function recordModalCounts(page: Page): Promise<() => Promise<number[]>> {
 test('a popup due while another app dialog is open waits, and opens once that dialog closes', { tag: '@ownapp' }, async () => {
   const passing = repoIn({ ignored: true, capabilities: 'valid' });
   const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
   const page = await launchIn(passing);
   const counts = await recordModalCounts(page);
   await raiseAppErrorDialog(passing);
@@ -262,6 +282,7 @@ test('a popup due while another app dialog is open waits, and opens once that di
 test("closing the popup after the element that opened it left the page lands focus in the app, not on the page body", { tag: '@ownapp' }, async () => {
   const passing = repoIn({ ignored: true, capabilities: 'valid' });
   const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
   const page = await launchIn(passing);
   await cdInto(page, failing);
   const popup = popupFor(page, failing);
@@ -272,4 +293,67 @@ test("closing the popup after the element that opened it left the page lands foc
   await expect(popup).toBeHidden();
 
   await expect.poll(() => page.evaluate(() => document.activeElement !== null && document.activeElement !== document.body)).toBe(true);
+});
+
+const INSTALL = 'Install/update examples';
+
+test('on a fresh machine, a repository passing its own conditions lists the examples entry, with Install/update examples (AC7, AC12)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: true, capabilities: 'valid' });
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+
+  await expect.soft(entriesOf(popup)).toHaveCount(1);
+  await expect.soft(popup.getByRole('button', { name: INSTALL })).toBeVisible();
+});
+
+test('Install/update examples closes the popup and runs the install; after accepting every change a relaunch lists no examples entry (AC17)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: true, capabilities: 'absent' });
+  let page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect.soft(entriesOf(popup)).toHaveCount(2);
+
+  await popup.getByRole('button', { name: INSTALL }).click();
+  await expect.soft(popup).toBeHidden();
+  await expect.soft(installView(page)).toBeVisible();
+  await expect.soft(installView(page).getByRole('status')).toContainText('Installed examples');
+  await app?.close();
+  page = await launchIn(repo);
+  await expect(popupFor(page, repo)).toBeVisible();
+
+  const reply = await page.evaluate((repoKey) => window.setup.status(repoKey), repo);
+  expect(reply).toMatchObject({ ok: true, entries: [{ condition: 'capabilities', failure: 'absent' }] });
+});
+
+test('with the examples installed and every condition passing, no popup appears (AC8)', { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  worktrees.writeFlowHome(passing, { name: 'passing-repo-flow', stepIds: ['passing-repo-step'] });
+  const probe = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  const page = await launchIn(passing);
+  await expect(page.locator('#flow-strip')).toContainText('passing-repo-step');
+  const seen = await recordDialogs(page);
+
+  await cdInto(page, probe);
+
+  await expect.poll(async () => (await seen())[0] ?? '').toContain(probe);
+});
+
+test('starting outside a git repository on a fresh machine lists only the examples entry (AC9)', { tag: '@ownapp' }, async () => {
+  const start = realpathSync(worktrees.makeFirstRunWorktree('setup-check-plain-examples'));
+  writeRepoConditions(start, { ignored: false, capabilities: 'malformed' });
+  const page = await launchIn(start);
+
+  await expect.soft(entriesOf(page.getByRole('dialog'))).toHaveCount(1);
+  const reply = await page.evaluate((dir) => window.setup.status(dir), start);
+  expect.soft(reply).toMatchObject({ ok: true, isRepository: false, entries: [{ condition: 'examples', failure: 'stale' }] });
+});
+
+test('with the examples installed, a popup listing only repository entries offers no Install/update examples (AC12)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect(entriesOf(popup)).toHaveCount(2);
+
+  await expect(popup.getByRole('button', { name: INSTALL })).toHaveCount(0);
 });
