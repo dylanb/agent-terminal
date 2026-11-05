@@ -214,8 +214,8 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
   );
 }
 
-export function isValidSetupStatus(_m: unknown): _m is SetupStatusMsg {
-  return false;
+export function isValidSetupStatus(m: unknown): m is SetupStatusMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */

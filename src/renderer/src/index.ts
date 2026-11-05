@@ -8,6 +8,7 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
+import { createSetupCheckDialog } from './setupCheckDialog';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -348,6 +349,12 @@ if (flowStripHost) {
   });
   const seededKey = repo.repoKey();
   if (seededKey !== null) strip.onRepoChanged(seededKey);
+}
+
+const setupCheckHost = document.getElementById('setup-check-host');
+if (setupCheckHost) {
+  const setupCheck = createSetupCheckDialog(setupCheckHost, { status: (repoKey) => window.setup.status(repoKey) });
+  repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
 
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live

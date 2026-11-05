@@ -31,6 +31,7 @@ import { VIEWER_CHANNELS } from './ipc/viewer';
 import { FLOW_CHANNELS } from './ipc/flow';
 import { INSTALL_CHANNELS } from './ipc/install';
 import { CONTROLLER_CHANNELS } from './ipc/controller';
+import { SETUP_CHANNELS } from './ipc/setup';
 
 export const CHANNELS = {
   ...TERMINAL_CHANNELS,
@@ -41,6 +42,7 @@ export const CHANNELS = {
   ...VIEWER_CHANNELS,
   ...FLOW_CHANNELS,
   ...INSTALL_CHANNELS,
+  ...SETUP_CHANNELS,
 };
 export const CH = channelNames(CHANNELS);
 export const CONTROLLER_CH = channelNames(CONTROLLER_CHANNELS);

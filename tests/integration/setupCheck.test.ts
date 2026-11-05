@@ -144,6 +144,20 @@ describe('an ignore check that could not run never passes (AC6)', () => {
     });
   });
 
+  it('lists ignore unchecked when the ignore check itself fails', async () => {
+    const repo = repoIn({ ignored: true, capabilities: 'valid' });
+    const status = await statusOf(repo, {
+      ...realDeps,
+      agentTerminalIgnored: () => Promise.reject(new Error('spawn failed')),
+    });
+    expect(status).toEqual({
+      ok: true,
+      repoKey: repo,
+      isRepository: true,
+      entries: [{ condition: 'ignore', failure: 'unchecked' }],
+    });
+  });
+
   it('lists ignore unchecked for a repository whose git exits with an error', async () => {
     const repo = realpathSync(mkdtempSync(join(tmpdir(), 'setup-check-broken-')));
     scratch.push(repo);
