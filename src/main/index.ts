@@ -103,7 +103,7 @@ import { sliceCountToSource } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
-import { currentGitBranch } from './gitBranch';
+import { currentGitBranch, readBranchLabel } from './gitBranch';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -120,7 +120,7 @@ import {
   exampleInstallDirs,
   type InstallDestination,
 } from './installExamples';
-import { createControllerStatus } from './controllerStatus';
+import { CONTROLLER_BRANCH_REFRESH_MS, createControllerStatus } from './controllerStatus';
 import { createLoopMessages } from './loopMessages';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
@@ -943,7 +943,8 @@ async function createWindow(): Promise<void> {
       const load = resolveActiveDefinition(repoKey);
       return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
     },
-    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
+    refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
+    branch: repoKey => readBranchLabel(repoKey),
   });
   controllerStatus.subscribe(work => {
     currentWork = work;
@@ -952,9 +953,11 @@ async function createWindow(): Promise<void> {
   refreshControllerStatus = () => controllerStatus.refresh();
   const stopStatusCwd = cwdTracker.onChange(() => controllerStatus.refresh());
   const statusTimer = setInterval(() => controllerStatus.refresh(), 250);
+  const branchTimer = setInterval(() => controllerStatus.refreshBranch(), CONTROLLER_BRANCH_REFRESH_MS);
   controllerStatus.refresh();
   win.once('closed', () => {
     clearInterval(statusTimer);
+    clearInterval(branchTimer);
     stopStatusCwd();
     controllerStatus.dispose();
     statusListeners.clear();

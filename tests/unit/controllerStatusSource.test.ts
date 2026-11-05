@@ -310,12 +310,12 @@ describe('the branch a terminal reports', () => {
     await expect.poll(() => shown()?.branch).toBeNull();
   });
 
-  it('is read again on the next refresh after a read completes', async () => {
+  it('is read again when the branch is refreshed after a read completes', async () => {
     const { shown, source, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
     branchRequests[0].resolve('first-branch');
     await expect.poll(() => shown()?.branch).toBe('first-branch');
-    source.refresh();
+    source.refreshBranch();
     await expect.poll(() => branchRequests.length).toBe(2);
     branchRequests[1].resolve('second-branch');
     await expect.poll(() => shown()?.branch).toBe('second-branch');
@@ -324,7 +324,18 @@ describe('the branch a terminal reports', () => {
   it('does not start another read for the same repository while one is pending', async () => {
     const { source, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
-    source.refresh();
+    source.refreshBranch();
+    source.refreshBranch();
+    source.refreshBranch();
+    await flushPromises();
+    expect(branchRequests.map(request => request.repoKey)).toEqual(['/repo']);
+  });
+
+  it('is not read again by a status refresh for the same repository', async () => {
+    const { source, branchRequests } = identitySource();
+    await expect.poll(() => branchRequests.length).toBe(1);
+    branchRequests[0].resolve('first-branch');
+    await flushPromises();
     source.refresh();
     source.refresh();
     await flushPromises();

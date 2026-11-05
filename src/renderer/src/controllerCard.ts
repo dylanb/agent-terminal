@@ -82,6 +82,9 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   toggle.type = 'button';
   toggle.setAttribute('aria-controls', `${cardId}-body`);
   toggle.append(element('span', 'controller-card-name', finalSegment(model.repositoryRoot ?? model.launchDirectory)), ' ', directory);
+  for (const text of model.kind === 'single' ? [work?.title, work?.branch] : []) {
+    if (text) toggle.append(' · ', element('span', 'controller-card-identity', text));
+  }
   heading.append(toggle);
   header.append(accent, heading);
 

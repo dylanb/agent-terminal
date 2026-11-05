@@ -1,5 +1,6 @@
 import type { AgentState, ControllerLoopMessage, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
 import { isControllerIssueNumber } from '../shared/controllerStatus';
+import { statusBarTitleText, titleOf } from '../shared/statusBar';
 import { errMsg } from './errno';
 import { APP_LOOP_STATUS_ERROR } from './loopViewV2';
 import { publishedLoopReason } from './loopMessages';
@@ -11,7 +12,8 @@ export interface ControllerStatusSource {
     activity: AgentState;
     loopMessage: ControllerLoopMessage | null;
     view: Pick<FlowStateView, 'stepName' | 'status' | 'runStarted' | 'error'> & {
-      refs?: { ticket?: number };
+      refs?: { ticket?: number; pr?: number };
+      userTitle?: string;
       loop?: {
         status: string;
         humanNeeded?: boolean;
@@ -24,11 +26,15 @@ export interface ControllerStatusSource {
       };
     };
   };
-  issueTitle(repoKey: string, number: number): Promise<string | null>;
+  refTitle(repoKey: string, kind: 'issue' | 'pr', number: number): Promise<string | null>;
+  branch(repoKey: string): Promise<string | null>;
 }
+
+export const CONTROLLER_BRANCH_REFRESH_MS = 1_000;
 
 export function createControllerStatus(source: ControllerStatusSource): {
   refresh(): void;
+  refreshBranch(): void;
   /** Each delivery is a detached value owned by the subscriber. */
   subscribe(listener: (work: ControllerWorkStatus) => void): () => void;
   dispose(): void;
@@ -38,7 +44,10 @@ export function createControllerStatus(source: ControllerStatusSource): {
     flow: { availability: 'loading' }, ticket: { availability: 'loading' }, activity: 'unavailable', attention: null, error: null,
   };
   let alive = true;
-  let occurrence: { repoKey: string; number: number | undefined; title: Extract<ControllerWorkStatus['ticket'], { availability: 'known' }>['title'] } | undefined;
+  type RefOccurrence = { repoKey: string; number: number | undefined; title: Extract<ControllerWorkStatus['ticket'], { availability: 'known' }>['title'] };
+  let occurrence: RefOccurrence | undefined;
+  let prOccurrence: RefOccurrence | undefined;
+  let branchRead: { repoKey: string; pending: boolean; label: string | null } | undefined;
   let previous = '';
   let previousRefresh: { position: string; loopStatus: string | undefined; messageId: string | undefined } | undefined;
   let turnErrorId: string | undefined;
@@ -49,18 +58,29 @@ export function createControllerStatus(source: ControllerStatusSource): {
     previous = serialized;
     for (const listener of listeners) listener(structuredClone(work));
   };
-  const refresh = () => {
+  const refresh = (readBranch = false) => {
     if (!alive) return;
     try {
       const { repoKey, flowName, view, activity, loopMessage } = source.current();
       const rawNumber = view.refs?.ticket;
       const invalidTicket = rawNumber !== undefined && !isControllerIssueNumber(rawNumber);
       const number = isControllerIssueNumber(rawNumber) ? rawNumber : undefined;
+      const rawPr = view.refs?.pr;
+      const prNumber = isControllerIssueNumber(rawPr) ? rawPr : undefined;
       let fetchTitle = false;
+      let fetchPrTitle = false;
       if (!occurrence || occurrence.repoKey !== repoKey || occurrence.number !== number) {
         occurrence = { repoKey, number, title: { availability: 'loading' } };
         fetchTitle = number !== undefined;
       }
+      if (!prOccurrence || prOccurrence.repoKey !== repoKey || prOccurrence.number !== prNumber) {
+        prOccurrence = { repoKey, number: prNumber, title: { availability: 'loading' } };
+        fetchPrTitle = prNumber !== undefined;
+      }
+      const sameRepository = branchRead?.repoKey === repoKey;
+      const shownBranch = sameRepository && branchRead ? branchRead : { repoKey, pending: false, label: null };
+      branchRead = shownBranch;
+      const startBranchRead = (!sameRepository || readBranch) && !shownBranch.pending;
       const loop = view.loop;
       const reasons = [loop?.errorReason, loop?.verdictReason, ...(loop?.autoGate?.haltReasons.map(halt => halt.detail ?? halt.reason) ?? []), loop?.autoGate?.failedEffect?.detail].filter((reason): reason is string => Boolean(reason));
       const error = view.error ?? loop?.errorReason;
@@ -72,6 +92,8 @@ export function createControllerStatus(source: ControllerStatusSource): {
       if (loopMessage?.id !== previousRefresh?.messageId) turnErrorId = loopMessage?.kind === 'error' && loopInError && loop?.errorReason !== undefined && loopMessage.reason === publishedLoopReason(loop.errorReason) ? loopMessage.id : undefined;
       const shownMessage = loopMessage !== null && loopMessage.id === withdrawnErrorId ? null : loopMessage;
       previousRefresh = { position, loopStatus: loop?.status, messageId: loopMessage?.id };
+      const titleKind = titleOf(view);
+      const titleOccurrence = titleKind.kind === 'pr' ? prOccurrence : titleKind.kind === 'ticket' ? occurrence : undefined;
       const known = flowName !== null && view.status !== 'error';
       work = {
         flow: known ? {
@@ -83,25 +105,40 @@ export function createControllerStatus(source: ControllerStatusSource): {
         attention: loop?.humanNeeded ? { status: loop.status, reasons: [...new Set(reasons)] } : null,
         error: error ? { reason: error } : null,
         loopMessage: shownMessage,
+        title: statusBarTitleText(titleKind, titleOccurrence?.title.availability === 'known' ? titleOccurrence.title.text : null),
+        branch: shownBranch.label,
       };
       publish();
-      if (fetchTitle && number !== undefined) {
-        const owner = occurrence;
-        void source.issueTitle(repoKey, number).catch(() => null).then(result => {
-          if (!alive || occurrence !== owner) return;
+      const fetchRef = (owner: RefOccurrence, kind: 'issue' | 'pr', refNumber: number, current: () => RefOccurrence | undefined) => {
+        void source.refTitle(repoKey, kind, refNumber).catch(() => null).then(result => {
+          if (!alive || current() !== owner) return;
           owner.title = result !== null ? { availability: 'known', text: result } : { availability: 'unavailable' };
+          refresh();
+        });
+      };
+      if (fetchTitle && number !== undefined) fetchRef(occurrence, 'issue', number, () => occurrence);
+      if (fetchPrTitle && prNumber !== undefined) fetchRef(prOccurrence, 'pr', prNumber, () => prOccurrence);
+      if (startBranchRead) {
+        const read = shownBranch;
+        read.pending = true;
+        void Promise.resolve().then(() => source.branch(repoKey)).catch(() => null).then(label => {
+          read.pending = false;
+          if (!alive || branchRead !== read) return;
+          read.label = label;
           refresh();
         });
       }
     } catch (error) {
       occurrence = undefined;
+      prOccurrence = undefined;
       work = { flow: { availability: 'unavailable' }, ticket: { availability: 'unavailable' }, activity: 'unavailable', attention: null, error: { reason: errMsg(error) } };
       publish();
     }
   };
   return {
-    refresh,
+    refresh: () => refresh(),
+    refreshBranch: () => refresh(true),
     subscribe(listener) { listeners.add(listener); listener(structuredClone(work)); return () => { listeners.delete(listener); }; },
-    dispose() { alive = false; listeners.clear(); occurrence = undefined; },
+    dispose() { alive = false; listeners.clear(); occurrence = undefined; prOccurrence = undefined; branchRead = undefined; },
   };
 }

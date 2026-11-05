@@ -190,7 +190,7 @@ it('advertises notification support to a notification-capable terminal without d
   await once(peer, 'open');
   const ack = once(peer, 'message');
   peer.send(JSON.stringify({ version: 2, minor: 2, type: 'register', launchDirectory: '/notification-peer', repositoryRoot: null }));
-  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: 2, type: 'registered' });
+  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' });
 });
 
 const identity = { title: 'Show live controller status', branch: 'feature/card-identity' } as const;

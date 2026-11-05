@@ -63,6 +63,10 @@ export type ControllerWorkStatus = {
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */
   loopMessage?: ControllerLoopMessage | null;
+  /** Absent when either peer's minor predates identity; null when the terminal has none. */
+  title?: string | null;
+  /** Absent when either peer's minor predates identity; null when the terminal has none. */
+  branch?: string | null;
 };
 
 export interface ControllerNotificationEntry { message: string; receivedAt: number; count: number }

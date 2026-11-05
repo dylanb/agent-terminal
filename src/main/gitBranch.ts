@@ -36,3 +36,15 @@ export async function readGitBranch(repoDir: string, signal: AbortSignal): Promi
     return { ok: false, detail: errMsg(e) };
   }
 }
+
+/** The branch name `dir` is on, or the short commit on a detached HEAD; null when it cannot be read. */
+export async function readBranchLabel(dir: string): Promise<string | null> {
+  const git = async (args: string[]): Promise<string | null> => {
+    try {
+      return (await run('git', args, dir, `git ${args[0]} failed`, { env: LOCK_FREE_GIT_READ_ENV })).trim() || null;
+    } catch {
+      return null;
+    }
+  };
+  return (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])) ?? (await git(['rev-parse', '--short', 'HEAD']));
+}

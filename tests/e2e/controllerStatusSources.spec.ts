@@ -60,7 +60,7 @@ fi
       const titleStatus = await observeStatus(controller.page, repo, { title: title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i });
       writeFileSync(h.fixture.env.TITLE_ALLOW, 'release title');
       expect.soft({ ['title after releasing the external result']: (await titleStatus()).shown.title }).toEqual({ ['title after releasing the external result']: true });
-      await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY|Different pull request title/);
+      await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY/);
     } finally {
       if (h.fixture.env.TITLE_ALLOW) writeFileSync(h.fixture.env.TITLE_ALLOW, 'release during cleanup');
       await h.dispose();
