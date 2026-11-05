@@ -36,9 +36,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
   const logFile = join(binDir, 'calls.log');
   // Resolve REAL git once from the test process (whose PATH lacks binDir, so this is never the shim) rather
   // than hard-coding a path — keeps the shim-escape without coupling to the container base image's git location.
-  const realGit = opts.realCommitOps
-    ? execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-    : '';
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const fakeGit =
     '#!/usr/bin/env bash\n' +
     HOLD_WAIT_FN +
@@ -47,6 +45,10 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // With FAKE_GIT_HOLD_REV unset, the rev is the hold file's first line, for a rev known only mid-run.
     'hold_rev="$FAKE_GIT_HOLD_REV"; if [ -z "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -s "$FAKE_GIT_HOLD" ]; then hold_rev=$(head -n 1 "$FAKE_GIT_HOLD"); fi\n' +
     'if [ -n "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -e "$FAKE_GIT_HOLD" ]; then for a in "$@"; do case "$a" in *"$hold_rev"*) hold_wait "$FAKE_GIT_HOLD" "git $*" || exit 1; break;; esac; done; fi\n' +
+    // The setup check's ignore question gets real git's verdict over its whole argv (`-C`, the hardening `-c`
+    // pairs), never this shim's catch-all exit 0 ("ignored"). Found past every global option, value-taking or not.
+    'argv=("$@"); i=0; while [ "$i" -lt "${#argv[@]}" ]; do case "${argv[$i]}" in -C|-c|--git-dir|--work-tree|--namespace|--config-env) i=$((i + 2));; -*) i=$((i + 1));; *) break;; esac; done\n' +
+    `if [ "\${argv[$i]:-}" = "check-ignore" ]; then exec ${shellQuote(realGit)} "$@"; fi\n` +
     // Skip ALL leading git GLOBAL options so `$1` is the subcommand real git would dispatch: the bootstrap
     // port's throwaway `--git-dir <tmp>`, the neutralizing `-c <k=v>` pairs, and `--no-replace-objects` (the §28
     // reads' tamper-evidence flag — workingTreeTestPaths/changedTestPaths/baselineCapabilities send it ahead of

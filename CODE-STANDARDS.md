@@ -127,6 +127,16 @@ side parses** (CWE-78). Instances: paste-breakout sanitization at the injection 
 §23.5 launch target crossing the OS boundary as a distinct env value rather than spliced into a command
 line. When the boundary is a POSIX shell, the enforcement is the shell-quoting rule below.
 
+## Git in a checked-out repository — `src/main/gitHardening.ts`, never a second copy
+
+A repository's own config can make git run code during an ordinary local command: a planted `core.fsmonitor`
+runs when git refreshes the index, and `core.hooksPath` points git at the repository's hooks. A command-line `-c`
+outranks any repository value. So a new `git` call that runs in a checked-out repository leads its argv with
+`coreExecHardeningArgs(freshDisabledHooksDir())`, the one source of those overrides, and never writes its own
+copy. This is a floor, not complete hardening. Each caller still neutralizes its own command's execution
+surfaces (textconv and external diff, filter and merge drivers, and so on), and a call that reaches the network
+adds protocol and credential hardening on top. Existing callers stay as they are; this rule governs new work.
+
 ## Shell quoting — `src/shared/shellQuote.ts`, never hand-rolled
 
 Any value placed into shell text is quoted through the one shared primitive — generated scripts,
