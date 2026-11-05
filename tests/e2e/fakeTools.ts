@@ -405,6 +405,11 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   ];
 }
 
+/** The line a seeded fake agent prints once it is running. The shell marks the command running before the agent
+ *  starts, so a test that sees this line can press Start without the engine finding a bare shell at the prompt. */
+export const FAKE_AGENT_READY = 'fake-agent: ready';
+const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
+
 // A scriptable §27 fake-agent (§27.15 test seam), one per run and scripted per step: each step's arms match only
 // that step's `work-`, `review-` and `consolidate-` turn keys. On the app WORK prompt it produces the §27
 // completion artifact and/or done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained
@@ -425,6 +430,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     : '';
   const script =
     '#!/usr/bin/env bash\n' +
+    READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
     'while IFS= read -r line; do\n' +
@@ -513,6 +519,7 @@ export function seedV3GoalAgent(binDir: string, name: string, goal: Record<strin
   const keepPrompt = 'k=$(ls .agent-terminal | grep -c "^goal-prompt\\.$step\\."); cp "$p" ".agent-terminal/goal-prompt.$step.$((k + 1)).md"';
   const script =
     '#!/usr/bin/env bash\n' +
+    READY_LINE +
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +

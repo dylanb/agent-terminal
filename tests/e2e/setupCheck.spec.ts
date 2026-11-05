@@ -13,7 +13,7 @@ import { writeRepoConditions, type RepoConditionsFixture } from '../helpers/setu
 import { snapshotTree } from '../helpers/treeSnapshot';
 import { createWorktreeFixture, type WorktreeFixture } from '../helpers/worktreeFixture';
 import { electron } from './registeredElectron';
-import { seedFakeAgentV2 } from './fakeTools';
+import { FAKE_AGENT_READY, seedFakeAgentV2 } from './fakeTools';
 import { createSetupCheckMachine, failingCheckIgnoreGit, type SetupCheckMachine } from './setupCheckEnv';
 
 // The startup setup check (#290): a repository that fails a condition raises a blocking popup listing each
@@ -547,6 +547,7 @@ test('the installed repo-setup flow, once selected, starts with no flow-load err
   await page.locator('.xterm-screen').click();
   await page.keyboard.type('fake-agent', { delay: 20 });
   await page.keyboard.press('Enter');
+  await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY);
 
   await expect.soft(flowError(page)).toHaveCount(0);
   await expect(flowControl(page)).toHaveText('Start');

@@ -114,5 +114,11 @@ export function parseLoopCapabilities(text: string): LoopCapabilitiesParse {
 
 /** The canonical `loop-capabilities.yaml` a setup agent is shown beside the check that grades its file. */
 export function exampleLoopCapabilities(): string {
-  return 'test_globs: []\n';
+  return [
+    'test_globs:',
+    "  - 'tests/**/*.test.ts'",
+    'test_command: npm test',
+    'build_command: npm run build',
+    '',
+  ].join('\n');
 }
