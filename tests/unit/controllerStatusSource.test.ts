@@ -304,9 +304,13 @@ describe('the branch a terminal reports', () => {
   });
 
   it('is null when the read finds no branch', async () => {
-    const { shown, branchRequests } = identitySource();
+    const { shown, source, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
-    branchRequests[0].resolve(null);
+    branchRequests[0].resolve('first-branch');
+    await expect.poll(() => shown()?.branch).toBe('first-branch');
+    source.refreshBranch();
+    await expect.poll(() => branchRequests.length).toBe(2);
+    branchRequests[1].resolve(null);
     await expect.poll(() => shown()?.branch).toBeNull();
   });
 
@@ -369,7 +373,11 @@ describe('the branch a terminal reports', () => {
   it('is null when the read fails, and the rest of the status still publishes', async () => {
     const { now, shown, source, branchRequests } = identitySource({ userTitle: 'First name' });
     await expect.poll(() => branchRequests.length).toBe(1);
-    branchRequests[0].reject(new Error('git exploded'));
+    branchRequests[0].resolve('first-branch');
+    await expect.poll(() => shown()?.branch).toBe('first-branch');
+    source.refreshBranch();
+    await expect.poll(() => branchRequests.length).toBe(2);
+    branchRequests[1].reject(new Error('git exploded'));
     await expect.poll(() => shown()?.branch).toBeNull();
     now.userTitle = 'Second name';
     source.refresh();

@@ -105,6 +105,12 @@ describe('readBranchLabel', () => {
     expect(await labelOf(repo)).toEqual({ label: 'feature/card-identity' });
   });
 
+  it('replaces bidi and other display control characters in a branch name', async () => {
+    const repo = committedRepo('label-bidi');
+    fx.git(repo, ['checkout', '-q', '-b', 'fix-\u202Etxt.exe']);
+    expect(await labelOf(repo)).toEqual({ label: 'fix- txt.exe' });
+  });
+
   it('follows a switch to another branch', async () => {
     const repo = committedRepo('label-switch');
     expect(await labelOf(repo)).toEqual({ label: 'main' });

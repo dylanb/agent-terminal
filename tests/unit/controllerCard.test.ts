@@ -191,8 +191,12 @@ describe('controller card bring-forward icon', () => {
   it('draws a decorative glyph that adds nothing to its name', () => {
     const { element } = mount(terminal, true);
     const icon = element ? headerActivationIn(element) : undefined;
-    const glyphs = [...(icon?.querySelectorAll('svg') ?? [])];
-    expect({ glyphs: glyphs.length > 0, hidden: glyphs.every(glyph => glyph.getAttribute('aria-hidden') === 'true') }).toEqual({ glyphs: true, hidden: true });
+    const shown = [...(icon?.children ?? [])];
+    expect({
+      icon: Boolean(icon),
+      text: icon?.textContent?.trim() ?? '',
+      hidden: shown.every(child => child.getAttribute('aria-hidden') === 'true'),
+    }).toEqual({ icon: true, text: '', hidden: true });
   });
 
   it.each([true, false])('reports its use once and leaves the card as expanded or collapsed as it was (expanded=%s)', expanded => {
