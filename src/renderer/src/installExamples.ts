@@ -350,7 +350,10 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   }
 
   return {
-    open: () => {},
+    open: () => {
+      btn.focus();
+      installGroup.run(btn, () => run());
+    },
     dispose: () => {
       modal.dispose();
       host.replaceChildren();

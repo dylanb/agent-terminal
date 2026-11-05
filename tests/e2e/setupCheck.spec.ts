@@ -357,3 +357,14 @@ test('with the examples installed, a popup listing only repository entries offer
 
   await expect(popup.getByRole('button', { name: INSTALL })).toHaveCount(0);
 });
+
+test('after Install/update examples, focus rests on the Settings view\'s Install examples button (WCAG 2.4.3)', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: true, capabilities: 'absent' });
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+
+  await popup.getByRole('button', { name: INSTALL }).click();
+  await expect(installView(page).getByRole('status')).toContainText('Installed examples');
+
+  await expect(installView(page).getByRole('button', { name: /^Install examples/ })).toBeFocused();
+});

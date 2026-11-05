@@ -542,3 +542,33 @@ describe('the examples entry after startup', () => {
     expect(screen.entries()).toHaveLength(1);
   });
 });
+
+describe('a popup raised outside a git repository', () => {
+  it('names no directory in its title or description', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, plainStatus(REPO.alpha, [ENTRY.examplesStale]));
+    const { dialog, screen } = mountDialog(fake);
+
+    void dialog.check(REPO.alpha);
+    await vi.waitFor(() => expect(screen.isOpen()).toBe(true));
+
+    expect(`${screen.title()} ${screen.description()}`).not.toContain(REPO.alpha);
+  });
+});
+
+describe('a startup check that failed is still the startup check', () => {
+  it('a later check of a directory that is not a git repository raises no popup, even with the examples entry listed', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, { reject: 'scripted status failure' });
+    fake.answer(REPO.bravo, plainStatus(REPO.bravo, [ENTRY.examplesStale]));
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+    const { host, dialog } = mountDialog(fake);
+    const seen = namedIn(recordSetupDialogs(host));
+
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    void dialog.check(REPO.charlie);
+
+    await vi.waitFor(() => expect(seen()[0]).toBe(REPO.charlie));
+  });
+});

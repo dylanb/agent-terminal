@@ -122,6 +122,7 @@ import type { BundleLocation } from './bundleLocation';
 import {
   createInstallExamplesCoordinator,
   exampleInstallDirs,
+  inspectExamplesCurrency,
   type InstallDestination,
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
@@ -342,7 +343,7 @@ async function createWindow(): Promise<void> {
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   const isGitRepository = (dir: string): boolean => findRepoRoot(dir) === dir;
   const setupCheck = createSetupCheck({
-    examplesCurrent: () => ({ ok: true, current: true }),
+    examplesCurrent: () => inspectExamplesCurrency(resolveExampleInstallDestinations()),
     isGitRepository,
     agentTerminalIgnored,
     loadCapabilities: loadLoopCapabilities,

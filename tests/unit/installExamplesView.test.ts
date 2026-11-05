@@ -181,6 +181,35 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     });
   });
 
+  describe('open() — where focus lands, as after a press of the button (WCAG 2.4.3)', () => {
+    function focusElsewhere(): void {
+      const other = document.body.appendChild(document.createElement('button'));
+      other.focus();
+    }
+
+    it('leaves focus on the Install examples button once a clean install has run', async () => {
+      const view = createInstallExamples(host, deps());
+      focusElsewhere();
+
+      view.open();
+
+      await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+      expect(document.activeElement).toBe(button());
+    });
+
+    it('returns focus to the Install examples button when the consent step is cancelled', async () => {
+      const view = createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('appLoops')) }));
+      focusElsewhere();
+
+      view.open();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      buttonNamed('Cancel').click();
+
+      await vi.waitFor(() => expect(prompt()).toBeNull());
+      expect(document.activeElement).toBe(button());
+    });
+  });
+
   it('shows the consent step before any apply when a destination conflicts', async () => {
     const apply = vi.fn(async () => okResult());
     await openConsent(['appLoops'], { apply });

@@ -88,7 +88,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
-createInstallExamples(document.getElementById('install-examples-view')!, {
+const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>
     window.examples.apply(previewId, replace, removeRetired),
@@ -355,7 +355,10 @@ const setupCheckHost = document.getElementById('setup-check-host');
 if (setupCheckHost) {
   const setupCheck = createSetupCheckDialog(setupCheckHost, {
     status: (repoKey) => window.setup.status(repoKey),
-    openInstallExamples: () => {},
+    openInstallExamples: () => {
+      shell.setView('4');
+      installExamples.open();
+    },
     onFocusLost: landFocus,
     blockingDialogOpen: () => shell.modalIsOpen(),
     onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),

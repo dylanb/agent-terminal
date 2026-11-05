@@ -28,6 +28,11 @@ const CAPABILITIES_MESSAGES: Record<FailureOf<'capabilities'>, string> = {
   confinement: 'Its loop-capabilities.yaml is a symbolic link or leaves the repository, so the app refuses to read it.',
 };
 
+const EXAMPLES_MESSAGES: Record<FailureOf<'examples'>, string> = {
+  stale: "The app's bundled examples are missing or out of date on this machine, so agent loops may run old flows and loops.",
+  unchecked: "The app could not check whether this machine's installed examples match the app's bundled ones.",
+};
+
 const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
   'not-ignored': 'Git does not ignore the .agent-terminal/ folder, so the files agent loops write there could be committed.',
   unchecked: 'The app could not check whether git ignores the .agent-terminal/ folder.',
@@ -36,7 +41,7 @@ const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
     case 'examples':
-      return '';
+      return EXAMPLES_MESSAGES[entry.failure];
     case 'capabilities':
       return CAPABILITIES_MESSAGES[entry.failure];
     case 'ignore':
@@ -54,6 +59,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
   const shell = createModalShell(host, 'setup-check-title', settle, { onFocusLost: () => deps.onFocusLost() });
   const checked = new Set<string>();
   let queue: Promise<void> = Promise.resolve();
+  let startup = true;
   let disposed = false;
   let stopWaiting: (() => void) | null = null;
 
@@ -71,20 +77,21 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
   }
 
-  function show(repoKey: string, entries: SetupConditionEntry[]): Promise<void> {
+  function show(reply: Extract<SetupStatusReply, { ok: true }>): Promise<void> {
+    const { repoKey, isRepository, entries } = reply;
     const shown = new Promise<void>((resolve) => (closed = resolve));
-    shell.render(({ doc, titleId, close: dismiss, presses }) => {
+    shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
       const card = doc.createElement('div');
       card.className = 'card';
       const title = doc.createElement('h3');
       title.className = 'serif';
       title.id = titleId;
-      title.textContent = 'This repository is not set up for agent loops';
+      title.textContent = isRepository ? 'This repository is not set up for agent loops' : 'Agent loops are not fully set up';
       const body = doc.createElement('div');
       const intro = doc.createElement('p');
       intro.className = 'ph';
       intro.id = `${titleId}-intro`;
-      intro.textContent = `${repoKey} fails these checks:`;
+      intro.textContent = isRepository ? `${repoKey} fails these checks:` : 'This machine fails these checks:';
       const list = doc.createElement('ul');
       list.className = 'cd-resources';
       list.id = `${titleId}-entries`;
@@ -101,32 +108,41 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
       close.className = 'pill';
       close.textContent = 'Close';
       presses.bind(close, dismiss);
-      const install = doc.createElement('button');
-      install.type = 'button';
-      install.className = 'pill';
-      install.textContent = 'Install/update examples';
-      presses.bind(install, () => undefined);
-      foot.append(install, close);
+      if (entries.some((entry) => entry.condition === 'examples')) {
+        const install = doc.createElement('button');
+        install.type = 'button';
+        install.className = 'pill';
+        install.textContent = 'Install/update examples';
+        presses.bind(install, () => {
+          confirm();
+          settle();
+          deps.openInstallExamples();
+        });
+        foot.append(install);
+      }
+      foot.append(close);
       card.append(title, body, foot);
       return { card, initialFocus: null, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
     });
     return shown;
   }
 
-  async function evaluate(repoKey: string): Promise<void> {
+  async function evaluate(repoKey: string, atStartup: boolean): Promise<void> {
     if (disposed || checked.has(repoKey)) return;
     const reply = await deps.status(repoKey).catch(() => null);
     if (reply?.ok !== true) return;
     checked.add(repoKey);
-    if (reply.entries.length === 0) return;
+    if (reply.entries.length === 0 || !(atStartup || reply.isRepository)) return;
     await otherDialogsClosed();
     if (disposed) return;
-    await show(reply.repoKey, reply.entries);
+    await show(reply);
   }
 
   return {
     check(repoKey) {
-      const run = queue.then(() => evaluate(repoKey));
+      const atStartup = startup;
+      startup = false;
+      const run = queue.then(() => evaluate(repoKey, atStartup));
       queue = run.catch(() => {});
       return run;
     },
