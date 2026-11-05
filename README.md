@@ -238,7 +238,7 @@ The flow stops and waits. The terminal's status bar turns red and reads **Loop n
 - **Redo**: run the step's work again from a clean slate: the agent gets only the ticket, the plan and an instruction you type, with none of the earlier findings.
 - **Request changes**: send your feedback (chosen review todos plus free text) into another review-and-fix round.
 - **Polish**: the loop stops typing and you talk to the agent directly in the terminal, then approve when done.
-- **Back to RED**: send the run back to the step that restarts the current slice of test-driven work (`red` in `feature-dev-v3`, `dev` in `simple-dev-v1`).
+- **Back to *step*** (**Back to red** in `feature-dev-v3`, **Back to dev** in `simple-dev-v1`; the button names the step it returns to): send the run back to the step that restarts the current slice of test-driven work (`red` in `feature-dev-v3`, `dev` in `simple-dev-v1`).
 
 Each gate offers only some of these. An `auto` step offers them too when it stops for a person.
 
@@ -278,7 +278,7 @@ Legend: `manual` means a person completes the step. Dotted lines link a step to 
 
 - `groom-approve` (approve or redo): approve writes the groomed ticket into the issue body.
 - `plan-approve` (approve or redo): approve marks the PR ready and offers to create an epic's sub-tickets on GitHub.
-- `impl-approve` (approve, redo or Back to RED): approve commits and publishes the implementation description in the PR body.
+- `impl-approve` (approve, redo or Back to red): approve commits and publishes the implementation description in the PR body.
 - `finalize` (approve or redo): the PR has been prepared and checked; approve it, then merge yourself.
 
 **When:** a multi-slice feature or an epic, where you want every phase reviewed and a human check after grooming, planning and implementation.
@@ -289,7 +289,7 @@ Not yet in a published release; available when built from source.
 
 **What:** A plan and one test-driven development pass for a ticket that fits one `feature-dev-v3` slice, with the same integration review and finalize.
 
-**How:** `preparation` is by hand. `plan` picks up the ticket and writes its intent, `dev` does RED and GREEN commits per increment in one loop, then `integration-slice` reviews it all. Back to RED at `dev`, `integration-slice` or `impl-approve` returns the run to `dev`.
+**How:** `preparation` is by hand. `plan` picks up the ticket and writes its intent, `dev` does RED and GREEN commits per increment in one loop, then `integration-slice` reviews it all. Back to dev at `dev`, `integration-slice` or `impl-approve` returns the run to `dev`.
 
 ```mermaid
 flowchart TD
@@ -299,19 +299,19 @@ flowchart TD
   dev --> integrationSlice["integration-slice<br/>auto"]
   integrationSlice --> implApprove["impl-approve<br/>human"]
   implApprove --> finalize["finalize<br/>human"]
-  integrationSlice -.->|"back to RED"| dev
-  implApprove -.->|"back to RED"| dev
+  integrationSlice -.->|"back to dev"| dev
+  implApprove -.->|"back to dev"| dev
   planR["review-plan-principal<br/>review-plan-intent<br/>review-plan-test-architect<br/>review-plan-tracer-slicer"] -.-> plan
   devR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-accessibility<br/>impl-review-regression-guard<br/>impl-review-red-authenticity"] -.-> dev
   integR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-maintainability<br/>impl-review-conventions<br/>impl-review-accessibility<br/>impl-review-diagrams<br/>review-plan-tracer-slicer"] -.-> integrationSlice
 ```
 
-Legend: `manual` means a person completes the step. Dotted lines to a step link its reviewer personas; the two labelled dotted lines are the Back to RED returns. `plan-approve`, `impl-approve` and `finalize` have no reviewers.
+Legend: `manual` means a person completes the step. Dotted lines to a step link its reviewer personas; the two labelled dotted lines are the Back to dev returns. `plan-approve`, `impl-approve` and `finalize` have no reviewers.
 
 **Your decisions:**
 
 - `plan-approve` (approve or redo): approve marks the PR ready. You see the too-big warning here.
-- `impl-approve` (approve, redo or Back to RED): approve commits and publishes the implementation description in the PR body.
+- `impl-approve` (approve, redo or Back to dev): approve commits and publishes the implementation description in the PR body.
 - `finalize` (approve or redo): approve the prepared PR, then merge yourself.
 
 **When:** a ticket that fits one slice of work and does not need a separate groom and plan.
