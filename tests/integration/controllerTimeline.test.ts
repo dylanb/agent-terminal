@@ -91,6 +91,32 @@ it('an older terminal without notification support gets one condition entry for 
   expect(brief(h.timeline())).toEqual([{ kind: 'status', receivedAt: 3000 }]);
 });
 
+it('an older terminal reconnecting with its request still current adds no second request entry', async () => {
+  const h = await fixture(); const first = await h.connect(CONTROLLER_LOOP_MESSAGE_MINOR);
+  await first.report({ activity: 'quiet' });
+  h.time(3000); await first.report({ activity: 'quiet', attention });
+  h.time(4000); await first.terminal.close();
+  await expect.poll(() => h.card()?.kind).toBe('disconnected');
+  const retained = h.timeline();
+  h.time(5000);
+  const again = await h.connect(CONTROLLER_LOOP_MESSAGE_MINOR);
+  await again.report({ activity: 'quiet', attention });
+  expect(h.timeline()).toEqual(retained);
+});
+
+it('an older terminal reconnecting with a request the operator cleared does not bring it back', async () => {
+  const h = await fixture(); const first = await h.connect(CONTROLLER_LOOP_MESSAGE_MINOR);
+  await first.report({ activity: 'quiet' });
+  h.time(3000); await first.report({ activity: 'quiet', attention });
+  expect.soft(h.registry().clearHistory(h.shown()[0].clearHistoryTarget!)).toBe('cleared');
+  await first.terminal.close();
+  await expect.poll(() => h.card()?.kind).toBe('disconnected');
+  h.time(5000);
+  const again = await h.connect(CONTROLLER_LOOP_MESSAGE_MINOR);
+  await again.report({ activity: 'quiet', attention });
+  expect(h.timeline().filter(item => item.receivedAt === 5000)).toEqual([]);
+});
+
 it('a request that clears and is raised again with identical text is a new entry above the cleared entry, leaving the first notification entry in place', async () => {
   const h = await fixture(); const { terminal, report } = await h.connect();
   await terminal.reportCurrent(null);

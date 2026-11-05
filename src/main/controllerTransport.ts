@@ -42,7 +42,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const current = new Map<WebSocket, NotificationCondition | null>();
   const comparedWork = new Map<WebSocket, ControllerWorkStatus>();
   const requestEntries = new Map<WebSocket, ControllerTimelineEntry>();
-  const directoryConditions = new Map<string, { current?: string; cleared?: string }>();
+  const directoryConditions = new Map<string, { current?: string; cleared?: string; olderRequestShown?: boolean }>();
   const members = (directory: string) => [...registrations].filter(([, terminal]) => terminal.launchDirectory === directory);
   const renewClearTarget = (terminal: ControllerTerminal) => {
     if (terminal.timeline) terminal.clearHistoryTarget = { id: terminal.id, launchDirectory: terminal.launchDirectory, revision: randomUUID() };
@@ -71,9 +71,14 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const recordStatus = (socket: WebSocket, terminal: ControllerTerminal, notificationsSupported: boolean, previous: ControllerWorkStatus | undefined, work: ControllerWorkStatus) => {
     for (const text of statusChanges(previous, work)) insert(terminal, { kind: 'status', text, receivedAt: Date.now() });
     if (previous?.attention && !work.attention) requestEntries.delete(socket);
+    const directory = directoryConditions.get(terminal.launchDirectory) ?? {};
+    directoryConditions.set(terminal.launchDirectory, directory);
+    const olderRequestShown = directory.olderRequestShown === true;
+    if (!notificationsSupported) directory.olderRequestShown = work.attention !== null;
     if (!work.attention || previous?.attention) return;
-    if (!notificationsSupported) insert(terminal, { kind: 'status', text: REQUEST_RAISED_TEXT, receivedAt: Date.now() });
-    else if (previous) {
+    if (!notificationsSupported) {
+      if (!olderRequestShown) insert(terminal, { kind: 'status', text: REQUEST_RAISED_TEXT, receivedAt: Date.now() });
+    } else if (previous) {
       const standing = requestEntries.get(socket);
       const at = standing ? terminal.timeline?.indexOf(standing) ?? -1 : -1;
       if (at > 0) terminal.timeline!.unshift(...terminal.timeline!.splice(at, 1));
