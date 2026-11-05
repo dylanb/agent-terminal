@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -220,5 +220,60 @@ describe('controller card action while its work is being answered', () => {
     await settle();
     control?.click();
     expect({ pending, afterAnswer: later }).toEqual({ pending: [], afterAnswer: ['pressed'] });
+  });
+});
+
+describe('controller card identity', () => {
+  const identity = { title: 'Reconcile the card identity', branch: 'feature/identity-slots' };
+  const named = (terminal: ControllerTerminal, status: string) =>
+    [terminal.repositoryRoot?.split('/').at(-1) ?? '', terminal.launchDirectory, status];
+
+  it.each([true, false])('shows the repository name, title, branch and status in the header, in that order (expanded=%s)', expanded => {
+    const terminal = withWork({ ...identity, activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    const order = expanded ? ['repository', identity.title, identity.branch] : ['repository', identity.title, identity.branch, 'Idle'];
+    expect(missingInOrder(header, order)).toEqual([]);
+  });
+
+  it.each([true, false])('shows neither a title slot nor a branch slot, and no placeholder, when the terminal has none (expanded=%s)', expanded => {
+    const terminal = withWork({ title: null, branch: null, activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    expect({
+      leftover: headerRemainder(header, named(terminal, 'Idle')),
+      name: header.includes('repository'),
+      status: expanded || header.includes('Idle'),
+    }).toEqual({ leftover: '', name: true, status: true });
+  });
+
+  it.each([true, false])('shows the name and status alone for a terminal that does not report title or branch (expanded=%s)', expanded => {
+    const terminal = withWork({ activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    expect({
+      leftover: headerRemainder(header, named(terminal, 'Idle')),
+      name: header.includes('repository'),
+      status: expanded || header.includes('Idle'),
+    }).toEqual({ leftover: '', name: true, status: true });
+  });
+
+  it('keeps each slot independent: a title with no branch, and a branch with no title', () => {
+    const titleOnly = withWork({ title: identity.title, branch: null, activity: 'quiet' });
+    const branchOnly = { ...withWork({ title: null, branch: identity.branch, activity: 'quiet' }), id: 'terminal-b', launchDirectory: '/fixed/other-worktree' };
+    const first = mount(titleOnly, false);
+    const second = mount(branchOnly, false);
+    const firstHeader = first.element ? cardHeaderTextIn(first.element) : '';
+    const secondHeader = second.element ? cardHeaderTextIn(second.element) : '';
+    expect({
+      titleOnly: [firstHeader.includes(identity.title), firstHeader.includes(identity.branch), headerRemainder(firstHeader, [...named(titleOnly, 'Idle'), identity.title])],
+      branchOnly: [secondHeader.includes(identity.title), secondHeader.includes(identity.branch), headerRemainder(secondHeader, [...named(branchOnly, 'Idle'), identity.branch])],
+    }).toEqual({ titleOnly: [true, false, ''], branchOnly: [false, true, ''] });
+  });
+
+  it('shows a title that holds markup characters as plain text', () => {
+    const title = '<b>bold</b> & "quoted"';
+    const { element } = mount(withWork({ title, branch: 'a<b' }));
+    expect({ text: element ? cardHeaderTextIn(element).includes(title) : false, injected: element?.querySelector('header b') ?? null }).toEqual({ text: true, injected: null });
   });
 });

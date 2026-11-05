@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import '../../src/renderer/src/styles.css';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardIn, dismissIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderTextIn, cardIn, dismissIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { STATUS_CASES } from '../helpers/controllerStatusFixture';
+import { STATUS_CASES, statusTerminal } from '../helpers/controllerStatusFixture';
 
 async function tabTo(target: HTMLElement | undefined): Promise<boolean> {
   for (let presses = 0; target && document.activeElement !== target && presses < 60; presses += 1) await userEvent.tab();
@@ -69,6 +69,36 @@ describe.each(['aside', 'main'])('the controller organism placed in %s', tag => 
         total: /(?<![\w-])2\s*(?:total|cards?|terminals?)\b|\b(?:total|cards?|terminals?)\W*2(?!\d)/i.test(header),
         statuses: cases.map(c => { const card = cardIn(host, c.terminal.launchDirectory); return card ? statusRowIn(card)?.textContent?.trim() : undefined; }),
       }).toEqual({ total: true, statuses: cases.map(c => c.text) });
+    } finally { dispose(); }
+  });
+});
+
+describe('controller panes identity', () => {
+  const single = { ...statusTerminal({ title: 'Single card title', branch: 'single/card-branch' }), id: 'single', launchDirectory: '/identity/single', repositoryRoot: '/identity' };
+  const members = ['one', 'two'].map(key => ({
+    ...statusTerminal({ title: `Member ${key} title`, branch: `member/${key}-branch` }),
+    id: `member-${key}`, launchDirectory: '/identity/shared', repositoryRoot: '/identity',
+  }));
+
+  it('shows a single card\'s title and branch in its header, and neither on a duplicate-directory card', () => {
+    const { host, dispose } = mountControllerPanes({ terminals: [single, ...members] });
+    try {
+      const singleCard = cardIn(host, single.launchDirectory);
+      const conflictCard = cardIn(host, members[0].launchDirectory);
+      const singleHeader = singleCard ? cardHeaderTextIn(singleCard) : '';
+      const conflictHeader = conflictCard ? cardHeaderTextIn(conflictCard) : '';
+      expect({
+        single: [singleHeader.includes('Single card title'), singleHeader.includes('single/card-branch')],
+        conflict: [conflictHeader.length > 0, ...['Member one title', 'member/one-branch', 'Member two title', 'member/two-branch'].map(text => conflictHeader.includes(text))],
+      }).toEqual({ single: [true, true], conflict: [true, false, false, false, false] });
+    } finally { dispose(); }
+  });
+
+  it('shows no title or branch anywhere in a duplicate-directory card', () => {
+    const { host, dispose } = mountControllerPanes({ terminals: members });
+    try {
+      const text = cardIn(host, members[0].launchDirectory)?.textContent ?? '';
+      expect(['Member one title', 'member/one-branch', 'Member two title', 'member/two-branch'].filter(part => text.includes(part))).toEqual([]);
     } finally { dispose(); }
   });
 });

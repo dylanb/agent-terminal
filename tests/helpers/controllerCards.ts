@@ -124,6 +124,15 @@ export function isExpanded(card: ParentNode, directory: string): boolean {
   if (!header) throw new Error(`No disclosure header for ${directory}`);
   return header.getAttribute('aria-expanded') === 'true';
 }
+/** The card's `<header>` element, whose text is what the collapsed card shows; the toggle's accessible name is separate. */
+export const cardHeaderTextIn = (card: ParentNode): string => card.querySelector('header')?.textContent ?? '';
+export const cardHeaderElementLocator = <L>(card: { locator(selector: string): L }): L => card.locator('header');
+
+/** What a header shows beyond the parts a test named: empty when nothing but whitespace and the `·` separator is left. */
+export function headerRemainder(headerText: string, named: readonly string[]): string {
+  return named.reduce((text, part) => (part ? text.split(part).join(' ') : text), headerText).replace(/[\s·]+/g, ' ').trim();
+}
+
 export const accentIn = (card: ParentNode): HTMLElement | null => card.querySelector(`[data-testid="${CARD_ACCENT_TEST_ID}"]`);
 export const statusRowIn = (card: ParentNode): HTMLElement | null => card.querySelector(`[data-testid="${CARD_STATUS_TEST_ID}"]`);
 

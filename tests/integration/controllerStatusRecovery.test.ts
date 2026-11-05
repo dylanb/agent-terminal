@@ -55,7 +55,8 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
     current: () => ({ repoKey: repo, flowName: repo, activity: 'quiet', loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: repo === '/old' ? 219 : 220 },
     } }),
-    issueTitle: async directory => directory === '/old' ? pending : 'CURRENT_TITLE',
+    refTitle: async directory => directory === '/old' ? pending : 'CURRENT_TITLE',
+    branch: async () => null,
   });
   stops.push(() => source.dispose());
   source.refresh();

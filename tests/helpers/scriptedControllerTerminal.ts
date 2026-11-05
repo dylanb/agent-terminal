@@ -15,6 +15,7 @@ export interface ScriptedControllerTerminal {
 export async function connectScriptedTerminal(
   controllerHome: string,
   identity: Pick<ControllerTerminal, 'launchDirectory' | 'repositoryRoot'>,
+  minor: number = CONTROLLER_PROTOCOL_MINOR,
 ): Promise<ScriptedControllerTerminal> {
   const socket = connectWebSocket(resolveControllerEndpoint(controllerHome));
   const closed = new Promise<void>(resolve => socket.once('close', () => resolve()));
@@ -36,7 +37,7 @@ export async function connectScriptedTerminal(
       socket.on('error', reject);
       socket.once('close', () => reject(new Error('Controller closed the connection before registering the terminal')));
       socket.once('open', () => {
-        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', ...identity }));
+        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor, type: 'register', ...identity }));
       });
       socket.on('message', (chunk: Buffer) => {
         const message = parseControllerMessage(chunk.toString());
