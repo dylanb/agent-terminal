@@ -6,6 +6,10 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { RepoInfo } from '../shared/ipc';
 
+export function findRepoRoot(_cwd: string): string | null {
+  return null;
+}
+
 export function resolveRepoKey(cwd: string): string {
   const start = path.resolve(cwd);
   let dir = start;

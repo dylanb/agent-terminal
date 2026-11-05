@@ -14,6 +14,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupStatus,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -183,6 +184,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo' })).toBe(false);
     expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: 'relative', id: 'feature-dev' })).toBe(false);
     expect(isValidFlowSetActiveFlow({ sessionId: 'other', repoKey: '/repo', id: 'feature-dev' })).toBe(false);
+  });
+
+  it('accepts a setup:status for a safe repoKey on the live session, and rejects a missing session or repoKey', () => {
+    expect.soft(isValidSetupStatus({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect({
+      noSession: isValidSetupStatus({ repoKey: '/repo' }),
+      otherSession: isValidSetupStatus({ sessionId: 'other', repoKey: '/repo' }),
+      noRepoKey: isValidSetupStatus({ sessionId: sid }),
+      numberRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 7 }),
+      relativeRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 'relative' }),
+      notAnObject: isValidSetupStatus('/repo'),
+    }).toEqual({ noSession: false, otherSession: false, noRepoKey: false, numberRepoKey: false, relativeRepoKey: false, notAnObject: false });
   });
 
   it('accepts a flow:clearActiveFlow for a safe repoKey on the live session (§18.7.2/§18.7.4)', () => {

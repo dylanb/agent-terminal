@@ -60,6 +60,7 @@ import {
   type UiSetSettingsMsg,
   type ViewerReadMsg,
   type ViewerTreeMsg,
+  type SetupStatusMsg,
 } from '../shared/ipc';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
@@ -211,6 +212,10 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
     m.id.length > 0 &&
     m.id.length <= MAX_CATALOG_ID_LENGTH
   );
+}
+
+export function isValidSetupStatus(_m: unknown): _m is SetupStatusMsg {
+  return false;
 }
 
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */

@@ -70,6 +70,7 @@ const TERMINAL_WIRE_NAMES = {
   cliInstall: 'cli:install',
   installExamplesPreview: 'examples:preview',
   installExamplesApply: 'examples:apply',
+  setupStatus: 'setup:status',
 };
 
 const CONTROLLER_WIRE_NAMES = {

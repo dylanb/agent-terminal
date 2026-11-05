@@ -66,3 +66,29 @@ export function setupCheckScreen(host: ParentNode) {
 }
 
 export type SetupCheckScreen = ReturnType<typeof setupCheckScreen>;
+
+/** Records the text of each setup dialog added to `host`, in the order they were added, read from the mutation
+ *  records themselves so a dialog replaced before anyone looked is still on the record. Call the returned
+ *  function to read it. */
+export function recordSetupDialogs(host: HTMLElement): () => string[] {
+  const seen: string[] = [];
+  const isDialog = (el: Element): boolean => el.getAttribute('role') === 'dialog';
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        for (const el of [node, ...everyByRole(node, 'dialog')]) if (isDialog(el)) seen.push(text(el));
+      }
+    }
+  });
+  observer.observe(host, { childList: true, subtree: true });
+  return () => {
+    for (const record of observer.takeRecords()) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        for (const el of [node, ...everyByRole(node, 'dialog')]) if (isDialog(el)) seen.push(text(el));
+      }
+    }
+    return [...seen];
+  };
+}
