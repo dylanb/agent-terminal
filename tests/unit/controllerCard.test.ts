@@ -195,9 +195,10 @@ describe('controller card bring-forward icon', () => {
     const shown = [...(icon?.children ?? [])];
     expect({
       icon: Boolean(icon),
+      glyph: shown.length > 0,
       text: icon?.textContent?.trim() ?? '',
       hidden: shown.every(child => child.getAttribute('aria-hidden') === 'true'),
-    }).toEqual({ icon: true, text: '', hidden: true });
+    }).toEqual({ icon: true, glyph: true, text: '', hidden: true });
   });
 
   it.each([true, false])('reports its use once and leaves the card as expanded or collapsed as it was (expanded=%s)', expanded => {

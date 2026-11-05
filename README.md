@@ -74,7 +74,7 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 - One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
 - Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
 - Tray dot: amber when a human is needed, red on error.
-- **Bring forward** raises the right window. Agents sharing a directory are flagged **Duplicate directory**, with **Bring both forward**.
+- The arrow icon in each card's header (**Bring forward**) raises the right window, collapsed or expanded. Agents sharing a directory are flagged **Duplicate directory**, and the same icon brings all of them forward.
 - An always-on-top toggle.
 
   <img src="docs/images/controller.png" alt="The controller window showing three terminal cards: one Idle, one Needs a human · Working, and one Needs a human · Idle, with a summary of 0 errors, 1 needing a human, 1 idle and 1 working" width="480">

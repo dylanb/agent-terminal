@@ -1,12 +1,9 @@
 import { expect, it } from 'vitest';
 import type { ControllerWorkStatus } from '../../src/shared/ipc';
 
-type StatusChanges = (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus) => string[];
-const loaded = import('../../src/shared/controllerTimeline').catch(() => null);
-const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => {
-  const module = await loaded as { statusChanges?: StatusChanges } | null;
-  return module?.statusChanges?.(previous, next) as string[];
-};
+import { statusChanges } from '../../src/shared/controllerTimeline';
+
+const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => statusChanges(previous, next);
 
 const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
 const base = (overrides: Partial<ControllerWorkStatus> = {}): ControllerWorkStatus => ({

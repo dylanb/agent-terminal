@@ -48,7 +48,9 @@ it('offers distinct Clear and Dismiss actions on a disconnected one-entry card, 
   } };
   const { host, dispose } = mountControllerPanes({ controller: api });
   try {
-    clearHistoryIn(cardIn(host, directory)!)?.click(); await settled();
+    const clear = clearHistoryIn(cardIn(host, directory)!);
+    expect(clear?.checkVisibility()).toBe(true);
+    clear!.click(); await settled();
     const card = cardIn(host, directory)!;
     expect.soft(timelineEntriesIn(card)).toEqual([]);
     expect.soft(clearHistoryIn(card)).toBeUndefined();

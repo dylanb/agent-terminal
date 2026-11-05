@@ -40,7 +40,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const minors = new Map<WebSocket, number>();
   const retained = new Map<string, ControllerTerminal>();
   const current = new Map<WebSocket, NotificationCondition | null>();
-  const baselines = new Set<WebSocket>();
+  const comparedWork = new Map<WebSocket, ControllerWorkStatus>();
   const requestEntries = new Map<WebSocket, ControllerTimelineEntry>();
   const directoryConditions = new Map<string, { current?: string; cleared?: string }>();
   const members = (directory: string) => [...registrations].filter(([, terminal]) => terminal.launchDirectory === directory);
@@ -102,7 +102,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
       registrations.delete(socket);
       minors.delete(socket);
       current.delete(socket);
-      baselines.delete(socket);
+      comparedWork.delete(socket);
       requestEntries.delete(socket);
       if (terminal) {
         const remaining = members(terminal.launchDirectory);
@@ -114,7 +114,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
           const [survivorSocket, survivor] = remaining[0];
           const condition = current.get(survivorSocket);
           directoryConditions.set(survivor.launchDirectory, { current: condition?.conditionId });
-          baselines.add(survivorSocket);
+          comparedWork.delete(survivorSocket);
           if (condition) receive(survivorSocket, survivor, condition);
         }
       }
@@ -137,7 +137,6 @@ export async function startControllerTransport(appHome: string): Promise<Control
           const terminal: ControllerTerminal = { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(timeline ? { timeline } : {}) };
           renewClearTarget(terminal);
           registrations.set(socket, terminal);
-          baselines.add(socket);
           const peers = members(message.launchDirectory);
           if (peers.length > 1) {
             directoryConditions.delete(message.launchDirectory);
@@ -165,9 +164,12 @@ export async function startControllerTransport(appHome: string): Promise<Control
           }
         } else if (message.type === 'status' && registrations.has(socket)) {
           const terminal = registrations.get(socket)!;
-          const previous = baselines.delete(socket) ? undefined : terminal.work;
           terminal.work = message.work;
-          if (members(terminal.launchDirectory).length === 1) recordStatus(socket, terminal, notificationsSupported, previous, message.work);
+          if (message.work.unavailableReason === undefined) {
+            const previous = comparedWork.get(socket);
+            comparedWork.set(socket, message.work);
+            if (members(terminal.launchDirectory).length === 1) recordStatus(socket, terminal, notificationsSupported, previous, message.work);
+          }
           notify();
         } else if (message.type === 'result') {
           const request = pending.get(message.requestId);

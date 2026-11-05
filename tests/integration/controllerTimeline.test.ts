@@ -3,7 +3,8 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startControllerTransport } from '../../src/main/controllerTransport';
-import { CONTROLLER_LOOP_MESSAGE_MINOR, type NotificationCondition } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_MAX_STATUS_BYTES, CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage, type NotificationCondition } from '../../src/shared/controllerProtocol';
+import type { ControllerWorkStatus } from '../../src/shared/ipc';
 import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 import { workStatus } from '../helpers/controllerStatusFixture';
 import { statusEntries, timelineOf } from '../helpers/controllerHistory';
@@ -146,6 +147,24 @@ it('a notification whose text matches a status entry is a new entry, not a count
   expect(h.timeline()[0]).toEqual({ kind: 'notification', message: idle?.text ?? 'Idle', receivedAt: 3000, count: 1 });
 });
 
+it('an oversized status report adds no entries and does not count as the request or error clearing', async () => {
+  const h = await fixture(); const { terminal, report } = await h.connect();
+  await terminal.reportCurrent(null);
+  await report({ activity: 'quiet' });
+  h.time(2000);
+  await terminal.raise(request);
+  await report({ activity: 'quiet', attention, error: { reason: 'Build failed' } });
+  const before = h.timeline();
+  const oversized = JSON.parse(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ attention: { status: 'complete', reasons: ['x'.repeat(CONTROLLER_MAX_STATUS_BYTES)] } }) })) as { work: ControllerWorkStatus };
+  h.time(3000);
+  await terminal.sendStatus(oversized.work);
+  await expect.poll(() => h.shown().find(t => t.status !== 'disconnected')?.work?.unavailableReason).toBe('message-too-large');
+  expect.soft(h.timeline()).toEqual(before);
+  h.time(4000);
+  await report({ activity: 'quiet', attention, error: { reason: 'Build failed' } });
+  expect.soft(h.timeline()).toEqual(before);
+});
+
 it('keeps the three newest of four qualifying changes, newest first', async () => {
   const h = await fixture(); const { report } = await h.connect();
   await report({ activity: 'active' });
@@ -175,7 +194,7 @@ it('a report that changes only the branch, title, ticket, loop message or reason
   await report({ activity: 'active', title: 'T1', branch: 'b1' });
   h.time(2000); await report({ activity: 'quiet', title: 'T1', branch: 'b1' });
   const before = h.timeline();
-  expect(before).toHaveLength(1);
+  expect.soft(before).toHaveLength(1);
   h.time(3000);
   await report({ activity: 'quiet', title: 'T1', branch: 'a-different-branch' });
   await report({ activity: 'quiet', title: 'another title', branch: 'a-different-branch' });
@@ -254,7 +273,7 @@ it('reconnecting adds no connected entry and keeps the retained entries', async 
   await first.terminal.close();
   await expect.poll(() => h.card()?.kind).toBe('disconnected');
   const retained = h.timeline();
-  expect(retained).toHaveLength(2);
+  expect.soft(retained).toHaveLength(2);
   h.time(6000);
   const again = await h.connect();
   await again.report({ activity: 'active' });
