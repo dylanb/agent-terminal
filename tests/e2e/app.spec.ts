@@ -578,6 +578,27 @@ test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async
   expect(app.windows()).toHaveLength(0);
 });
 
+test('quitting while the shell runs waits for the shell to finish exiting, and the app exits cleanly (§5)', { tag: '@ownapp' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-quit-'));
+  const marker = join(dir, 'shell-exited');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_QUIT_GRACE_MS: '600000' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`trap 'sleep 2; : > "${marker}"' EXIT; echo "trap-""armed"`);
+  await expect(termRows()).toContainText('trap-armed');
+  const proc = app.process();
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
+    proc.once('exit', (code, signal) => done({ code, signal }));
+  });
+  await app.close();
+  expect.soft(existsSync(marker)).toBe(true);
+  expect.soft(await exited).toEqual({ code: 0, signal: null });
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('an immediate shell startup failure keeps the app open (§5 grace exception)', { tag: '@ownapp' }, async () => {
   // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
   // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
