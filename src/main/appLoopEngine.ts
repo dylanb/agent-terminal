@@ -52,6 +52,10 @@ const REVIEW_TURN_PREFIX = 'review-';
 const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
+
+const SELF_CHECK_ARTIFACT_CHECK: Record<SelfCheck, ArtifactCheck> = {
+  'loop-capabilities': { kind: 'capabilities' },
+};
 /** The route-out reason a relaunch gives a turn the persisted state left mid-flight (`working`): its PTY is
  *  gone and resume never re-drives it, so it is stopped and the human must retry/terminate it (§27.12/CWE-703). */
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
@@ -1239,7 +1243,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...(active.reportSections !== undefined ? { reportSections: sectionTargets(active, active.reportSections) } : {}),
-        ...(active.selfCheck !== undefined ? { selfCheck: { kind: active.selfCheck, checkCommand: deps.artifactCheckCommand({ kind: 'capabilities' }) } } : {}),
+        ...(active.selfCheck !== undefined ? { selfCheck: { kind: active.selfCheck, checkCommand: deps.artifactCheckCommand(SELF_CHECK_ARTIFACT_CHECK[active.selfCheck]) } } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
         ...(active.run.kind === 'goal'

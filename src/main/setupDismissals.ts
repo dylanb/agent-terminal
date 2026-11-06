@@ -1,5 +1,4 @@
 import path from 'node:path';
-import type { SetupDismissReply } from '../shared/ipc';
 import type { SetupDismissal } from '../shared/setupCheck';
 import { atomicWriteFileSync } from './atomicFile';
 import { readBoundedNoFollow } from './boundedRead';
@@ -7,11 +6,14 @@ import { resolveOwnedDirJail } from './confinedPath';
 import { errMsg } from './errno';
 import { flowHomeDir } from './flowHome';
 
+export type DismissalWrite = { ok: true } | { ok: false; error: string };
+
 export interface SetupDismissals {
   /** Every dismissal recorded under the app-state home. */
   recorded(): SetupDismissal[];
-  /** Adds `dismissal` to the record, keeping the ones already there. */
-  record(dismissal: SetupDismissal): SetupDismissReply;
+  /** Records `dismissal`. A repository dismissal joins those already recorded; an examples dismissal replaces the
+   *  one recorded for an earlier version. */
+  record(dismissal: SetupDismissal): DismissalWrite;
 }
 
 /** CWE-400: the file holds repository keys and one version string; one past this is read as no dismissals. */
@@ -76,14 +78,14 @@ export function createSetupDismissals(appHome: string): SetupDismissals {
     record(dismissal) {
       const file = resolvedDismissalsFile(appHome);
       if (file === null) {
-        return { ok: false, reason: `The dismissal could not be saved: ${flowHomeDir(appHome)} cannot be resolved to a real folder.` };
+        return { ok: false, error: `${flowHomeDir(appHome)} cannot be resolved to a real folder.` };
       }
       const next = withDismissal(readRecord(file), dismissal);
       try {
         if (atomicWriteFileSync(file, `${JSON.stringify(next, null, 2)}\n`)) return { ok: true };
-        return { ok: false, reason: `The dismissal could not be saved: ${path.dirname(file)} is not a folder.` };
+        return { ok: false, error: `${path.dirname(file)} is not a folder.` };
       } catch (e) {
-        return { ok: false, reason: `The dismissal could not be saved: ${errMsg(e)}` };
+        return { ok: false, error: errMsg(e) };
       }
     },
   };

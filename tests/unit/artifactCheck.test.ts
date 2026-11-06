@@ -98,6 +98,14 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
     expect(runArtifactCheck(['nonsense'], files({})).exitCode).toBe(2);
   });
 
+  it('rejects the capabilities check given an operand as a usage error, even when the capabilities pass', () => {
+    const passing: ArtifactCheckInputs = {
+      read: () => null,
+      loadCapabilities: () => ({ ok: true, value: { testGlobs: ['tests/**'], testCommand: 'npm test', buildCommand: 'npm run build' } }),
+    };
+    expect(runArtifactCheck(['capabilities', 'extra'], passing).exitCode).toBe(2);
+  });
+
   it('quotes an operand carrying shell metacharacters so it reaches the checker verbatim (CWE-78)', () => {
     const hostile: ArtifactCheck = { kind: 'verdict', rel: 'a;b$(x).md', catalog: ROSTER };
     expect(argvOf(hostile)[1]).toBe('a;b$(x).md');

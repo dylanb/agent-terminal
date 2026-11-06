@@ -4,7 +4,7 @@ import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/rendere
 import { APP_VERSION, ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import { openModalDialogs, recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
-import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
+import { createSetupFlowRun, type SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
 import type { FlowStateView } from '../../src/shared/ipc';
@@ -135,6 +135,37 @@ describe('the popup is a modal dialog (AC11)', () => {
       described: screen.description().length > 0,
       focusInside: shown.contains(document.activeElement),
     }).toEqual({ modal: 'true', named: true, described: true, focusInside: true });
+  });
+
+  it('reads every listed failure in its accessible description', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.malformed]));
+    const { dialog, screen } = mountDialog(fake);
+
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    const description = screen.description();
+    const entries = screen.entries();
+    expect({ listed: entries.length, unread: entries.filter((entry) => !description.includes(entry)) }).toEqual({
+      listed: 2,
+      unread: [],
+    });
+  });
+
+  it('lands focus on the dialog itself on open, not on one of its controls', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale], true));
+    const { dialog, screen } = mountDialog(fake);
+    focusedOpener();
+
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    expect({ focusOnDialog: document.activeElement === screen.dialog(), focusedControl: focusedControl(screen) }).toEqual({
+      focusOnDialog: true,
+      focusedControl: null,
+    });
   });
 
   for (const { door, close } of DOORS) {
@@ -278,6 +309,35 @@ describe('another app dialog is open', () => {
   });
 });
 
+describe('a wait for another app dialog to close', () => {
+  it('leaves no subscription to that dialog closing once the popup has opened', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    let live = 0;
+    const subscribe = fake.deps.onBlockingDialogClosed;
+    fake.deps.onBlockingDialogClosed = (cb) => {
+      live += 1;
+      const off = subscribe(cb);
+      let released = false;
+      return () => {
+        if (!released) live -= 1;
+        released = true;
+        off();
+      };
+    };
+    const { dialog, screen } = mountDialog(fake);
+    fake.otherDialog.open();
+    const answered = fake.answered(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    await answered;
+
+    fake.otherDialog.close();
+    await shownFor(screen, REPO.alpha);
+
+    expect(live).toBe(0);
+  });
+});
+
 describe('another app dialog replaced by a third one', () => {
   it('opens no setup dialog until the last of them has closed', async () => {
     const fake = fakeSetupDeps();
@@ -331,6 +391,25 @@ describe('a dialog disposed while it waits for another app dialog', () => {
     await nextTask();
 
     expect(seen()).toEqual([]);
+  });
+});
+
+describe('a disposed dialog', () => {
+  it('asks for no status when checked', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const asked: string[] = [];
+    const status = fake.deps.status;
+    fake.deps.status = (repoKey) => {
+      asked.push(repoKey);
+      return status(repoKey);
+    };
+    const { dialog } = mountDialog(fake);
+
+    dialog.dispose();
+    await dialog.check(REPO.alpha);
+
+    expect(asked).toEqual([]);
   });
 });
 
@@ -427,6 +506,32 @@ describe('checks run one at a time, each repository at most once', () => {
     { how: 'answers ok: false', reply: { ok: false, reason: 'scripted status failure' } },
     { how: 'is rejected', reply: { reject: 'scripted invoke rejection' } },
   ];
+
+  it('a check whose status request is rejected settles without rejecting', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, { reject: 'scripted invoke rejection' });
+    const { dialog } = mountDialog(fake);
+
+    await expect(dialog.check(REPO.alpha)).resolves.toBeUndefined();
+  });
+
+  it('a check that fails while it waits for other dialogs does not stall a later check of another repository', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+    let probeFails = true;
+    fake.deps.blockingDialogOpen = () => {
+      if (!probeFails) return false;
+      probeFails = false;
+      throw new Error('scripted blocking-dialog probe failure');
+    };
+    const { dialog, screen } = mountDialog(fake);
+
+    void dialog.check(REPO.alpha).catch(() => {});
+    void dialog.check(REPO.bravo);
+
+    await shownFor(screen, REPO.bravo);
+  });
 
   for (const { how, reply } of FAILED) {
     it(`a status request that ${how} shows nothing, does not stall the next check, and leaves its repository to be checked again, once`, async () => {
@@ -679,9 +784,9 @@ describe('a dismissal press removes what it silences and keeps the other kind (A
 });
 
 describe('a dismissal that could not be saved', () => {
-  const FAILURES: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answerDismiss']>[0]; reason: string | null }> = [
+  const FAILURES: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answerDismiss']>[0]; reason: string }> = [
     { how: 'answers ok: false', reply: { ok: false, reason: 'scripted dismissal write failure' }, reason: 'scripted dismissal write failure' },
-    { how: 'is rejected', reply: { reject: 'scripted dismissal invoke rejection' }, reason: null },
+    { how: 'is rejected', reply: { reject: 'scripted dismissal invoke rejection' }, reason: 'scripted dismissal invoke rejection' },
   ];
 
   for (const { how, reply, reason } of FAILURES) {
@@ -696,15 +801,14 @@ describe('a dismissal that could not be saved', () => {
 
       screen.control(FOR_REPO).click();
 
-      await vi.waitFor(() => {
-        const alert = screen.alert();
+      await vi.waitFor(() =>
         expect({
           asked: fake.dismissals().length,
           entries: screen.entries(),
           retryable: screen.hasControl(FOR_REPO),
-          alerted: reason === null ? alert !== null : (alert ?? '').includes(reason),
-        }).toEqual({ asked: 1, entries: before, retryable: true, alerted: true });
-      });
+          alerted: (screen.alert() ?? '').includes(reason),
+        }).toEqual({ asked: 1, entries: before, retryable: true, alerted: true }),
+      );
     });
   }
 });
@@ -815,7 +919,7 @@ describe('pressing Run setup loop (AC18, AC19)', () => {
 
     screen.control(RUN_SETUP).click();
 
-    await vi.waitFor(() => expect(fake.flows.started()).toEqual({ [REPO.alpha]: REPO_SETUP_FLOW_ID }));
+    await vi.waitFor(() => expect(fake.setupFlow.runs()).toEqual([REPO.alpha]));
   });
 
   it('closes the popup once the start has run, and announces nothing itself', async () => {
@@ -828,39 +932,56 @@ describe('pressing Run setup loop (AC18, AC19)', () => {
     screen.control(RUN_SETUP).click();
 
     await vi.waitFor(() =>
-      expect({ open: screen.isOpen(), started: fake.flows.started(), announced: fake.announcements() }).toEqual({
+      expect({ open: screen.isOpen(), runs: fake.setupFlow.runs(), announced: fake.announcements() }).toEqual({
         open: false,
-        started: { [REPO.alpha]: REPO_SETUP_FLOW_ID },
+        runs: [REPO.alpha],
         announced: [],
       }),
     );
   });
 
-  const REFUSALS: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['flows']['answerSelection']>[0]; reason: string }> = [
-    { how: 'is refused because the run has begun', reply: { ok: false, reason: 'scripted begun-run refusal' }, reason: 'scripted begun-run refusal' },
-    { how: 'is rejected', reply: { reject: 'scripted selection rejection' }, reason: 'scripted selection rejection' },
-  ];
+  it('when the setup flow could not run, closes the popup and announces why', async () => {
+    const reason = 'scripted begun-run refusal';
+    const fake = fakeSetupDeps();
+    fake.setupFlow.answer({ ok: false, reason });
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
 
-  for (const { how, reply, reason } of REFUSALS) {
-    it(`when the selection ${how}, closes the popup, announces why, and starts nothing`, async () => {
-      const fake = fakeSetupDeps();
-      fake.flows.answerSelection(reply);
-      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
-      const { dialog, screen } = mountDialog(fake);
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+    screen.control(RUN_SETUP).click();
 
-      screen.control(RUN_SETUP).click();
+    await vi.waitFor(() =>
+      expect({
+        open: screen.isOpen(),
+        announcedReason: fake.announcements().some(({ message }) => message.includes(reason)),
+      }).toEqual({ open: false, announcedReason: true }),
+    );
+  });
 
-      await vi.waitFor(() =>
-        expect({
-          open: screen.isOpen(),
-          announcedReason: fake.announcements().some(({ message }) => message.includes(reason)),
-          started: fake.flows.started(),
-        }).toEqual({ open: false, announcedReason: true, started: {} }),
-      );
-    });
-  }
+  it("announces nothing when the setup flow's refusal lands after the dialog was disposed", async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
+    let refuse: (run: SetupFlowRun) => void = () => {};
+    const started = new Promise<SetupFlowRun>((resolve) => (refuse = resolve));
+    let asked = false;
+    fake.deps.runSetupFlow = () => {
+      asked = true;
+      return started;
+    };
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+    screen.control(RUN_SETUP).click();
+    await vi.waitFor(() => expect(asked).toBe(true));
+
+    dialog.dispose();
+    refuse({ ok: false, reason: 'scripted begun-run refusal' });
+    await started;
+    await nextTask();
+
+    expect(fake.announcements()).toEqual([]);
+  });
 
   it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
     const fake = fakeSetupDeps();
@@ -905,7 +1026,7 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
     });
     strip.onRepoChanged(REPO.alpha);
     const fake = fakeSetupDeps();
-    fake.deps.start = (repoKey) => strip.start(repoKey);
+    fake.deps.runSetupFlow = createSetupFlowRun({ setActiveFlow: async () => ({ ok: true }), start: (repoKey) => strip.start(repoKey) });
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
     const { dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
@@ -962,7 +1083,7 @@ describe('Run setup loop with another check queued, over the real flow strip (AC
     });
     strip.onRepoChanged(REPO.alpha);
     const fake = fakeSetupDeps();
-    fake.deps.start = (repoKey) => strip.start(repoKey);
+    fake.deps.runSetupFlow = createSetupFlowRun({ setActiveFlow: async () => ({ ok: true }), start: (repoKey) => strip.start(repoKey) });
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
     fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
     const { dialog, screen } = mountDialog(fake);
@@ -972,6 +1093,7 @@ describe('Run setup loop with another check queued, over the real flow strip (AC
 
     screen.control(RUN_SETUP).click();
     await vi.waitFor(() => expect(screen.isOpen()).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     releaseStart();
 
     try {

@@ -92,6 +92,18 @@ discriminated union, never a flat record with fields dead in some modes — a fl
 dummy the mode ignores. `BundleLocation` (`packaged: true` carries `resourcesPath`; `packaged: false`
 carries `appPath`) is the shape to copy.
 
+## Code that acts on a kind handles every kind
+
+When a value names its kind (a discriminated union's tag, a string-literal union, a `kind` field), every place
+that turns that kind into behaviour handles every member explicitly: an exhaustive lookup table
+(`const X: Record<Kind, …> = { … }`) or a `switch` whose `default` ends in `value satisfies never`. Adding a
+member then fails the build at each such site until it is handled. Never write the behaviour of the only member
+that exists today and leave the kind unread: that code compiles and passes every test, and the day a second member
+lands it silently gets the first one's behaviour. A kind field that nothing reads is the tell.
+`SELF_CHECK_ARTIFACT_CHECK` (`src/main/appLoopEngine.ts`) and `SELF_CHECK_LINES` (`src/main/appWorkTurn.ts`) are
+the table shape to copy; `writePointer`'s `write satisfies never` (`src/main/activeFlowGate.ts`) is the
+`switch` shape.
+
 ## Platform branches take the platform as a parameter
 
 CI and the Podman e2e run only on Linux, so a branch decided by reading `process.platform` inline runs its

@@ -122,12 +122,14 @@ the app's pickup (§27.10) is not used.
    reader's canonical example (`exampleLoopCapabilities`) and the command that runs the app's own reader over the
    file (artifactCheck's `capabilities` mode); the agent runs it until it passes. The check is prompt-only: the
    engine does not gate the turn on it, and the human gate is the backstop. On redo, the agent judges against the
-   repository as it stood before the run, through its earlier summary.
+   repository as it stood before the run, through its earlier summary. When the operator has anything staged, or
+   their own uncommitted edits in `.gitignore`, it changes nothing and says so.
 2. **`publish`** (`repo-setup-publish-loop`). Runs only after the operator approves `setup`. The agent decides from
    git's own view whether either file changed; if neither did, it makes no branch, commit, issue or PR. Otherwise it
    follows the target repository's own contribution rules (its `CLAUDE.md`, `CONTRIBUTING`, PR template and
    similar) for the branch, commit message and PR body, commits only the two setup files, and opens a **draft** PR.
-   It files an issue and links it only when those rules require one for every PR. On redo it resumes the branch,
+   It checks the index and `.gitignore` again before any outward action, and stops the same way. It files an issue
+   and links it only when those rules require one for every PR. On redo it resumes the branch,
    issue or PR this run already made, never a second one. Approving this step's gate only completes the run.
 
 Exactly one operator approval comes before any commit, push, issue or PR. A run with no pickup is not held to a

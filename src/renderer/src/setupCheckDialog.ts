@@ -1,16 +1,15 @@
-import type { ActiveFlowWriteResult, SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
-import { REPO_SETUP_FLOW_ID, silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
+import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
+import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
 import { createModalShell } from './modalShell';
+import type { SetupFlowRun } from './setupFlowRun';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
   dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
   /** Opens the Settings view's install-examples flow. */
   openInstallExamples(): void;
-  /** Selects flow `id` for `repoKey`, as the flow picker does; refused once that repository's run has begun. */
-  setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
-  /** Starts `repoKey`'s selected flow as a press of the flow strip's Start does. */
-  start(repoKey: string): Promise<void>;
+  /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
+  runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
   /** Shows a message that must outlive the closed dialog. */
   announce(title: string, message: string): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
@@ -50,6 +49,7 @@ const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
   (entry.condition === 'ignore' && entry.failure === 'not-ignored') || (entry.condition === 'capabilities' && entry.failure === 'absent');
 
 const SETUP_REFUSED_TITLE = 'The setup loop could not run';
+const DISMISSAL_NOT_SAVED = 'The dismissal could not be saved:';
 
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
@@ -136,7 +136,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
             (saved) => {
               if (disposed) return;
               if (!saved.ok) {
-                error.textContent = saved.reason;
+                error.textContent = `${DISMISSAL_NOT_SAVED} ${saved.reason}`;
                 return;
               }
               const remaining = entries.filter((entry) => !silencedBy(dismissal).includes(entry.condition));
@@ -145,7 +145,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
               settle();
             },
             (e: unknown) => {
-              error.textContent = `The dismissal could not be saved: ${e instanceof Error ? e.message : String(e)}`;
+              error.textContent = `${DISMISSAL_NOT_SAVED} ${e instanceof Error ? e.message : String(e)}`;
             },
           );
         const actions: HTMLButtonElement[] = [];
@@ -162,26 +162,16 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
         const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
         if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
-        const runSetupLoop = (): Promise<void> =>
-          deps.setActiveFlow(repoKey, REPO_SETUP_FLOW_ID).then(
-            (selected) => {
-              if (disposed) return;
-              confirm();
-              if (!selected.ok) {
-                settle();
-                deps.announce(SETUP_REFUSED_TITLE, selected.reason);
-                return;
-              }
-              // The queue waits for the start, so a queued popup never opens over the step-entry input modal it raises.
-              return deps.start(repoKey).finally(settle);
-            },
-            (e: unknown) => {
-              if (disposed) return;
-              confirm();
-              settle();
-              deps.announce(SETUP_REFUSED_TITLE, `The setup flow could not be selected: ${e instanceof Error ? e.message : String(e)}`);
-            },
-          );
+        const runSetupLoop = (): Promise<void> => {
+          confirm();
+          // The queue waits for the start, so a queued popup never opens over the step-entry input modal it raises.
+          return deps
+            .runSetupFlow(repoKey)
+            .then((run) => {
+              if (!disposed && !run.ok) deps.announce(SETUP_REFUSED_TITLE, run.reason);
+            })
+            .finally(settle);
+        };
         if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);
         card.append(title, body, foot);

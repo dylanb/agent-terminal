@@ -22,6 +22,29 @@ already made.
   Ignore it entirely, and overwrite it. What that run changed is now the repository's own.
 - Any other existing state of `.gitignore` and `loop-capabilities.yaml` is the repository's own.
 
+## Stop first if the operator has work in progress here
+
+The next step commits the setup change from the operator's live working tree, so their own work there must not be
+mixed in with it.
+
+**The setup `.gitignore`** is `HEAD`'s `.gitignore` content (empty when `HEAD` has none), plus a newline if that
+content is non-empty and does not end in one, plus the line `.agent-terminal/` and a newline. So when `HEAD` has
+no `.gitignore`, it is exactly the one line `.agent-terminal/`. Decide first whether each file exists:
+`git cat-file -e HEAD:.gitignore` for `HEAD`'s, `test -e .gitignore` for the working tree's. Both absent counts as
+matching `HEAD`. Compare contents (`git show HEAD:.gitignore` and `cmp`) only when both exist. Never compare with
+`git diff`, which shows nothing for an untracked file.
+
+Before you change anything, check:
+
+- `git diff --cached --quiet` exits 0: nothing is staged.
+- `.gitignore` holds no uncommitted edit of the operator's. Either it matches `HEAD` (absent when `HEAD` has none,
+  and otherwise the same content), or this run's earlier summary lists `.gitignore` as changed and the file is
+  exactly the setup `.gitignore`.
+
+If either check fails, change no file. Write the summary with **Stopped** as its second line. Still carry forward
+the **Files changed** list from this run's earlier summary, if there is one. Say what you found, and that the
+operator can commit, stash or unstage that work and then redo this step.
+
 ## What to do
 
 **The ignore rule.** Ask git itself: `git check-ignore -q -- .agent-terminal/` exits 0 when the whole folder is
@@ -33,8 +56,8 @@ already ignored (through `.gitignore`, `.git/info/exclude` or the user's global 
 - Any exit other than 0 or 1 means git could not answer (for example 128: not a repository, a `safe.directory`
   refusal or a broken config). Leave `.gitignore` untouched, report git's error under this item in the summary,
   and go on to the next item.
-- Exit 1, not ignored: add one line, `.agent-terminal/`, to the `.gitignore` at the repository root, creating the
-  file if there is none. Change nothing else in it. Run the `git check-ignore` command again and confirm it exits 0. A rule
+- Exit 1, not ignored: make the `.gitignore` at the repository root exactly the setup `.gitignore` above, creating
+  the file if there is none. That adds the one line `.agent-terminal/` and changes nothing else. Run the `git check-ignore` command again and confirm it exits 0. A rule
   that ignores only some paths under `.agent-terminal/` does not count.
 
 **`loop-capabilities.yaml`.**

@@ -766,6 +766,44 @@ describe('shell modal predicate and close signal', () => {
     expect(fired).toBe(0);
   });
 
+  it('a listener that subscribes once a dialog closed after the last listener left is not called by a later page change', async () => {
+    const modal = realModal();
+    const unsubscribe = shell.onModalClosed(() => {});
+    modal.open();
+    await flush();
+    unsubscribe();
+    modal.close();
+    await flush();
+    let fired = 0;
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+
+    document.body.appendChild(document.createElement('p'));
+    await flush();
+
+    expect(fired).toBe(0);
+  });
+
+  it('a listener that subscribes right after a dialog closed while nobody listened is not called for that close', async () => {
+    const modal = realModal();
+    const unsubscribeFirst = shell.onModalClosed(() => {});
+    const unsubscribeSecond = shell.onModalClosed(() => {});
+    unsubscribeFirst();
+    unsubscribeSecond();
+    modal.open();
+    await flush();
+    modal.close();
+    let fired = 0;
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+
+    await flush();
+
+    expect(fired).toBe(0);
+  });
+
   it('a listener that unsubscribed is not called on a later close, while one still subscribed is', async () => {
     const modal = realModal();
     let removedCalled = false;

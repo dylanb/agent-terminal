@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,7 @@ import type { ExamplesCurrency } from '../../src/main/installExamples';
 import { loadLoopCapabilities } from '../../src/main/loopCapabilities';
 import { findRepoRoot } from '../../src/main/repoKey';
 import { createSetupCheck } from '../../src/main/setupCheck';
-import { createSetupDismissals, setupDismissalsFile } from '../../src/main/setupDismissals';
+import { MAX_SETUP_DISMISSALS_BYTES, createSetupDismissals, setupDismissalsFile } from '../../src/main/setupDismissals';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { createGitUserHome, type GitUserHome } from '../helpers/gitUserHome';
@@ -185,9 +185,40 @@ describe('a dismissal that cannot be written', () => {
 
     expect({
       ok: reply.ok,
-      reason: reply.ok ? null : reply.reason.length > 0,
+      reason: reply.ok ? null : reply.error.length > 0,
       recorded: createSetupDismissals(appHome).recorded(),
     }).toEqual({ ok: false, reason: true, recorded: [] });
+  });
+
+  it('answers not ok with a reason when the app-state folder is a link that never resolves, and records nothing', () => {
+    const stateDir = dirname(setupDismissalsFile(appHome));
+    rmSync(stateDir, { recursive: true, force: true });
+    symlinkSync(stateDir, stateDir);
+
+    const reply = createSetupDismissals(appHome).record({ kind: 'repo', repoKey: '/work/unresolvable' });
+
+    expect({
+      ok: reply.ok,
+      reason: reply.ok ? null : reply.error.length > 0,
+      recorded: createSetupDismissals(appHome).recorded(),
+    }).toEqual({ ok: false, reason: true, recorded: [] });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('answers not ok with a reason when the app-state folder cannot be written to, and records nothing', () => {
+    const stateDir = dirname(setupDismissalsFile(appHome));
+    mkdirSync(stateDir, { recursive: true });
+    chmodSync(stateDir, 0o500);
+    try {
+      const reply = createSetupDismissals(appHome).record({ kind: 'repo', repoKey: '/work/read-only' });
+
+      expect({
+        ok: reply.ok,
+        reason: reply.ok ? null : reply.error.length > 0,
+        recorded: createSetupDismissals(appHome).recorded(),
+      }).toEqual({ ok: false, reason: true, recorded: [] });
+    } finally {
+      chmodSync(stateDir, 0o700);
+    }
   });
 });
 
@@ -262,4 +293,28 @@ describe('a dismissal file of the right shape holding a value of the wrong type 
       });
     });
   }
+});
+
+describe('a dismissal file over the size cap reads as no dismissals', () => {
+  it('a well-formed record padded just past the cap silences nothing', () => {
+    const record = '{"repos": ["/work/a"], "examplesVersion": null}';
+    const file = setupDismissalsFile(appHome);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, record.padEnd(MAX_SETUP_DISMISSALS_BYTES + 1, ' '));
+
+    expect(byKey(createSetupDismissals(appHome).recorded())).toEqual([]);
+  });
+});
+
+describe('dismissing one repository twice', () => {
+  it('reads that repository back once', () => {
+    const store = createSetupDismissals(appHome);
+
+    const replies = [store.record({ kind: 'repo', repoKey: '/work/a' }), store.record({ kind: 'repo', repoKey: '/work/a' })];
+
+    expect({ replies, readBack: byKey(createSetupDismissals(appHome).recorded()) }).toEqual({
+      replies: [{ ok: true }, { ok: true }],
+      readBack: ['repo:/work/a'],
+    });
+  });
 });

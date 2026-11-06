@@ -270,6 +270,10 @@ function capabilitiesSelfCheckLines(checkCommand: string): string[] {
   ];
 }
 
+const SELF_CHECK_LINES: Record<SelfCheck, (checkCommand: string) => string[]> = {
+  'loop-capabilities': capabilitiesSelfCheckLines,
+};
+
 /** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
 const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
 
@@ -312,7 +316,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   if (req.sliceBrief !== undefined) parts.push(...sliceBriefLines(req.sliceBrief, 'work'));
   if (req.goalReview !== undefined) parts.push(...req.goalReview);
   if (req.goalProgress !== undefined) parts.push(...req.goalProgress);
-  if (req.selfCheck !== undefined) parts.push(...capabilitiesSelfCheckLines(req.selfCheck.checkCommand));
+  if (req.selfCheck !== undefined) parts.push(...SELF_CHECK_LINES[req.selfCheck.kind](req.selfCheck.checkCommand));
   if (req.completion?.kind === 'file') {
     parts.push(
       '',

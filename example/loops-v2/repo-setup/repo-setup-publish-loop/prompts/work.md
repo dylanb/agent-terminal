@@ -28,6 +28,29 @@ Record each outward action in `.agent-terminal/loop/artifacts/repo-setup-publish
 its name, number or URL, under a first line `Run: <started_at>`. A redo or retry after a partial publish then
 resumes where this attempt stopped.
 
+## Stop if the operator has work in progress here
+
+If the setup step's summary (`repo-setup-summary.md`) has **Stopped** as its second line, make no branch, commit,
+push, issue or pull request. In your output, say that the setup step stopped and why. Say that the operator can
+commit, stash or unstage that work, then Terminate this run and start repo-setup again.
+
+**The setup `.gitignore`** is `HEAD`'s `.gitignore` content (empty when `HEAD` has none), plus a newline if that
+content is non-empty and does not end in one, plus the line `.agent-terminal/` and a newline. So when `HEAD` has
+no `.gitignore`, it is exactly the one line `.agent-terminal/`. Decide first whether each file exists:
+`git cat-file -e HEAD:.gitignore` for `HEAD`'s, `test -e .gitignore` for the working tree's. Both absent counts as
+matching `HEAD`. Compare contents (`git show HEAD:.gitignore` and `cmp`) only when both exist. Never compare with
+`git diff`, which shows nothing for an untracked file.
+
+Otherwise check again, because the operator may have changed things while they reviewed the setup step:
+
+- `git diff --cached --quiet` exits 0: nothing is staged.
+- `.gitignore` holds no uncommitted edit of the operator's. It matches `HEAD` (absent when `HEAD` has none, and
+  otherwise the same content), or it is exactly the setup `.gitignore`.
+
+If either check fails, make no branch, commit, push, issue or pull request. Say in your output what you found, and
+that the operator can commit, stash or unstage that work and then redo this step. This keeps the operator's own
+work out of the setup commit.
+
 ## Decide what changed
 
 Read the setup step's summary (`repo-setup-summary.md`) for the files it changed. Then check git's own view of the
@@ -58,31 +81,21 @@ repository needed no change, and stop there.
    request to it the way the rules say. Otherwise file none, and link the pull request to no issue.
 4. Make a new branch from the current commit, named by those rules, and switch to it: `git switch -c <name>`
    (skip this when resuming this run's branch, which you switched to above).
-5. Commit **only** the setup change, without touching the operator's index or working tree. The working tree can
-   hold uncommitted edits of the operator's, even in `.gitignore`, and the index can hold changes they staged.
-   Neither `git add` nor `git commit -- <paths>` can keep those out, so build the commit in a temporary index.
+5. Commit **only** the setup change.
    - When resuming this run's branch and step 2's `git log` already lists its setup commit, skip this step and go
      to step 6. Never add a second setup commit.
-   - First confirm `git symbolic-ref --short HEAD` prints this run's branch. If it does not, stop and report.
-   - Run everything that uses the temporary index as **one** shell command. A variable exported in one command
-     does not reach the next, and a `git read-tree` that runs without it overwrites the operator's real index.
-     In that one command, set `GIT_INDEX_FILE=<a temporary path outside the working tree>` with `export`, add
-     `trap 'rm -f <that path>' EXIT` so the file goes whether or not the commit succeeds, then:
-     - `git read-tree HEAD`;
-     - `.gitignore`, when it changed: stage `HEAD`'s `.gitignore` (empty when it is not in `HEAD`) plus the one
-       `.agent-terminal/` line. Write that content with `git hash-object -w --stdin` and stage the blob with
-       `git update-index --add --cacheinfo 100644,<blob>,.gitignore`;
-     - `loop-capabilities.yaml`, when this run created it: `git add -- loop-capabilities.yaml`;
-     - `git commit -m "<message>"`.
-   - If that command fails, nothing was committed and the operator's index is untouched: report the error and
-     stop.
-   - `git reset -q -- .gitignore loop-capabilities.yaml`, so the real index agrees with the new commit for those
-     two paths. Every other entry the operator had staged stays staged, and their working-tree edits stay as they
-     were.
-   - Check the result: `git show --stat HEAD` lists exactly the files you staged, no more and no fewer. When
-     `.gitignore` changed, `git show HEAD:.gitignore` is `HEAD~1`'s `.gitignore` (empty when `HEAD~1` has none)
-     plus the one `.agent-terminal/` line, which appears in it exactly once. If not, stop before pushing and report what the commit holds.
-6. Push the branch and open the pull request as a **draft** (`gh pr create --draft`), with the title and body the
+   - Confirm `git symbolic-ref --short HEAD` prints this run's branch. If it does not, stop and report.
+   - `git add --` each changed file, then `git commit -m "<message>"`. The check above means nothing else is
+     staged.
+   - If `git add` or `git commit` fails, run `git reset -q --` on the changed files. The check above proved
+     nothing was staged before, so this puts the index back exactly. Then report git's error and stop.
+6. Check the setup commit before pushing, on every path, including when step 5 was skipped. The setup commit is
+   the tip of this run's branch. Check that `git show --stat HEAD` lists exactly the changed files, no more and no
+   fewer. When `.gitignore` changed, `git show HEAD:.gitignore` must be exactly `HEAD~1`'s `.gitignore` (empty when
+   `HEAD~1` has none, decided with `git cat-file -e HEAD~1:.gitignore`), plus a newline if that content is non-empty
+   and does not end in one, plus `.agent-terminal/` and a newline. If either
+   check fails, push nothing and open no pull request: report what the commit holds and stop.
+7. Push the branch and open the pull request as a **draft** (`gh pr create --draft`), with the title and body the
    rules ask for.
 
 ## Your output

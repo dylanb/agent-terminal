@@ -1,6 +1,7 @@
-import type { ActiveFlowWriteResult, SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
+import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
 
 /** Repository keys no two of which share a path segment, so a dialog naming one cannot be read as naming
  *  another. */
@@ -44,20 +45,16 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
   entries,
 });
 
-/** The flow a repository's start runs when the dialog selected none for it. */
-export const PREVIOUS_FLOW = 'flow-selected-before';
-
 type Scripted = SetupStatusReply | { reject: string };
 type ScriptedDismiss = SetupDismissReply | { reject: string };
-type ScriptedSelection = ActiveFlowWriteResult | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
  *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
  *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
- *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. `flows` stands for the two flow
- *  requests: a selection is recorded per repository unless `answerSelection` scripted a refusal, and a start runs
- *  the flow its repository has selected, `PREVIOUS_FLOW` when nothing was selected; each `announce` is recorded. */
+ *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
+ *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued;
+ *  each `announce` is recorded. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -69,9 +66,8 @@ export function fakeSetupDeps() {
   let atInstallOpen: () => unknown = () => null;
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
-  const selected = new Map<string, string>();
-  const started = new Map<string, string>();
-  const selectionReplies: ScriptedSelection[] = [];
+  const setupRuns: string[] = [];
+  const setupRunReplies: SetupFlowRun[] = [];
   const announcements: Array<{ title: string; message: string }> = [];
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
@@ -95,14 +91,9 @@ export function fakeSetupDeps() {
     openInstallExamples: () => {
       installOpens.push(atInstallOpen());
     },
-    setActiveFlow: async (repoKey, id) => {
-      const next = selectionReplies.shift() ?? { ok: true };
-      if ('reject' in next) throw new Error(next.reject);
-      if (next.ok) selected.set(repoKey, id);
-      return next;
-    },
-    start: async (repoKey) => {
-      started.set(repoKey, selected.get(repoKey) ?? PREVIOUS_FLOW);
+    runSetupFlow: async (repoKey) => {
+      setupRuns.push(repoKey);
+      return setupRunReplies.shift() ?? { ok: true };
     },
     announce: (title, message) => {
       announcements.push({ title, message });
@@ -144,13 +135,13 @@ export function fakeSetupDeps() {
     },
     /** One record per `openInstallExamples` call, in order. */
     installOpens: (): unknown[] => [...installOpens],
-    flows: {
-      /** Queue the replies the next selections get, in order; unqueued selections are written. */
-      answerSelection(...replies: ScriptedSelection[]): void {
-        selectionReplies.push(...replies);
+    setupFlow: {
+      /** Queue the results the next `runSetupFlow` calls get, in order. */
+      answer(...results: SetupFlowRun[]): void {
+        setupRunReplies.push(...results);
       },
-      /** The flow each repository has started, by repository key. */
-      started: (): Record<string, string> => Object.fromEntries(started),
+      /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
+      runs: (): string[] => [...setupRuns],
     },
     /** Every message `announce` showed, in order. */
     announcements: (): Array<{ title: string; message: string }> => [...announcements],

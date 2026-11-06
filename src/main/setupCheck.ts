@@ -49,7 +49,10 @@ export function createSetupCheck(deps: SetupCheckDeps): SetupCheck {
       const silenced = silencedConditions(deps.dismissals.recorded(), repoKey, deps.appVersion);
       return { ...reply, entries: reply.entries.filter((entry) => !silenced.has(entry.condition)) };
     },
-    dismiss: (dismissal) => deps.dismissals.record(dismissal),
+    dismiss(dismissal) {
+      const written = deps.dismissals.record(dismissal);
+      return written.ok ? { ok: true } : { ok: false, reason: written.error };
+    },
   };
 }
 

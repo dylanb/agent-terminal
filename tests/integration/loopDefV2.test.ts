@@ -727,6 +727,12 @@ describe('resolveLoopDefV2 — a work turn can be handed a self-check (§29)', (
     expect(r.ok).toBe(false);
     expect(r.ok ? '' : r.reason).toContain('self_check');
   });
+
+  it('refuses a self-check that is a list rather than a single name', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('[loop-capabilities]'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('resolveLoopDefV2 — a reviewer with no tools list gets every tool (§27.8)', () => {

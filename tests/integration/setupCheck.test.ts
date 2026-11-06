@@ -39,7 +39,7 @@ const APP_VERSION = '4.2.0-check';
 /** A dismissal store that has recorded exactly `recorded`, and records nothing more. */
 const dismissalsOf = (...recorded: SetupDismissal[]): SetupDismissals => ({
   recorded: () => [...recorded],
-  record: () => ({ ok: false, reason: 'this store records nothing' }),
+  record: () => ({ ok: false, error: 'this store records nothing' }),
 });
 
 const realDeps: SetupCheckDeps = {
@@ -351,7 +351,7 @@ describe('dismiss() hands the dismissal to the store and answers what it answere
   });
 
   it("answers the store's failure and its reason when the store could not save it", () => {
-    const { store } = recordingStore({ ok: false, reason: 'scripted store failure' });
+    const { store } = recordingStore({ ok: false, error: 'scripted store failure' });
     const reply = createSetupCheck({ ...realDeps, dismissals: store }).dismiss({ kind: 'repo', repoKey: '/work/x' });
     expect(reply).toEqual({ ok: false, reason: 'scripted store failure' });
   });

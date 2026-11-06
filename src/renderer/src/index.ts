@@ -9,6 +9,7 @@ import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
 import { createSetupCheckDialog } from './setupCheckDialog';
+import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -360,8 +361,10 @@ if (setupCheckHost) {
       shell.setView('4');
       installExamples.open();
     },
-    setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
-    start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
+    runSetupFlow: createSetupFlowRun({
+      setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
+      start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
+    }),
     announce: (title, message) => showError({ title, message }),
     onFocusLost: landFocus,
     blockingDialogOpen: () => shell.modalIsOpen(),

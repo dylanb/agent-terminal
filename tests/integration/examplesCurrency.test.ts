@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -131,5 +131,14 @@ describe('an inspection that could not run never reads as current', () => {
     const missing = path.join(home, 'no-such-bundle');
     const broken = destinations().map((d) => (d.id === 'commands' ? { ...d, bundleDir: missing } : d));
     expect(inspectExamplesCurrency(broken)).toMatchObject({ ok: false });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('answers not ok when an installed example file cannot be read', () => {
+    const group = installed().created[0];
+    const target = destinations().find((d) => d.id === group.destination)?.targetDir;
+    if (target == null) throw new Error(`no install target for ${group.destination}`);
+    chmodSync(path.join(target, group.files[0]), 0o000);
+
+    expect(inspectExamplesCurrency(destinations())).toMatchObject({ ok: false });
   });
 });
