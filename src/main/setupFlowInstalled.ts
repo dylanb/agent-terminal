@@ -3,5 +3,6 @@ import { resolveCatalogEntry, type CatalogRoots } from './flowCatalog';
 
 /** Whether Run setup loop may start the shipped repo-setup flow for the repository at `roots.worktreeDir`. */
 export function repoSetupFlowInstalled(roots: CatalogRoots): boolean {
-  return resolveCatalogEntry(roots, REPO_SETUP_FLOW_ID, 'global').ok;
+  const resolved = resolveCatalogEntry(roots, REPO_SETUP_FLOW_ID);
+  return resolved.ok && resolved.tier === 'global';
 }

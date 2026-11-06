@@ -543,7 +543,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       void refresh();
     },
-    start: async () => {},
+    start: (key) => runAct('start', key, '').then(afterTransition(key)).catch(onActFailed),
     focusLoopReadout() {
       const el = host.querySelector<HTMLElement>('.loopstat');
       el?.focus();

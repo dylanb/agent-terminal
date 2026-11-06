@@ -926,3 +926,81 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
     }
   });
 });
+
+describe('Run setup loop with another check queued, over the real flow strip (AC18)', () => {
+  it("keeps the queued popup closed until the start's step-entry input modal has opened, so it never opens under it", async () => {
+    const promptView: FlowStateView = {
+      stepName: 'setup-entry',
+      runStarted: 'started',
+      steps: ['setup-entry'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'note', type: 'text' }], bootstrap: '' },
+    };
+    const idle: FlowStateView = { ...promptView, runStarted: 'never-started', status: 'not_started', prompt: undefined };
+    let releaseStart: () => void = () => {};
+    const startHeld = new Promise<void>((resolve) => (releaseStart = resolve));
+    const stripHost = document.body.appendChild(document.createElement('div'));
+    const inputHost = document.body.appendChild(document.createElement('div'));
+    const inputModal = createFlowInputModal(inputHost);
+    const modalsOpenWhenInputOpened: number[] = [];
+    const strip = createFlowStrip(stripHost, {
+      state: async () => idle,
+      start: () => startHeld.then(() => promptView),
+      advance: async () => promptView,
+      restart: async () => promptView,
+      undo: async () => promptView,
+      terminate: async () => idle,
+      provideInput: async () => promptView,
+      onStateChanged: () => () => {},
+      onStatusBar: () => {},
+      onPrompt: (prompt, stepName, submit) => {
+        if (prompt) modalsOpenWhenInputOpened.push(openModalDialogs(document.body));
+        inputModal.render(prompt, stepName, submit);
+      },
+    });
+    strip.onRepoChanged(REPO.alpha);
+    const fake = fakeSetupDeps();
+    fake.deps.start = (repoKey) => strip.start(repoKey);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+    await vi.waitFor(() => expect(screen.isOpen()).toBe(false));
+    releaseStart();
+
+    try {
+      await vi.waitFor(() => expect(modalsOpenWhenInputOpened).toEqual([0]));
+    } finally {
+      strip.dispose();
+      inputModal.dispose();
+    }
+  });
+});
+
+describe('Run setup loop after a dismissal rebuilds the popup, with the setup flow installed (AC12, AC18)', () => {
+  const MIXED: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+  const CASES: Array<{ press: string; offered: boolean }> = [
+    { press: "Don't show again for this repo", offered: false },
+    { press: "Don't show again until the app updates", offered: true },
+  ];
+
+  for (const { press, offered } of CASES) {
+    it(`${offered ? 'keeps' : 'removes'} it once ${press} leaves ${offered ? 'entries the flow fixes' : 'only the examples entry'} listed`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED, true));
+      const { dialog, screen } = mountDialog(fake);
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      screen.control(press).click();
+
+      await vi.waitFor(() => expect({ dismissed: screen.hasControl(press), runSetup: screen.hasControl(RUN_SETUP) }).toEqual({ dismissed: false, runSetup: offered }));
+    });
+  }
+});

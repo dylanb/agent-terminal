@@ -1,5 +1,5 @@
 import type { ActiveFlowWriteResult, SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
-import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
+import { REPO_SETUP_FLOW_ID, silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
 import { createModalShell } from './modalShell';
 
 export interface SetupCheckDialogDeps {
@@ -44,6 +44,12 @@ const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
   'not-ignored': 'Git does not ignore the .agent-terminal/ folder, so the files agent loops write there could be committed.',
   unchecked: 'The app could not check whether git ignores the .agent-terminal/ folder.',
 };
+
+/** The entries the repo-setup flow fixes; it leaves a rejected loop-capabilities.yaml untouched. */
+const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
+  (entry.condition === 'ignore' && entry.failure === 'not-ignored') || (entry.condition === 'capabilities' && entry.failure === 'absent');
+
+const SETUP_REFUSED_TITLE = 'The setup loop could not run';
 
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
@@ -156,7 +162,27 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
         const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
         if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
-        if (reply.setupFlowInstalled) button('Run setup loop', () => {});
+        const runSetupLoop = (): Promise<void> =>
+          deps.setActiveFlow(repoKey, REPO_SETUP_FLOW_ID).then(
+            (selected) => {
+              if (disposed) return;
+              confirm();
+              if (!selected.ok) {
+                settle();
+                deps.announce(SETUP_REFUSED_TITLE, selected.reason);
+                return;
+              }
+              // The queue waits for the start, so a queued popup never opens over the step-entry input modal it raises.
+              return deps.start(repoKey).finally(settle);
+            },
+            (e: unknown) => {
+              if (disposed) return;
+              confirm();
+              settle();
+              deps.announce(SETUP_REFUSED_TITLE, `The setup flow could not be selected: ${e instanceof Error ? e.message : String(e)}`);
+            },
+          );
+        if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);
         card.append(title, body, foot);
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
