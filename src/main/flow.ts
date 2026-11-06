@@ -184,10 +184,12 @@ function flowLoadOf(read: BoundedRead, file: string, label: string): FlowLoad {
 
 const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
+const MALFORMED_REPEAT = 'has a malformed repeat (needs back_to + count_input or count_from)';
+
 /** A step's `repeat` mapping as its loop-back, or the problem that fails the flow to load. `back_to` must name a
  *  step already in `earlier`: a repeat is a loop-BACK, so a forward, unknown or self target is a load error. */
 function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable<FlowStepDef['repeat']> | string {
-  if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return 'has a malformed repeat (needs back_to + count_input or count_from)';
+  if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return MALFORMED_REPEAT;
   const backTo = raw.back_to;
   const source = parseCountSource(raw.count_input, raw.count_from);
   if (typeof source === 'string') return source;
@@ -198,7 +200,7 @@ function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable
 function parseCountSource(countInput: unknown, countFrom: unknown): RepeatCountSource | string {
   if (countInput !== undefined && countFrom !== undefined) return 'has a repeat declaring both count_input and count_from (declare exactly one)';
   if (countFrom === undefined) {
-    return isNonEmptyString(countInput) ? { kind: 'input', countInput } : 'has a malformed repeat (needs back_to + count_input or count_from)';
+    return isNonEmptyString(countInput) ? { kind: 'input', countInput } : MALFORMED_REPEAT;
   }
   if (!isRecord(countFrom)) return 'has a repeat.count_from that is not a mapping of artifact + format';
   const { artifact, format, list } = countFrom;
@@ -485,8 +487,7 @@ export function createFlowMachine(
   };
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
-  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770). A list source runs
-  // its group once until a list sets the count.
+  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
   const slicesFor = (source: RepeatCountSource): number => {
     if (source.kind === 'list') return 1;
     const n = numericInput(source.countInput);
