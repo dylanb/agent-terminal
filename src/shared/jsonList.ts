@@ -21,13 +21,13 @@ export type JsonListCheck = { ok: true; titles: readonly string[] } | { ok: fals
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
-function entryProblem(entry: unknown): JsonListRule | null {
-  if (!isObject(entry)) return 'entry-object';
+function entryTitle(entry: unknown): { title: string } | { rule: JsonListRule } {
+  if (!isObject(entry)) return { rule: 'entry-object' };
   const title = entry.title;
-  if (typeof title !== 'string') return 'title-string';
-  if (title.trim().length === 0) return 'title-not-blank';
-  if (CONTROL_CHARACTER.test(title)) return 'title-no-control-character';
-  return null;
+  if (typeof title !== 'string') return { rule: 'title-string' };
+  if (title.trim().length === 0) return { rule: 'title-not-blank' };
+  if (CONTROL_CHARACTER.test(title)) return { rule: 'title-no-control-character' };
+  return { title };
 }
 
 export function checkJsonList(text: string, list: string): JsonListCheck {
@@ -44,9 +44,9 @@ export function checkJsonList(text: string, list: string): JsonListCheck {
   if (entries.length === 0) return { ok: false, rule: 'at-least-one-entry' };
   const titles: string[] = [];
   for (const [i, entry] of entries.entries()) {
-    const rule = entryProblem(entry);
-    if (rule !== null) return { ok: false, rule, position: i + 1 };
-    titles.push((entry as { title: string }).title);
+    const checked = entryTitle(entry);
+    if ('rule' in checked) return { ok: false, rule: checked.rule, position: i + 1 };
+    titles.push(checked.title);
   }
   return { ok: true, titles };
 }
