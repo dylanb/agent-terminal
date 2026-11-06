@@ -18,6 +18,41 @@ export type JsonListRule = (typeof JSON_LIST_RULES)[number];
 /** The entry titles in order, or the first rule broken, with the entry's position counted from 1 for an entry rule. */
 export type JsonListCheck = { ok: true; titles: readonly string[] } | { ok: false; rule: JsonListRule; position?: number };
 
-export function checkJsonList(_text: string, _list: string): JsonListCheck {
-  return { ok: true, titles: [] };
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
+function entryProblem(entry: unknown): JsonListRule | null {
+  if (!isObject(entry)) return 'entry-object';
+  const title = entry.title;
+  if (typeof title !== 'string') return 'title-string';
+  if (title.trim().length === 0) return 'title-not-blank';
+  if (CONTROL_CHARACTER.test(title)) return 'title-no-control-character';
+  return null;
+}
+
+export function checkJsonList(text: string, list: string): JsonListCheck {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return { ok: false, rule: 'parses' };
+  }
+  if (!isObject(doc)) return { ok: false, rule: 'top-level-object' };
+  if (!Object.prototype.hasOwnProperty.call(doc, list)) return { ok: false, rule: 'key-present' };
+  const entries = doc[list];
+  if (!Array.isArray(entries)) return { ok: false, rule: 'value-array' };
+  if (entries.length === 0) return { ok: false, rule: 'at-least-one-entry' };
+  const titles: string[] = [];
+  for (const [i, entry] of entries.entries()) {
+    const rule = entryProblem(entry);
+    if (rule !== null) return { ok: false, rule, position: i + 1 };
+    titles.push((entry as { title: string }).title);
+  }
+  return { ok: true, titles };
+}
+
+/** A well-formed `json-list` file holding `n` entries under `key`. */
+export function exampleJsonList(key: string, n: number): string {
+  const entries = Array.from({ length: n }, (_, i) => ({ title: `Entry ${i + 1}` }));
+  return `${JSON.stringify({ [key]: entries }, null, 2)}\n`;
 }

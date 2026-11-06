@@ -4,6 +4,7 @@ import {
   boundaryCommand,
   completionArtifact,
   sliceArtifact,
+  outputLocation,
   composeAppWorkPrompt,
   REPORT_SECTION_HEADING,
 } from '../../src/main/appWorkTurn';
@@ -115,6 +116,25 @@ describe('sliceArtifact (§28.4 D1 — per-slice result-artifact identity)', () 
     expect(sliceArtifact(a, 0)).toEqual(a);
     expect(sliceArtifact(a, 1.5)).toEqual(a);
     expect(sliceArtifact(a, Number.NaN)).toEqual(a);
+  });
+});
+
+describe('outputLocation — where a work turn on an iteration writes an output', () => {
+  const red = def({
+    work: { recipe: '/abs/prompts/work.md', artifact: 'red-result' },
+    outputs: [binding('red-result', 'red-result.json'), binding('plan', 'plan.md')],
+  });
+
+  it('names the work artifact by its iteration from slice 2 on', () => {
+    expect(outputLocation(red, 'red-result', 2)).toEqual(artifactOf('red-result.slice-2.json'));
+  });
+
+  it('keeps every other output at its binding on any iteration', () => {
+    expect(outputLocation(red, 'plan', 2)).toEqual(artifactOf('plan.md'));
+  });
+
+  it('is null for an id the loop declares no output for', () => {
+    expect(outputLocation(red, 'steps', 2)).toBeNull();
   });
 });
 

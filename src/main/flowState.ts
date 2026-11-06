@@ -32,6 +32,13 @@ export interface PersistedFlowState {
    *  reached), so a relaunch resumes the correct impl-slice instead of restarting the loop. Keyed by step
    *  id; each value a positive integer. Absent for a flow with no repeat steps or none yet reached. */
   repeatCounts?: Record<string, number>;
+  /** §28.4.1 — the list a source approve last sourced the repeat's count from: its raw entry count, clamped where
+   *  it is used. Absent until a source approve sources one. */
+  repeatList?: RepeatListRecord;
+}
+
+export interface RepeatListRecord {
+  count: number;
 }
 
 export interface FlowStateStore {
@@ -52,7 +59,7 @@ const AGENT_DIR = FLOW_HOME_SUBDIR;
 const STATE_LEAF = 'flow-state.yaml';
 const STATE_REL = path.join(AGENT_DIR, STATE_LEAF);
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
-const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'flow', 'title', 'repeat_counts']);
+const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'flow', 'title', 'repeat_counts', 'repeat_list']);
 
 /** The legality gate for a persisted progression's `status`: the one vocabulary the store's `decode` and the
  *  `worktreeStartedness` safety accessor both classify against, so a status one reader rejects the other cannot
@@ -102,6 +109,12 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   const out: Record<string, number> = Object.create(null); // null-proto: a `__proto__` key stores as own data
   for (const [k, v] of Object.entries(raw)) if (isRepeatCount(v)) out[k] = v;
   return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Null unless `raw` is a record whose `count` is a positive integer: a repo can plant flow-state.yaml, and no
+ *  record fails toward the single pass. */
+function readRepeatList(raw: unknown): RepeatListRecord | null {
+  return isRecord(raw) && isRepeatCount(raw.count) ? { count: raw.count } : null;
 }
 
 /** §18.7.6 (CWE-400) — the progression read is byte-bounded like the pointer's. */
@@ -161,6 +174,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     const flow = readFlowName(doc.flow);
     const title = normalizeTitle(doc.title);
     const repeatCounts = readRepeatCounts(doc.repeat_counts);
+    const repeatList = readRepeatList(doc.repeat_list);
     return {
       step: doc.step,
       status: doc.status as FlowStatus,
@@ -169,6 +183,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(flow !== null ? { flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(repeatCounts ? { repeatCounts } : {}),
+      ...(repeatList ? { repeatList } : {}),
     };
   };
 
@@ -181,6 +196,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     if (doc.flow !== undefined && readFlowName(doc.flow) === null) return null;
     if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
     if (doc.repeat_counts !== undefined && !(isRecord(doc.repeat_counts) && Object.values(doc.repeat_counts).every(isRepeatCount))) return null;
+    if (doc.repeat_list !== undefined && readRepeatList(doc.repeat_list) === null) return null;
     return progression;
   };
 
@@ -201,6 +217,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(state.flow !== undefined ? { flow: state.flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(hasRepeatCounts ? { repeat_counts: state.repeatCounts } : {}),
+      ...(state.repeatList ? { repeat_list: { count: state.repeatList.count } } : {}),
     });
   };
 

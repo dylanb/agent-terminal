@@ -58,6 +58,15 @@ export function sliceArtifact(artifact: { path: string; rel: string }, slice: nu
   return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
 }
 
+/** Where `def`'s work turn on iteration `slice` writes its output `id`: the work artifact under its per-slice name,
+ *  any other output at its binding. Null when `def` declares no output `id`. */
+export function outputLocation(def: LoopDefV2, id: string, slice: number): { path: string; rel: string } | null {
+  const binding = def.outputs.find((o) => o.id === id);
+  if (binding === undefined) return null;
+  const at = { path: binding.path, rel: binding.rel };
+  return id === def.work.artifact ? sliceArtifact(at, slice) : at;
+}
+
 /** Whether the artifact is well-formed (§27.12): present AND carrying the marker. `content` is the domain
  *  concept "the artifact's content" (null = absent/unreadable) — the fs read is the caller's, so this stays
  *  a pure predicate. */

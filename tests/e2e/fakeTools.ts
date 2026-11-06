@@ -216,6 +216,9 @@ export interface StepScript {
   work: FakeWorkMode;
   // `complete` copies this file to `artifactRel` instead of writing its own; the file carries the marker itself.
   artifactSource?: string;
+  // Writes the work artifact the prompt names in place of `artifactRel`: a loop-back re-entry (slice N>1) names
+  // its own `.slice-N` file.
+  promptedArtifact?: boolean;
   // Holds this step's work turns (only the `turn`-th, when `hold.turn` is set) while the `sentinel` file exists. The held turn runs in the background
   // (the agent keeps reading its input) and first appends its pid to `<sentinel>.pids`; then, polled every
   // 50 ms: `<sentinel>.abandon` present → exits with no action; the sentinel gone → does the `work` action;
@@ -301,13 +304,14 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const sections = opts.sections ?? PLAN_V2_SECTIONS;
   const count = (key: string, v: string): string => `${v}=$(turn_count ${shellQuote(key)})`;
   const marker = completionMarker(stepId);
+  const art = opts.promptedArtifact === true ? '"$ART"' : opts.artifactRel;
   const writeArtifact = (withMarker: boolean): string =>
-    `mkdir -p "$(dirname ${opts.artifactRel})"; ` +
+    `mkdir -p "$(dirname ${art})"; ` +
     (withMarker
       ? opts.artifactSource === undefined
-        ? `printf '%s\\n' '# plan' '${marker}' > ${opts.artifactRel}`
-        : `cp ${shellQuote(opts.artifactSource)} ${opts.artifactRel}`
-      : `printf '%s\\n' '# plan' 'no marker here' > ${opts.artifactRel}`);
+        ? `printf '%s\\n' '# plan' '${marker}' > ${art}`
+        : `cp ${shellQuote(opts.artifactSource)} ${art}`
+      : `printf '%s\\n' '# plan' 'no marker here' > ${art}`);
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
   // §28.5.5 — the RED work turn: (optionally) author a test-glob file, then write the phase-result file the
   // completion:red gate classifies, from the ONE canonical examplePhaseResult. The test file sits OUTSIDE
@@ -426,6 +430,9 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; r=$(rnd); mkdir -p .agent-terminal/loop/reports; ` +
       `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.json ;;\n`
     : '';
+  const promptedArt = scripts.some(([, s]) => s.promptedArtifact === true)
+    ? '  case "$line" in *"As the final line of your "*) t=${line#*As the final line of your }; ART=${t%% artifact*} ;; esac\n'
+    : '';
   const logInjected = scripts.some(([, s]) => s.logInjected === true)
     ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n'
     : '';
@@ -436,6 +443,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     'while IFS= read -r line; do\n' +
     logInjected +
     '  [ -z "$line" ] && continue\n' +
+    promptedArt +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     repairArm +

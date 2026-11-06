@@ -98,7 +98,7 @@ import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { createAgentQuestion } from './agentQuestion';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
-import { sliceCountToSource } from '../shared/slicePlan';
+import { createRepeatSourcer } from './repeatSourcing';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -1141,16 +1141,16 @@ async function createWindow(): Promise<void> {
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
-    // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, the last
-    // one winning: the polished plan, then any RED that split its own slice. resolveInputs sets the input WITHOUT
-    // re-entering the step (re-entering a planning step here would restart its loop).
-    sourceSliceCount: (repoDir, def) => {
-      const planBinding = def.outputs.find((o) => o.id === 'plan');
-      if (planBinding === undefined) return;
-      const planText = readLoopArtifact(planBinding.path) ?? '';
-      const count = sliceCountToSource(planText, flow.currentSlice(repoDir));
-      if (count !== null) flow.resolveInputs(repoDir, { slices: String(count) });
-    },
+    // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, and every
+    // approve whose def outputs a list-form repeat's `count_from.artifact` re-sources its list, the last one winning.
+    sourceSliceCount: createRepeatSourcer({
+      flow,
+      readArtifact: readLoopArtifact,
+      repeatOf: (repoDir) => {
+        const load = resolveActiveDefinition(repoDir);
+        return load.ok ? load.definition.steps.find((st) => st.repeat !== undefined)?.repeat : undefined;
+      },
+    }),
     // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
     reopenSlice: (repoDir, reopened) => reopenSliceFlow(repoDir, reopened),
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.

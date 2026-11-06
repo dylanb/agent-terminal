@@ -144,6 +144,12 @@ describe('A JSON list sets the count', () => {
     const text = JSON.stringify({ steps: distinctTitles(2).map((title) => ({ title })), items: distinctTitles(3).map((title) => ({ title })) });
     expect(await runFromStart(r, 'design-out', { design: always(text) })).toEqual(sequence(['design'], 3));
   });
+
+  it('a file that starts with a UTF-8 byte-order mark is judged on the rest', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    const withBom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(list(3))]);
+    expect(await runFromStart(r, 'steps', { design: always(withBom) })).toEqual(sequence(['design'], 3));
+  });
 });
 
 describe('The §28.4.1 bounds hold for a JSON list', () => {
@@ -191,6 +197,19 @@ describe('Every source approve re-sources', () => {
     };
     expect.soft(await approveDesign(null)).toEqual({ slices: '3', seen: sequence(['design'], 1) });
     expect.soft(await approveDesign(list(2))).toEqual({ slices: '3', seen: sequence(['design'], 2) });
+  });
+
+  it.each([
+    ['a 3-slice plan sets both the list count and the slices input', exampleSlicePlan(3), '3', 3],
+    ['a malformed plan sources neither', '## Impl-slices\n', undefined, 1],
+  ] as const)('a list-form repeat whose count_from artifact is plan: %s', async (_name, text, slices, times) => {
+    const fromPlan: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'plan', format: 'impl-slices' } };
+    const r = rig(flowSpec(fromPlan, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    leave(r.driver.outputPath('plan', 'plan'), text);
+    await r.driver.approve('plan');
+    const sourced = createFlowStateStore(r.repo).read()?.inputs?.slices;
+    expect({ slices: sourced, seen: ['plan', ...(await play(r, 'plan', {}))] }).toEqual({ slices, seen: sequence(['plan'], times) });
   });
 
   it("the count_from artifact sources the count when the source loop's work artifact is another output", async () => {

@@ -9,7 +9,7 @@ import yaml from 'js-yaml';
 import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
-import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { createFlowStateStore, type FlowStateStore, type RepeatListRecord } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
@@ -359,6 +359,9 @@ export interface FlowMachine {
    *  to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering the planning step would
    *  restart its loop. Legal only while a step is in_progress. */
   resolveInputs(values: Record<string, string>): MachineView;
+  /** §28.4.1 — record the list a source approve sourced the repeat's count from, WITHOUT re-entering the current
+   *  step (the `resolveInputs` rule). Legal only while a step is in_progress. */
+  sourceRepeatList(list: RepeatListRecord): MachineView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
@@ -414,6 +417,7 @@ export function createFlowMachine(
       terminate: view,
       provideInput: view,
       resolveInputs: view,
+      sourceRepeatList: view,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
         return view();
@@ -447,6 +451,8 @@ export function createFlowMachine(
   // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
   // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
   let repeatCounts: Record<string, number> = Object.create(null);
+  // §28.4.1 — the list-form repeat's sourced list; cleared exactly when repeatCounts is.
+  let repeatList: RepeatListRecord | null = null;
   // §22.3.1.
   let userTitle: string | null = null;
   let identity: RunIdentity | null = null;
@@ -461,6 +467,7 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     repeatCounts = Object.create(null);
+    repeatList = null;
     identity = null;
     const persisted = store.read();
     if (persisted) {
@@ -471,6 +478,7 @@ export function createFlowMachine(
       if (persisted.startedAt !== undefined && persisted.flow !== undefined) identity = { startedAt: persisted.startedAt, flow: persisted.flow };
       if (persisted.inputs) inputs = { ...persisted.inputs };
       if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
+      repeatList = persisted.repeatList ?? null;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -489,7 +497,7 @@ export function createFlowMachine(
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
   // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
   const slicesFor = (source: RepeatCountSource): number => {
-    if (source.kind === 'list') return 1;
+    if (source.kind === 'list') return repeatList === null ? 1 : Math.min(repeatList.count, MAX_SLICES);
     const n = numericInput(source.countInput);
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
@@ -565,6 +573,7 @@ export function createFlowMachine(
       ...(identity !== null ? { startedAt: identity.startedAt, flow: identity.flow } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
+      ...(repeatList !== null ? { repeatList } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
   };
@@ -634,6 +643,7 @@ export function createFlowMachine(
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
       repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
+      repeatList = null;
       persist();
       return enter(view());
     },
@@ -653,6 +663,7 @@ export function createFlowMachine(
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
+        repeatList = null;
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -677,6 +688,7 @@ export function createFlowMachine(
       status = 'not_started';
       inputs = {};
       repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
+      repeatList = null;
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
@@ -691,6 +703,12 @@ export function createFlowMachine(
       inputs = { ...inputs, ...values };
       persist();
       return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
+    },
+    sourceRepeatList: (list) => {
+      requireStatus('in_progress', 'sourceRepeatList');
+      repeatList = { count: list.count };
+      persist();
+      return view();
     },
     setTitle: (text) => {
       hydrate(); // §19.1
@@ -734,6 +752,9 @@ export interface FlowManager {
   /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
    *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
   resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
+  /** §28.4.1 — record the list a source approve sourced a repo's repeat count from, WITHOUT re-entering the
+   *  current step. Delegates to the machine keyed by `repoKey`. */
+  sourceRepeatList(repoKey: string, list: RepeatListRecord): FlowStateView;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -913,6 +934,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     },
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
     resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
+    sourceRepeatList: (k, list) => viewOf(k, (m) => m.sourceRepeatList(list)),
     setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }

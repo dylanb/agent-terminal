@@ -116,6 +116,64 @@ describe('§28.4 slice D — per-slice result-artifact identity', () => {
     expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.json');
     expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.json');
   });
+
+  it('a work turn redone at its gate while the run is on slice 2 names the slice-2 artifact', () => {
+    h.defResult = resolved(fileDef());
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    driveFromWorkToGate(engine);
+    h.currentSliceResult = 2;
+    expect(engine.redo(h.repo, STEP, CONSOLIDATE_KEY, 'Redo the plan.')).toBe(true);
+    engine.onInjectable();
+    engine.onInjectable();
+    const workPrompt = h.injected[h.injected.length - 1];
+    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/plan.slice-2.md');
+    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/plan.md');
+  });
+
+  it('the review round of a work turn on slice 2 names the slice-2 artifact as its subject', () => {
+    h.defResult = resolved(fileDef());
+    const engine = makeEngine();
+    h.currentSliceResult = 2;
+    engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance', { slice: 2 });
+    engine.onInjectable();
+    mkdirSync(join(h.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+    writeFileSync(join(h.repo, '.agent-terminal', 'loop', 'artifacts', 'plan.slice-2.md'), `# plan\n${completionMarker(STEP)}\n`);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    const reviewPrompt = h.injected[h.injected.length - 1];
+    expect(reviewPrompt).toContain('.agent-terminal/loop/artifacts/plan.slice-2.md');
+    expect(reviewPrompt).not.toContain('.agent-terminal/loop/artifacts/plan.md');
+  });
+
+  it.each([
+    ['accepts the slice-2 artifact', 'plan.slice-2.md', 'complete'],
+    ['refuses slice 1\'s artifact', 'plan.md', 'error'],
+  ] as const)('a work turn resumed after a relaunch on slice 2 %s', (_name, leaf, status) => {
+    h.defResult = resolved(fileDef());
+    writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    mkdirSync(join(h.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+    writeFileSync(join(h.repo, '.agent-terminal', 'loop', 'artifacts', leaf), `# plan\n${completionMarker(STEP)}\n`);
+    const engine = makeEngine();
+    h.currentSliceResult = 2;
+    engine.resume(h.repo);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    expect(readAppLoopState(h.repo)?.status).toBe(status);
+  });
+
+  it('a work turn retried after a relaunch while the run is on slice 2 names the slice-2 artifact', () => {
+    h.defResult = resolved(fileDef());
+    writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    const engine = makeEngine();
+    h.currentSliceResult = 2;
+    engine.resume(h.repo);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    const workPrompt = h.injected[h.injected.length - 1];
+    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/plan.slice-2.md');
+    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/plan.md');
+  });
 });
 
 // §28.4.2 — a back-to-RED brief reaches every turn of the reopened slice's RED/GREEN/refactor loops: the work

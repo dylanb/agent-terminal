@@ -56,7 +56,7 @@ export function repeatListAgent(repo: string, opts: { designSource: string; hold
     ...Object.fromEntries(
       WORK_STEPS.map((id): [string, StepScript] => [
         id,
-        { artifactRel: work, work: 'complete', logInjected: true, ...(id === 'build' && opts.holdBuild !== undefined ? { hold: opts.holdBuild } : {}) },
+        { artifactRel: work, work: 'complete', promptedArtifact: true, logInjected: true, ...(id === 'build' && opts.holdBuild !== undefined ? { hold: opts.holdBuild } : {}) },
       ]),
     ),
   };

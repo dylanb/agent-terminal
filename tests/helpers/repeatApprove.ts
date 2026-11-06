@@ -5,6 +5,7 @@
 import { HUMAN_DECIDER, runAppApprove, stepScopedAdvance, type AppGateDecisionDeps, type GateApproveOutcome } from '../../src/main/appGateDecision';
 import type { FlowManager } from '../../src/main/flow';
 import { resolveLoopDefV2, type LoopDefV2Context } from '../../src/main/loopDefV2';
+import { outputLocation } from '../../src/main/appWorkTurn';
 import type { FlowSpec } from './flowFixtures';
 
 export interface AuditLine {
@@ -15,7 +16,8 @@ export interface AuditLine {
 export interface ApproveDriver {
   /** Approves the gate of `step`, the step the flow is on, as a person does. */
   approve(step: string): Promise<GateApproveOutcome>;
-  /** The path the loop of `step` binds its output `id` to, as the resolved definition the engine reads gives it. */
+  /** The path the work turn of `step` writes its output `id` to on the iteration the run is on, from the resolver
+   *  the engine's work turn uses. */
   outputPath(step: string, id: string): string;
   /** Every §25 command entry the approves recorded, in order. */
   readonly audits: readonly AuditLine[];
@@ -83,9 +85,9 @@ export function createApproveDriver(opts: {
       return runAppApprove(repoDir, step, `work-${step}`, deps, HUMAN_DECIDER);
     },
     outputPath(step, id) {
-      const binding = resolved(step).def.outputs.find((o) => o.id === id);
-      if (binding === undefined) throw new Error(`createApproveDriver: the loop of ${step} declares no output ${id}`);
-      return binding.path;
+      const at = outputLocation(resolved(step).def, id, flow.currentSlice(repoDir));
+      if (at === null) throw new Error(`createApproveDriver: the loop of ${step} declares no output ${id}`);
+      return at.path;
     },
     audits,
   };
