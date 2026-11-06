@@ -34,6 +34,7 @@ import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRoun
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import type { TicketRef } from '../shared/appBootstrap';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
@@ -70,7 +71,11 @@ export type AppLoopEnterResult = 'entered' | 'busy' | 'unresolved';
 export type AppLoopErrorKind = 'turn-error' | 'def-unresolvable';
 
 /** §27.10 */
-export type PickupBranch = { kind: 'none' } | { kind: 'branch'; branch: string } | { kind: 'unreadable'; detail: string };
+export type PickupBranch =
+  | { kind: 'none' }
+  | { kind: 'branch'; branch: string }
+  | { kind: 'fix-branch'; branch: string; pr: number; primary: TicketRef }
+  | { kind: 'unreadable'; detail: string };
 
 /** The live in-memory error of the §27 work turn, surfaced to the view when the persisted error write
  *  failed (ENOSPC/EPERM/a planted symlink) so the route-out is never a dead-end (§27.12c). */
@@ -1087,12 +1092,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return `cannot check this turn's branch against the one pickup created: ${pickup.detail}; repair the pickup record and retry, or terminate the run`;
     }
     const expected = pickup.branch;
+    const whose =
+      pickup.kind === 'fix-branch'
+        ? `the fix branch this run created to review PR #${pickup.pr} for ${pickup.primary.repo}#${pickup.primary.number}`
+        : 'the branch pickup created for this run';
     const current = deps.currentBranch(repoDir);
     if (!current.ok) {
-      return `cannot read the worktree's branch to check it against ${expected}, the branch pickup created for this run: ${current.detail}; fix the worktree and retry`;
+      return `cannot read the worktree's branch to check it against ${expected}, ${whose}: ${current.detail}; fix the worktree and retry`;
     }
     if (current.branch === expected) return null;
-    return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
+    return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, ${whose}; check out ${expected} and retry`;
   };
 
   // §27.4 — read once per turn, so the reviewer check and the prompts it composes name the same agent.

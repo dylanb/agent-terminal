@@ -82,15 +82,15 @@ export function resolveAppGateRefs(
   trustedBootstrap: RunPickup | null,
 ): AppGateRefs {
   if (trustedBootstrap !== null && isAdoptedPickup(trustedBootstrap)) {
-    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.primary.number, bootstrap: null };
+    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.primary.number, pickup: trustedBootstrap };
   }
   if (trustedBootstrap !== null) {
-    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.issue, bootstrap: trustedBootstrap };
+    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.issue, pickup: trustedBootstrap };
   }
   return {
     pr: flowRefs?.pr ?? null,
     ticket: flowRefs?.ticket ?? null,
-    bootstrap: null,
+    pickup: null,
   };
 }
 
@@ -102,11 +102,17 @@ export function resolvePickupBranch(
   flowPr: number | null = null,
 ): PickupBranch {
   if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
-  if (trustedBootstrap !== null) return { kind: 'branch', branch: pickupBranchOf(trustedBootstrap) };
+  if (trustedBootstrap !== null) return heldTo(trustedBootstrap);
   if (record.kind !== 'complete') return { kind: 'none' };
   const recorded = record.bootstrap;
   const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flowPr : recorded.issue === flowTicket;
-  return forThisFlow ? { kind: 'branch', branch: pickupBranchOf(recorded) } : { kind: 'none' };
+  return forThisFlow ? heldTo(recorded) : { kind: 'none' };
+}
+
+function heldTo(pickup: RecordedPickup): PickupBranch {
+  return isAdoptedPickup(pickup)
+    ? { kind: 'fix-branch', branch: pickup.fixBranch, pr: pickup.pr, primary: { ...pickup.primary } }
+    : { kind: 'branch', branch: pickup.branch };
 }
 
 /** The branch a run's turns are held to: the ticket run's pickup branch, or the adopted run's fix branch. */

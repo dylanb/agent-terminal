@@ -19,7 +19,7 @@ import {
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from '../../src/main/bootstrapPorts';
-import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
+import type { AdoptedPickup, AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { BUSY_NOTICE } from '../../src/main/flowEntryActions';
 
 const PREEXISTING_OID = 'a'.repeat(40);
@@ -964,23 +964,23 @@ describe('resolveAppGateRefs — live bootstrap identity routing', () => {
   };
 
   it('supplies the generated PR to the matching ticket gate', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('keeps the accepted issue authoritative over mutable flow refs', () => {
-    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('keeps the accepted bootstrap PR authoritative over mutable flow state', () => {
-    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('carries the accepted identity into the gate side-effect context', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, identity).bootstrap).toBe(identity);
+    expect(resolveAppGateRefs({ ticket: 78 }, identity).pickup).toBe(identity);
   });
 
   it('reports no identity to the gate when nothing was accepted', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, bootstrap: null });
+    expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, pickup: null });
   });
 });
 
@@ -1007,6 +1007,29 @@ describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s i
     const invalid = { kind: 'invalid', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' } as const;
     expect(resolvePickupBranch(invalid, null, 77)).toEqual({ kind: 'unreadable', detail: invalid.detail });
     expect(resolvePickupBranch(invalid, accepted, 78)).toEqual({ kind: 'unreadable', detail: invalid.detail });
+  });
+
+  it("holds an adopting run to its fix branch, naming the PR and the primary ticket with its repository, before and after a relaunch (#304 AC 5)", () => {
+    const adopted: AdoptedPickup = {
+      kind: 'adopted',
+      pr: 41,
+      fixBranch: 'agent-terminal/review-pr-41-1700000000000',
+      startedAt: 1_700_000_000_000,
+      headRef: 'feature/reviewed-change',
+      baseRef: 'main',
+      headRepo: 'contributor/fork',
+      crossRepository: true,
+      tickets: [{ repo: 'owner/repo', number: 176 }],
+      primary: { repo: 'owner/repo', number: 176 },
+      headOid: 'a'.repeat(40),
+      baseOid: 'b'.repeat(40),
+    };
+    const held = { kind: 'fix-branch', branch: adopted.fixBranch, pr: 41, primary: { repo: 'owner/repo', number: 176 } };
+    const record = { kind: 'complete', bootstrap: adopted } as const;
+
+    expect.soft(resolvePickupBranch({ kind: 'none' }, adopted, null, 41)).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, null, 41)).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, null, 42)).toEqual({ kind: 'none' });
   });
 });
 

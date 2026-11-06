@@ -220,7 +220,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const approveDepsFor = (): AppGateDecisionDeps => ({
     readRunState: (dir) => readAppLoopState(dir),
     resolveDef: (dir, name) => resolveLoopDefV2(name, ctxFor(dir)),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' }),
     runPushSideEffect: async () => {},

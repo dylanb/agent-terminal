@@ -73,7 +73,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        bootstrap: {
+        pickup: {
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
@@ -97,7 +97,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        bootstrap: {
+        pickup: {
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
@@ -113,7 +113,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       pr: 42,
       ticket: null,
       bodyFile: null,
-      bootstrap: null,
+      pickup: null,
     });
     expect(g.state.ready).toEqual(new Set([42]));
   });
@@ -132,7 +132,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       pr: 42,
       ticket: 78,
       bodyFile,
-      bootstrap: {
+      pickup: {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -149,7 +149,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       pr: 99,
       ticket: null,
       bodyFile,
-      bootstrap: null,
+      pickup: null,
     });
     expect(g.state.pullRequestBodies).toEqual(
       new Map([[99, { bodyFile, closingIssue: null }]]),
@@ -159,15 +159,15 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
   it('has nothing to act on without a PR or issue, and mutates nothing (§27.13)', async () => {
     const g = githubState();
     const run = createAppGateGitHub(g.github);
-    await expect(run('mark-ready', { pr: null, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({
+    await expect(run('mark-ready', { pr: null, ticket: null, bodyFile: null, pickup: null })).resolves.toEqual({
       outcome: 'no-target',
       reason: expect.stringMatching(/no PR/),
     });
-    await expect(run('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+    await expect(run('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x', pickup: null })).resolves.toEqual({
       outcome: 'no-target',
       reason: expect.stringMatching(/no PR/),
     });
-    await expect(run('update-issue-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+    await expect(run('update-issue-body', { pr: null, ticket: null, bodyFile: '/x', pickup: null })).resolves.toEqual({
       outcome: 'no-target',
       reason: expect.stringMatching(/no issue/),
     });
@@ -178,14 +178,14 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
 
   it('reports a side-effect that acted as done', async () => {
     const g = githubState();
-    await expect(createAppGateGitHub(g.github)('mark-ready', { pr: 7, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({ outcome: 'done' });
+    await expect(createAppGateGitHub(g.github)('mark-ready', { pr: 7, ticket: null, bodyFile: null, pickup: null })).resolves.toEqual({ outcome: 'done' });
     expect(g.state.ready).toEqual(new Set([7]));
   });
 
   it('fails without mutating GitHub when the body artifact is absent', async () => {
     const g = githubState();
     await expect(
-      createAppGateGitHub(g.github)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null, bootstrap: null }),
+      createAppGateGitHub(g.github)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null, pickup: null }),
     ).rejects.toThrow(/body artifact/);
     expect(g.state.pullRequestBodies).toEqual(new Map());
   });
@@ -197,7 +197,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 1,
         ticket: 1,
         bodyFile: '/x',
-        bootstrap: null,
+        pickup: null,
       }),
     ).rejects.toThrow(/unknown approve side-effect action/);
     expect(g.state.ready).toEqual(new Set());
@@ -211,7 +211,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       pr: 42,
       ticket: 78,
       bodyFile: null,
-      bootstrap: {
+      pickup: {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -228,7 +228,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       pr: 42,
       ticket: 78,
       bodyFile,
-      bootstrap: {
+      pickup: {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -247,7 +247,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        bootstrap: { pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
+        pickup: { pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
       }),
     ).rejects.toThrow(/pull request #42 is from another repository/);
     expect(g.state.ready).toEqual(new Set());
@@ -266,7 +266,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        bootstrap: {
+        pickup: {
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
