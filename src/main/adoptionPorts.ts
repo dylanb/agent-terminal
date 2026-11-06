@@ -141,7 +141,7 @@ export function createRealAdoptionGit(repoDir: string): AdoptionGit {
       // A PR's files never replace the app's own git-ignored state: git refuses the switch instead.
       await git(
         ['switch', '--no-overwrite-ignore', '--', branch],
-        `could not check out fix branch ${branch}: git refuses when the pull request tracks a file this working tree holds as an ignored file, which a run never overwrites; Terminate the run, since this pull request cannot be adopted over that file`,
+        `could not check out fix branch ${branch}. Git refuses this when the pull request tracks a file this working tree holds as an ignored file, which a run never overwrites, and a run cannot adopt that pull request while the file is here; any other cause may pass, so starting the step again retries it`,
       );
     },
     rollback: async (branch, oid) => {
