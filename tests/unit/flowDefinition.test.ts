@@ -282,6 +282,10 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(loadFlowDefinition(dir).ok).toBe(false); // missing count_input
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
     expect(loadFlowDefinition(dir).ok).toBe(false); // missing back_to
+    writeFlow("name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: ''\n");
+    expect(loadFlowDefinition(dir).ok).toBe(false); // empty count_input
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: 42\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // non-string count_input
   });
 });
 
