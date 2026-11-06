@@ -9,10 +9,20 @@ import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal, ControllerClearTarget, ControllerClearOutcome, ControllerTimelineEntry } from '../shared/ipc';
 import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createControllerTimelines } from './controllerTimeline';
-import { createWorktreeLock } from './worktreeLock';
+import { createWorktreeLock, type LockRefusalWording } from './worktreeLock';
 import { isErrno } from './errno';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
+
+const CONTROLLER_LOCK_WORDING: LockRefusalWording = {
+  held: holder =>
+    `An Agent Terminal controller is already running${holder ? ` (process ${holder.pid})` : ''}. ` +
+    'Quit it from its tray icon, then launch this controller again.',
+  unidentified: target =>
+    'The controller endpoint is held by a process that cannot be identified. If no Agent Terminal controller is ' +
+    `running, delete ${target} and launch again.`,
+  unusable: detail => `The controller endpoint could not be claimed: ${detail}`,
+};
 
 export interface ControllerRegistry {
   /** Returned and delivered snapshots are detached values owned by the caller. */
@@ -33,7 +43,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid?.() || (directoryStat.mode & 0o777) !== 0o700) {
     throw new Error('The controller endpoint directory must be owned by the current user with permissions 0700.');
   }
-  const ownership = createWorktreeLock({ lockRoot: directory }).acquire(endpoint);
+  const ownership = createWorktreeLock({ lockRoot: directory, wording: CONTROLLER_LOCK_WORDING }).acquire(endpoint);
   if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
   const registrations = new Map<WebSocket, ControllerTerminal>();
