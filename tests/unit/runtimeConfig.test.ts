@@ -9,8 +9,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_QUIET_MS: '-5' }).quietMs).toBe(1000);
   });
 
-  it('defaults the loop stall watchdog to ten minutes and parses an override (§27.12/D48)', () => {
-    expect(resolveRuntimeConfig({}).stallTimeoutMs).toBe(600_000);
+  it('defaults the loop stall watchdog to thirty minutes and parses an override (§27.12/D48)', () => {
+    expect(resolveRuntimeConfig({}).stallTimeoutMs).toBe(1_800_000);
     expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: '4000' }).stallTimeoutMs).toBe(4000);
     expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: 'nope' }).stallTimeoutMs).toBe(
       resolveRuntimeConfig({}).stallTimeoutMs,

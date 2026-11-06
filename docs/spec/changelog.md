@@ -1,3 +1,11 @@
+## Stalled loop turns resume from the gate question
+
+§27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:
+
+- the question on a halt over a resumable stall names the turn's key and done-file and tells a still-working agent to answer, then finish the turn and write its done-file, which resumes the loop;
+- every turn prompt tells the agent to run long commands in the foreground, splitting one that exceeds its tool's time limit;
+- the stall watchdog defaults to thirty minutes (`APP_TURN_TIMEOUT_MS` still overrides it).
+
 ## #301 — The controller's branch re-read is configurable and defaults to five minutes
 
 §23.6: a terminal re-read its git branch for the controller card every second, starting a `git` process each time. It now re-reads it every `APP_BRANCH_REFRESH_MS` (default 300000 ms, five minutes) and still reads it at once when the terminal's current repository changes. A branch switch inside the same repository can therefore take up to that interval to appear on the card, the one exception to §23.6's two-second publication. No IPC or protocol change.
