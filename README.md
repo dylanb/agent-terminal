@@ -21,6 +21,18 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 
 ![The Agent Terminal window: the flow rail on the left at step 13 of 15 (impl-approve) with the loop awaiting a decision, Claude Code working in the terminal in the centre under a red "Loop needs you" status bar, and the Todo overlay on the right listing review questions to send to the agent](docs/images/screenshot.png)
 
+## Getting started
+
+**Prerequisite:** install both apps and the tools they need, as described in [Install](#install), including [Before you use it](#before-you-use-it).
+
+1. **Launch the controller and Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
+2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux, read [The `agent-terminal` command](#the-agent-terminal-command) first: the `.deb` needs `~/.local/bin` on your `PATH`, and an AppImage alone cannot keep a working command.
+3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
+4. **Pick a flow and start it.** Open a terminal in your repo (`agent-terminal ~/path/to/repo`), choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`.
+5. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
+
+For what each bundled flow does, which one fits your ticket, and what you decide at each gate, see [Bundled flows](#bundled-flows).
+
 ## Features
 
 ### Terminal and agent hosting
@@ -60,7 +72,7 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 
 ### Human in the loop
 
-- **Gates.** A gate is `auto` (the engine decides and falls back to you if it can't or takes longer than `APP_AUTO_GATE_DECISION_MS`) or `human`. In `feature-dev-v3`, `groom-approve`, `plan-approve`, `impl-approve` and `finalize` are human gates; the rest are auto-gated. Merging is always left to a person.
+- **Gates.** A gate is `auto` (the engine decides and falls back to you if it can't or takes longer than `APP_AUTO_GATE_DECISION_MS`) or `human`. In `feature-dev-v3`, `groom-approve`, `plan-approve`, `impl-approve` and `finalize` are human gates; `preparation` is a manual step and the rest are auto-gated. Merging is always left to a person.
 - **Gate options.** approve, request-changes, impasse, redo, polish, and **Back to RED** (with an optional slice brief).
 - **Hand back to me.** Returns an iterating loop to you at the next consolidation.
 - **Decision boundaries.** Briefs state what the agent may decide; anything outside it surfaces under **Needs your call** at the gate.
@@ -94,7 +106,7 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 ### Configuration
 
 - **Flow locations.** Flows are discovered at `~/.agent-terminal/flows/<id>/flow.yaml` (global) and `<repo>/.agent-terminal/flows/` (per repo; the repo wins a name clash).
-- **Install examples.** **Settings** then **Install examples** copies the example flows and loops into `~/.agent-terminal/`, the reviewer sub-agents and slash commands into `~/.claude/`, and the skills into `~/.codex/`. It previews first and confirms before replacing any file you've changed.
+- **Install examples.** **Settings → Install examples** copies the example flows, loops, reviewer sub-agents, slash commands and skills into place. It previews first and asks before replacing any file you've changed. See [Getting started](#getting-started) step 2 for where each goes.
 - **`loop-capabilities.yaml`** tells the loops about your project:
   - `test_globs`: which files are tests (also used by the frozen-tests check).
   - `test_command`, `build_command`: guidance strings for the agent, never executed by the engine.
@@ -116,12 +128,56 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 
 ### From a release
 
-Download the latest build from [GitHub Releases](https://github.com/dylanb/agent-terminal/releases):
+Get the latest release from **[github.com/dylanb/agent-terminal/releases/latest](https://github.com/dylanb/agent-terminal/releases/latest)**. Downloads are listed under **Assets**.
 
-- **macOS:** `.dmg` or `.zip`
-- **Linux:** `.AppImage` or `.deb`
+**Published builds:** macOS on Apple silicon (arm64) and Linux on x64 (amd64). On an Intel Mac or Linux arm64, [build from source](#from-source). Windows is not supported.
 
-Each release includes two apps: **agent-terminal** (the terminal) and the **controller**.
+Each release holds two apps, and you need both:
+
+- **agent-terminal** is the terminal that hosts your coding agent and runs flows.
+- **agent-terminal-controller** is a small companion app: one window and a tray icon that show a card per open terminal (working, idle, needs you, or errored; see [docs/controller.md](docs/controller.md)). It is required. Until it is running, a terminal shows "Startup paused: Waiting for the controller" and starts no shell. The terminal then starts on its own once the controller confirms it. Install both from the same release.
+
+#### macOS (Apple silicon)
+
+Assets: `agent-terminal-<version>-arm64.dmg`, `agent-terminal-<version>-arm64-mac.zip`, and the same two files for `agent-terminal-controller`.
+
+1. With a `.dmg`: open it and drag the app into **Applications**. With a `.zip`: unzip it and move the `.app` into **Applications**.
+2. Do this for both apps. Put them in the same folder (such as `/Applications`), because the `agent-terminal` command looks for the controller next to the terminal.
+3. Get past the first-launch block (next step), then launch the controller and the terminal, in either order.
+
+**First launch.** Both apps are ad-hoc signed and not notarized, so macOS blocks each one the first time. Do either of these for each app:
+
+- Try to open the app once. Then open **System Settings → Privacy & Security**, scroll to the blocked app, and choose **Open Anyway**.
+- Or, before the first launch, run `xattr -dr com.apple.quarantine "/Applications/agent-terminal.app"` and `xattr -dr com.apple.quarantine "/Applications/agent-terminal-controller.app"`, adjusting the path if you installed elsewhere.
+
+#### Linux (x64)
+
+Assets: `agent-terminal_<version>_amd64.deb`, `agent-terminal-<version>.AppImage`, and the same two files for `agent-terminal-controller`.
+
+- **`.deb`** (Debian, Ubuntu): run `sudo apt install ./agent-terminal_<version>_amd64.deb ./agent-terminal-controller_<version>_amd64.deb` from the download folder. Launch each app from your applications menu.
+- **`.AppImage`**: run `chmod +x agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage`, then start each file (`./agent-terminal-<version>.AppImage`).
+
+#### The `agent-terminal` command
+
+Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. To install it, open **Settings → Command line → Install** in the app, or use the install button on the "Startup paused" card.
+
+- It goes to `~/.local/bin` (then `~/bin`) when that folder is already on the app's own `PATH` when it starts, and only you can write to it. Otherwise it goes to `~/.agent-terminal/bin`, and a block is added to your shell profile that appends that folder to `PATH`. Either way, open a new shell afterwards.
+- **Linux `.deb`:** the package also links `/usr/bin/agent-terminal` to the app itself, which is not the command. So the command must go to `~/.local/bin`, which a stock Ubuntu profile puts on `PATH` before `/usr/bin` once the folder exists. Create it (`mkdir -p ~/.local/bin`), log out and back in so the desktop session, and the app launched from it, picks it up, then install the command. In a new shell, `command -v agent-terminal` should print a path under your home folder. If it prints `/usr/bin/agent-terminal`, the app did not see `~/.local/bin`: check that `echo $PATH` lists it before `/usr/bin`, log out and back in, and install again.
+- **Linux `.AppImage`:** a command installed from an AppImage stops working when that app exits, so there is no working command with an AppImage alone. Use the `.deb` if you want the command.
+
+#### Before you use it
+
+- Install the [GitHub CLI](https://cli.github.com/) and sign in: `gh auth login`.
+- Install Claude Code or Codex, and sign in to it.
+
+#### Upgrading
+
+1. Install the newer release of both apps over the old ones: replace the two `.app`s in the same folder; or run `sudo apt install ./<newer>.deb` for each `.deb`; or replace the AppImage files.
+2. Relaunch both apps (macOS may block the replaced apps again; repeat the first-launch step).
+3. Open **Settings → Install examples** to pick up updated flows and loops. It previews the changes and asks before replacing any file you changed.
+4. If the apps moved, reinstall the `agent-terminal` command.
+
+> **`simple-dev-v1`** (see [Bundled flows](#bundled-flows)) is not yet in a published release. It is available when built from source.
 
 ### From source
 
@@ -157,22 +213,139 @@ pnpm run package    # dmg/zip on macOS, AppImage/deb on Linux
 
 This builds the terminal into `dist/` and the controller (`electron-builder.controller.yml`) into `dist/controller/`. `node-pty` ships as a native binary per platform, so build on (or cross-build for) each target OS.
 
-## Getting started
+## Bundled flows
 
-1. **Launch Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
-2. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
-3. **Pick a flow and start it.** Choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), so install it and sign in with `gh auth login` first.
-4. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
+A *flow* is a chain of steps the app runs against a GitHub issue. Most steps are *loops*: an agent does the work, then *reviewer personas* (reviewer sub-agents, each grading one concern such as security or tests) review it, the agent fixes what they find, and the cycle repeats until a round changes nothing. Every step then ends at a *gate*:
 
-### Bundled flows
+- **`auto`**: the engine approves the step by itself, but only when it finishes clean. Anything else, or a decision that takes longer than `APP_AUTO_GATE_DECISION_MS`, stops for a person ([spec §27.9.1](docs/spec/27-in-terminal-loop-engine-the-live-design.md)).
+- **`human`**: a person decides. A loop step with no `gate_authority` in its flow file is `human`.
+- **`manual`**: not a loop. A person does the step and marks it done ([spec §18](docs/spec/18-flow-definitions-flow-yaml.md)).
 
-| Flow | What it does |
+Merging is always left to a person. The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2).
+
+### Choosing a flow
+
+| Your ticket | Use |
 |---|---|
-| `feature-dev-v3` | The full test-driven chain: groom the ticket → human approval → plan → human approval → build test infrastructure → RED / GREEN / refactor for each planned slice → integration slice → human approval → finalize the PR for a human to merge. Epics fan out into sub-tickets. Each phase ends in a `git commit`. Described in [spec §28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md). |
-| `simple-dev-v1` | A lighter chain for a ticket that fits one `feature-dev-v3` slice: plan → human approval (with a too-big warning) → one TDD development loop → integration slice → human approval → finalize. |
-| `plan-only` | Groom a ticket and produce a reviewed implementation plan, then stop. |
+| A bug fix or small feature that fits one slice of work | `simple-dev-v1` (build from source until a release ships it) |
+| A multi-slice feature, or an epic to split into sub-tickets | `feature-dev-v3` |
+| "Plan this, don't build it" | `plan-only` |
 
-The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
+`simple-dev-v1` runs fewer reviews. Its plan approval warns you when the ticket looks too big for it, and the way out is to terminate that run and start the ticket again under `feature-dev-v3`.
+
+### What happens at a `human` gate
+
+The flow stops and waits. The terminal's status bar turns red and reads **Loop needs you**. In the controller, the terminal's card reads **Needs a human** with a bell-marked message, and the tray icon gets an amber dot. These are in-app signals, not OS notifications. Open the terminal and pick one of the gate's options:
+
+- **Approve**: accept the result and run the gate's side effects (listed per flow below).
+- **Redo**: run the step's work again from a clean slate: the agent gets only the ticket, the plan and an instruction you type, with none of the earlier findings.
+- **Request changes**: send your feedback (chosen review todos plus free text) into another review-and-fix round.
+- **Polish**: the loop stops typing and you talk to the agent directly in the terminal, then approve when done.
+- **Back to *step*** (**Back to red** in `feature-dev-v3`, **Back to dev** in `simple-dev-v1`; the button names the step it returns to): send the run back to the step that restarts the current slice of test-driven work (`red` in `feature-dev-v3`, `dev` in `simple-dev-v1`).
+
+Each gate offers only some of these. An `auto` step offers them too when it stops for a person.
+
+### `feature-dev-v3`
+
+**What:** The full test-driven chain for a ticket: a groomed ticket, an approved plan (an epic becomes ordered sub-tickets), test infrastructure, then RED, GREEN and refactor per slice, an integration review, and a PR prepared for you to merge with a flow-audit report in its body.
+
+**How:** `preparation` is a step you do by hand. Then each step runs as listed; `refactor` loops back to `red` once per planned slice.
+
+```mermaid
+flowchart TD
+  preparation["preparation<br/>manual"] --> groomIntent["groom-intent<br/>auto"]
+  groomIntent --> groom["groom<br/>auto"]
+  groom --> groomApprove["groom-approve<br/>human"]
+  groomApprove --> plan["plan<br/>auto"]
+  plan --> planApprove["plan-approve<br/>human"]
+  planApprove --> infra["infra<br/>auto"]
+  infra --> red["red<br/>auto"]
+  red --> green["green<br/>auto"]
+  green --> refactor["refactor<br/>auto"]
+  refactor -->|"next slice"| red
+  refactor --> integrationSlice["integration-slice<br/>auto"]
+  integrationSlice --> implApprove["impl-approve<br/>human"]
+  implApprove --> finalize["finalize<br/>human"]
+  groomR["review-plan-intent"] -.-> groom
+  planR["review-plan-principal<br/>review-plan-security<br/>review-plan-architecture<br/>review-plan-intent<br/>review-plan-maintainability<br/>review-plan-contracts<br/>review-plan-test-architect<br/>review-plan-determinism<br/>review-plan-tracer-slicer<br/>review-plan-ui"] -.-> plan
+  infraR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-maintainability<br/>impl-review-conventions<br/>impl-review-architecture<br/>review-plan-determinism"] -.-> infra
+  redR["impl-review-tests<br/>impl-review-intent<br/>impl-review-red-authenticity"] -.-> red
+  greenR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-accessibility<br/>impl-review-regression-guard"] -.-> green
+  refactorR["impl-review-principal<br/>impl-review-tests<br/>impl-review-reliability<br/>impl-review-architecture"] -.-> refactor
+  integR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-maintainability<br/>impl-review-conventions<br/>impl-review-accessibility<br/>impl-review-diagrams<br/>review-plan-tracer-slicer"] -.-> integrationSlice
+```
+
+Legend: `manual` means a person completes the step. Dotted lines link a step to the reviewer personas that review it. `groom-intent`, `groom-approve`, `plan-approve`, `impl-approve` and `finalize` have no reviewers.
+
+**Your decisions:**
+
+- `groom-approve` (approve or redo): approve writes the groomed ticket into the issue body.
+- `plan-approve` (approve or redo): approve marks the PR ready and offers to create an epic's sub-tickets on GitHub.
+- `impl-approve` (approve, redo or Back to red): approve commits and publishes the implementation description in the PR body.
+- `finalize` (approve or redo): the PR has been prepared and checked; approve it, then merge yourself.
+
+**When:** a multi-slice feature or an epic, where you want every phase reviewed and a human check after grooming, planning and implementation.
+
+### `simple-dev-v1`
+
+Not yet in a published release; available when built from source.
+
+**What:** A plan and one test-driven development pass for a ticket that fits one `feature-dev-v3` slice, with the same integration review and finalize.
+
+**How:** `preparation` is by hand. `plan` picks up the ticket and writes its intent, `dev` does RED and GREEN commits per increment in one loop, then `integration-slice` reviews it all. Back to dev at `dev`, `integration-slice` or `impl-approve` returns the run to `dev`.
+
+```mermaid
+flowchart TD
+  preparation["preparation<br/>manual"] --> plan["plan<br/>auto"]
+  plan --> planApprove["plan-approve<br/>human"]
+  planApprove --> dev["dev<br/>auto"]
+  dev --> integrationSlice["integration-slice<br/>auto"]
+  integrationSlice --> implApprove["impl-approve<br/>human"]
+  implApprove --> finalize["finalize<br/>human"]
+  integrationSlice -.->|"back to dev"| dev
+  implApprove -.->|"back to dev"| dev
+  planR["review-plan-principal<br/>review-plan-intent<br/>review-plan-test-architect<br/>review-plan-tracer-slicer"] -.-> plan
+  devR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-accessibility<br/>impl-review-regression-guard<br/>impl-review-red-authenticity"] -.-> dev
+  integR["impl-review-principal<br/>impl-review-tests<br/>impl-review-security<br/>impl-review-taint<br/>impl-review-reliability<br/>impl-review-architecture<br/>impl-review-contracts<br/>impl-review-intent<br/>impl-review-maintainability<br/>impl-review-conventions<br/>impl-review-accessibility<br/>impl-review-diagrams<br/>review-plan-tracer-slicer"] -.-> integrationSlice
+```
+
+Legend: `manual` means a person completes the step. Dotted lines to a step link its reviewer personas; the two labelled dotted lines are the Back to dev returns. `plan-approve`, `impl-approve` and `finalize` have no reviewers.
+
+**Your decisions:**
+
+- `plan-approve` (approve or redo): approve marks the PR ready. You see the too-big warning here.
+- `impl-approve` (approve, redo or Back to dev): approve commits and publishes the implementation description in the PR body.
+- `finalize` (approve or redo): approve the prepared PR, then merge yourself.
+
+**When:** a ticket that fits one slice of work and does not need a separate groom and plan.
+
+### `plan-only`
+
+**What:** A groomed ticket and a reviewed implementation plan, then it stops. Nothing is built.
+
+**How:** both loop steps are `human`: nothing moves on without you. `finalize` is a manual step.
+
+```mermaid
+flowchart TD
+  groom["groom<br/>human"] --> plan["plan<br/>human"]
+  plan --> finalize["finalize<br/>manual"]
+  groomR["review-plan-intent"] -.-> groom
+  planR["review-plan-principal<br/>review-plan-security<br/>review-plan-architecture<br/>review-plan-intent<br/>review-plan-maintainability<br/>review-plan-contracts<br/>review-plan-ui"] -.-> plan
+```
+
+Legend: `manual` means a person completes the step.
+
+**Your decisions:**
+
+- `groom` (approve, request changes, redo or polish): approve writes the groomed ticket into the issue body.
+- `plan` (approve, request changes, redo or polish): approve marks the PR ready.
+- `finalize`: you complete it and mark it done.
+
+**When:** you want a reviewed plan to hand to someone else, or to build later.
+
+### Your own flows
+
+Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<repo>/.agent-terminal/flows/<id>/` (that repo only). When names clash, the repo copy wins. The folder form lets a flow keep its own templates beside it. See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) for the format, [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md) for the loop engine, and [§28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md) for how the full TDD chain is built.
 
 ## Settings (environment variables)
 
@@ -221,7 +394,7 @@ Agent Terminal is developed largely by coding agents running inside Agent Termin
 
 ```sh
 pnpm test                  # typecheck, then vitest: unit, integration and browser projects
-pnpm run lint              # eslint, including the repo's local rules
+pnpm run lint              # eslint, including the repo's local rules, then a parse check of every Markdown Mermaid diagram
 ./scripts/e2e-podman.sh    # Playwright _electron e2e in a Linux container under Xvfb
 ```
 
