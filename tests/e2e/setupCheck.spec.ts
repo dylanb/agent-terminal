@@ -744,3 +744,28 @@ for (const { when, conditions, entries, installed } of HIDDEN_RUN_SETUP) {
     await expect(popup.getByRole('button', { name: RUN_SETUP })).toHaveCount(0);
   });
 }
+
+test('on a fresh machine, Install/update examples then a relaunch offers Run setup loop, which starts the shipped repo-setup flow with no ticket prompt', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  const agent = seedLoggingAgent(repo);
+  const env = { ...agent.env, APP_SETUP_CHECK: 'on' };
+  let page = await launchIn(repo, env);
+  await popupFor(page, repo).getByRole('button', { name: INSTALL }).click();
+  await expect(installView(page).getByRole('status')).toContainText('Installed examples');
+  await app?.close();
+  page = await launchIn(repo, env);
+  const popup = popupFor(page, repo);
+  await expect(popup).toBeVisible();
+  const reply = await page.evaluate((repoKey) => window.setup.status(repoKey), repo);
+  expect.soft(reply).toMatchObject({ ok: true, setupFlowInstalled: true });
+  expect.soft(reply.ok && reply.entries.some((entry) => entry.condition === 'examples')).toBe(false);
+  await hostFakeAgent(page);
+
+  await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+  await expect.poll(agent.injectedLog, { timeout: 40_000 }).toContain('turn-done:work-');
+  await expect.soft(page.getByRole('dialog')).toHaveCount(0);
+  await expect.soft(flowError(page)).toHaveCount(0);
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: REPO_SETUP_FLOW_ID });
+});
