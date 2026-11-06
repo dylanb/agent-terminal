@@ -2,14 +2,15 @@
 
 `.github/workflows/release.yml` builds both apps, agent-terminal and agent-terminal-controller, for macOS arm64
 (`.dmg`, `.zip`) and Linux x64 (`.AppImage`, `.deb`). It uploads them to a **draft** GitHub release with generated
-notes. Nothing is public until you press **Publish** on the draft.
+notes. Nothing is public until you press **Publish** on the draft. A test build of a branch is the one exception: it
+is published as a pre-release at once ([Test pre-release from a branch](#test-pre-release-from-a-branch)).
 
 The workflow runs no tests. A release builds from a commit on `main`, which merged with a passing test proof
 (`docs/test-proof.md`).
 
 ## Cut a release
 
-1. **Actions → release → Run workflow**, and enter the version without the `v` (`0.2.0`, or `0.2.0-beta.1`).
+1. **Actions → release → Run workflow** on `main`, and enter the version without the `v` (`0.2.0`, or `0.2.0-beta.1`).
    This opens a draft PR `Release v0.2.0` from the branch `release/v0.2.0`, which bumps `package.json`.
 2. Check out that branch, run `pnpm run test:proof`, and mark the PR ready. Opening the PR with `GITHUB_TOKEN`
    starts no workflow. Marking it ready runs `lint`, as on any PR, and the test proof is its required check.
@@ -35,9 +36,33 @@ The run fails unless the tag is `v` plus `package.json`'s version at that commit
 before it merges: that commit is not on `main`, so the tag's run fails, and the merge's run fails too because the
 tag already points elsewhere. Delete the tag (`git push origin :refs/tags/v0.2.0`) and re-run the merge's run.
 
+## Test pre-release from a branch
+
+To try a branch's build before it merges, for example to walk the README's install steps against it, run
+**Actions → release → Run workflow**, choose the branch under **Use workflow from**, and leave the version empty.
+From the command line:
+
+```sh
+gh workflow run release.yml --ref <branch>
+```
+
+The run builds the same macOS arm64 and Linux x64 installers of both apps from the branch's head, tags that commit
+`v<version>-branch-<branch>.<run number>.g<short SHA>` (for example `v0.1.0-branch-plan-loop-issue-299.12.g031e67e`), and publishes them
+straight away as a **Pre-release**, not a draft, with notes that name the branch and commit. The version is
+`package.json`'s, without any `-` suffix, then `-branch-`, then the branch name in lowercase with every other character
+turned into `-`, then the run number, then `g` and the first 7 characters of the commit SHA. The installed apps and
+the installer file names carry it. The `.deb` package version writes each `-` as `~`, so `apt` sorts a test build
+before the release it is built on, and installing that release later upgrades it. Nothing is committed to the branch, and the run
+runs no tests. GitHub never marks a pre-release as the latest release, so `releases/latest` and the README's link
+still point at the last real release.
+
+The run refuses a version input (that is for `main`) and a tag selected under **Use workflow from**. Delete a test
+pre-release and its tag when you are done with it: `gh release delete <tag> --cleanup-tag`.
+
 ## Re-running
 
-Re-run the run from the Actions page, either all jobs or only the failed ones. A tag that the run already pushed
+Re-run the run from the Actions page, either all jobs or only the failed ones. The release job uploads the files the
+build jobs left, which expire after 3 days, so after that re-run all jobs. A tag that the run already pushed
 for the same commit does not stop it. When the draft release already exists, the release job replaces its assets
 instead of creating a second release. Once the release is published, a re-run fails rather than replace the assets
 users have downloaded. The `release/vX.Y.Z` branch and the tag both block a

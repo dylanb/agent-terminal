@@ -88,6 +88,7 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - No production code modifies the user's `.gitignore`, ever (§19.1/§25); persistence tests assert the write creates none and leaves an existing one byte-for-byte unchanged. Only an explicit, user-invoked install action is exempt. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - App-owned state with an independent set/clear lifecycle lives in its **own file**, disjoint from any wholesale-written document (`polish.yaml`/`armed-interrupt.yaml` vs `run-state.yaml`, §27). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Bracketed-paste mode is read live at injection time (renderer `term.paste()`; main `shadow.modes.bracketedPasteMode`) — never cached, never decided by us (§9.3).
+- **Diagrams in the repository's Markdown are Mermaid, never ASCII art, and every ```` ```mermaid ```` block parses.** `pnpm lint` (run by the pre-commit hook and the pull-request CI) parses each one and fails on any that does not.
 - Renderer UI follows **[`UI-STANDARDS.md`](UI-STANDARDS.md)** — atomic tiers, per-component tests (organisms also get e2e + a relocation test), typed `createX(host, deps)` factories, host-subtree only, services injected, `src/renderer/src/tokens.css` theming.
 - Every renderer control runs its press through `src/renderer/src/pressable.ts`, and an action returns the promise for the work it starts, so neither it nor a related control can start again while that work is pending (enforced by lint). → [UI-STANDARDS.md §1.4](UI-STANDARDS.md)
 - The monitor pane talks only to `window.monitor.*` (§9.1) — never imports terminal/selection modules or touches renderer xterm state, which keeps it relocatable to a separate process.
@@ -102,6 +103,13 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - Every §25 run-log entry is true: written only when that outcome happened, never one entry for two outcomes. When a yes/no can't tell outcomes apart, return a value naming each, and RED-test both directions. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - One theme per PR — a second theme wants a second PR, or a per-theme review checkpoint when they must land together. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Fixing churn or dev friction you hit while doing a PR's work is REQUIRED in that same PR — it is not a second theme. The boundary is the source of the discovery, not the file it touches. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- **A PR keeps `README.md` current in the same PR.** Update it when the PR:
+  - adds, removes or renames a bundled flow, or changes a bundled flow's steps or gates;
+  - adds, removes or renames a reviewer persona on a bundled loop;
+  - adds or changes a notable user-visible feature — a capability a new user would want to know about, not every bug fix or internal refactor;
+  - changes install or upgrade steps, the published platforms or architectures, the prerequisites, or an environment variable in the README's `## Settings (environment variables)` table.
+
+  A PR that meets one of these and leaves the README unchanged states in its description why no update is needed.
 
 ## Ticket standards (agent-loop ready)
 
