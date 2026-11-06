@@ -10,7 +10,7 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { seedFakeAgentSteps, seedFakeGhGit, type StepScript } from './fakeTools';
 import { auditStepSequence, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
-import { NO_STEPS_JSON, repeatListAgent, repeatListFlowYaml, seedRepeatListConfig } from './repeatListFixture';
+import { NO_STEPS_JSON, STEPS_JSON, repeatListAgent, repeatListFlowYaml, seedRepeatListConfig } from './repeatListFixture';
 
 // #278 — a repeat whose count comes from a named list in an artifact (`count_from`), run in the app on the fixture
 // flow under tests/fixtures/repeat-list-flow/.
@@ -116,4 +116,15 @@ test('a repeat declaring both count_input and count_from shows the flow-load err
 
   await expect.soft(loadError()).toContainText('check', { timeout: UI_MS });
   await expect.soft(startControl()).toHaveCount(0, { timeout: UI_MS });
+});
+
+test('a design that writes a 3-entry list runs build and check three times, then finish, then done', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 3 * UI_MS + 9 * LOOP_TURN_MS);
+  const prefix = 'agent-term-e2e-278-three-';
+  const { home, repo } = seedRun(prefix, 'repeat-list', repeatListFlowYaml());
+  await launchInto(prefix, home, repo, repeatListAgent(repo, { designSource: STEPS_JSON }));
+
+  await startControl().click();
+  await expect.poll(() => flowState(repo), { timeout: 9 * LOOP_TURN_MS }).toMatch(/^step: done$/m);
+  expect(stepSequence(home, repo)).toEqual(['design', 'build', 'check', 'build', 'check', 'build', 'check', 'finish', 'done']);
 });
