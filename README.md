@@ -85,6 +85,8 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 
 - One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
 - Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
+- Each card's header shows the repository, the terminal's title (its PR's or ticket's title, else the one you gave it), its git branch and its status, so sibling checkouts of one repository are told apart even when collapsed.
+- An expanded card shows a timeline of its three newest events, newest first with times: notifications, and status changes such as Working, Idle, a flow step or Disconnected. **Clear history** empties it.
 - Tray dot: amber when a human is needed, red on error.
 - The arrow icon in each card's header (**Bring forward**) raises the right window, collapsed or expanded. Agents sharing a directory are flagged **Duplicate directory**, and the same icon brings all of them forward.
 - An always-on-top toggle.
