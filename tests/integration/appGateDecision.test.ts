@@ -155,6 +155,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       rec.briefClears.push(repoDir);
       rec.order.push('clear-brief');
     },
+    reopenStep: () => null,
     sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
@@ -710,6 +711,31 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     await runAppGateDecision('/repo', 'refactor', 'consolidate-refactor', 'approve', deps);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('clear-brief failed') && a.cmd.includes('EISDIR') && a.exit === 1)).toBe(true);
+  });
+
+  const noCompletion = () => ({
+    ok: true as const,
+    def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits' } },
+    tierRoot: '/tmp/tier',
+    defDir: '/tmp/tier/loop',
+  });
+
+  it('clears the brief on approving the return step when its loop is not a TDD phase', async () => {
+    const { deps, rec } = mkDeps({ run: run('dev-loop', 'dev'), resolveDef: noCompletion, reopenStep: () => 'dev' });
+    await runAppGateDecision('/repo', 'dev', 'consolidate-dev', 'approve', deps);
+    expect(rec.briefClears).toEqual(['/repo']);
+  });
+
+  it('keeps the brief on approving a later step that is not a TDD phase', async () => {
+    const { deps, rec } = mkDeps({ run: run('integration-loop', 'integration'), resolveDef: noCompletion, reopenStep: () => 'dev' });
+    await runAppGateDecision('/repo', 'integration', 'consolidate-integration', 'approve', deps);
+    expect(rec.briefClears).toEqual([]);
+  });
+
+  it('keeps the brief on approving a RED return step, whose GREEN and refactor are still to come', async () => {
+    const { deps, rec } = mkDeps({ run: run('red-loop', 'red'), resolveDef: () => withCompletion('red'), reopenStep: () => 'red' });
+    await runAppGateDecision('/repo', 'red', 'consolidate-red', 'approve', deps);
+    expect(rec.briefClears).toEqual([]);
   });
 
   it('keeps the brief on a red or green approve', async () => {

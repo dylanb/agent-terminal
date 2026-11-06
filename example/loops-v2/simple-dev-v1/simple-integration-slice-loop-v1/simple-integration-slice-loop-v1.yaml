@@ -1,0 +1,61 @@
+version: v2
+name: simple-integration-slice-loop-v1
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: commits
+  goal: "the full suite the repository requires before a pull request passes, including the end-to-end tests, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and this step's report section file holds its decisions, review history and test evidence"
+  checkpoint:
+    passes: 3
+reviewers:
+  - persona: impl-review-principal
+    charter: charter/principal.md
+  - persona: impl-review-tests
+    charter: charter/tests.md
+  - persona: impl-review-security
+    charter: charter/security.md
+  - persona: impl-review-taint
+    charter: charter/taint.md
+  - persona: impl-review-reliability
+    charter: charter/reliability.md
+  - persona: impl-review-architecture
+    charter: charter/architecture.md
+  - persona: impl-review-contracts
+    charter: charter/contracts.md
+  - persona: impl-review-intent
+    charter: charter/intent.md
+  - persona: impl-review-maintainability
+    charter: charter/maintainability.md
+  - persona: impl-review-conventions
+    charter: charter/conventions.md
+  - persona: impl-review-accessibility
+    charter: charter/accessibility.md
+  - persona: impl-review-diagrams
+    charter: charter/diagrams.md
+  - persona: review-plan-tracer-slicer
+    charter: charter/tracer-slicer.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: commit
+        label: integration
+  - option: redo
+  - option: polish
+  - option: back-to-red
+inputs:
+  - id: plan
+    path: plan.md
+  - id: groom-intent
+    path: groom-intent.md
+  - id: impl-report
+    path: impl-report.md
+    sections_dir: impl-report
+outputs:
+  - id: impl-report
+    path: impl-report.md
+    sections_dir: impl-report

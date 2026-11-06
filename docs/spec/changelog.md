@@ -2,6 +2,31 @@
 
 §29 (new): at startup, and the first time in a session the terminal enters a git repository, the app checks three conditions (the bundled examples are installed and current; git ignores the whole `.agent-terminal/` folder; the repository has a `loop-capabilities.yaml` the app's reader accepts) and lists each failing one in a blocking popup. It offers Install/update examples, Run setup loop, a per-repository and a per-version dismissal, and Close. Dismissals are app-owned, in their own file under the app-state home. Run setup loop selects and starts the new bundled `repo-setup` flow through the existing selection and Start requests, and is refused with a reason when the repository's run has begun. The flow's setup step writes the ignore rule and the capabilities file behind a human gate; only after approval does its publish step make the branch and draft PR under the repository's own rules. Both steps refuse, changing nothing and saying why, while the operator has anything staged or their own uncommitted edits in `.gitignore`; the publish step checks again before any outward action. §27.8 gains the prompt-only `work.self_check` field, and §18.1 points at the flow.
 
+## #301 — The controller's branch re-read is configurable and defaults to five minutes
+
+§23.6: a terminal re-read its git branch for the controller card every second, starting a `git` process each time. It now re-reads it every `APP_BRANCH_REFRESH_MS` (default 300000 ms, five minutes) and still reads it at once when the terminal's current repository changes. A branch switch inside the same repository can therefore take up to that interval to appear on the card, the one exception to §23.6's two-second publication. No IPC or protocol change.
+
+## #301 — Quitting waits for the shell's exit
+
+§5: the app aborted on quit about once in a few hundred quits (`terminate called after throwing an instance of 'Napi::Error'`), when node-pty delivered the hung-up shell's exit while the app was already tearing down; under load the core dump then held the process for about a minute. The quit is now held until the shell's exit is delivered, and a shell still running after `APP_SHELL_QUIT_GRACE_MS` is killed. A shell that ignored the hang-up used to keep the app from exiting at all.
+
+## #301 — Controller cards show title and branch, a header bring-forward icon, and a timeline
+
+§23.6: terminals report their status-bar title and git branch to the controller (protocol minor 3, optional `title` and `branch` on the status report, absent for older peers), and the card header reads repository · title · branch · status with the full launch directory moved into the body and kept in the card's accessible name. Bring forward is an icon button in the header, in both states, for single and conflict cards. The notification history becomes one always-visible timeline of the three newest entries across notifications and status changes (activity, flow error, request clearing, flow step, run start or finish, Disconnected), newest first with times, notification entries marked to assistive technology. The History toggle is gone; **Clear history** shows whenever the card is expanded and the timeline is nonempty. Every inherited rule survives: bound of three, exact-text repeats for notifications only, receipt order, Clear's revision refusal (now on any insertion) and current-request suppression, Dismiss/restart/overlap resets, reconstruction from current information only (the first status after a registration is a baseline). A request appearing leaves one entry; status entries are never announced.
+
+## The viewer's file watch no longer hangs the app on macOS
+
+§20.1: the live-reload watch walked everything under `.agent-terminal/`, not just the `loop/` tree the viewer
+shows, and opened one watcher per directory on every platform. A worktree whose `.agent-terminal/` held an
+agent's scratch builds (about 4,900 directories) hung the app on macOS: each watcher opened or closed rebuilds
+one shared FSEvents stream, so a cwd change blocked the main thread. The watch now covers
+`.agent-terminal/` itself and its `loop/` tree only, and on macOS it is one recursive watch filtered to the same
+directories the Linux per-directory watch covers. No IPC or payload changes.
+
+## simple-dev-v1 — a lighter flow, and the back-to-red control names where it returns
+
+§18.7.1/§28.4.2: the flow catalog gains `simple-dev-v1`, for a ticket that fits one `feature-dev-v3` impl-slice. It plans the ticket and writes its intent in one step, warns at plan approval when the ticket fails the fit check (a RED/GREEN dependency, more than 400 estimated lines, new test infrastructure, or an epic) and flags new complexity that would benefit from `feature-dev-v3`'s wider review, builds the plan in one development goal loop that commits `RED:` and `GREEN:` per increment, and then runs `feature-dev-v3`'s integration review, implementation approval and finalize. It names `dev` as its return step through a `repeat` on `impl-approve` whose count input nothing writes, so the count-driven loop-back never fires. The back-to-red gate control and its composer are now labelled after the step the flow returns to (`Back to red` in `feature-dev-v3`, `Back to dev` in `simple-dev-v1`): the loop view carries that step as `reopenStep`. The decision on the wire is still `back-to-red`. The back-to-red brief now also reaches the loop at the return step, so `simple-dev-v1`'s `dev` step receives it although it declares no `work.completion`; it is cleared when that step is approved, since `dev` is its only reader there, and that step is told the work was sent back to it rather than to a RED phase.
+
 ## #283 — PRs merge on a local test proof, not on CI test runs
 
 §27.13: plan approval still flips the PR non-draft, but no longer to trigger CI, since GitHub Actions runs no vitest or e2e on an open PR (the suites run only on the push to `main` a merge creates). N13a now names the `test-proof/vitest` and `test-proof/e2e` statuses from `pnpm run test:proof` (`docs/test-proof.md`) as the checks a reviewer pulls, and drops the recorded override that justified going non-draft mid-impl to run CI.

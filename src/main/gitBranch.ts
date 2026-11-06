@@ -4,8 +4,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { commandEnvironment } from './appCommand';
-import { run } from './appBootstrapCommand';
+import { CommandFailure, run } from './appBootstrapCommand';
 import { errMsg } from './errno';
+import { stripDisplayControlChars } from '../shared/controlChars';
 
 // §27.9.1 N9b.7(c) — a read abandoned mid-flight must not leave an index lock that fails the human approve's commit.
 export const LOCK_FREE_GIT_READ_ENV = { GIT_OPTIONAL_LOCKS: '0' };
@@ -35,4 +36,16 @@ export async function readGitBranch(repoDir: string, signal: AbortSignal): Promi
   } catch (e) {
     return { ok: false, detail: errMsg(e) };
   }
+}
+
+export async function readBranchLabel(dir: string): Promise<string | null> {
+  const git = async (args: string[]): Promise<string | null> => {
+    try {
+      return stripDisplayControlChars((await run('git', args, dir, `git ${args[0]} failed`, { env: LOCK_FREE_GIT_READ_ENV })).trim()) || null;
+    } catch (error) {
+      if (error instanceof CommandFailure && typeof error.exitCode === 'number') return null;
+      throw error;
+    }
+  };
+  return (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])) ?? (await git(['rev-parse', '--short', 'HEAD']));
 }

@@ -25,6 +25,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
+import { holdQuitForShell, killShell } from './shellQuit';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
@@ -110,8 +111,8 @@ import { sliceCountToSource } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
-import { currentGitBranch } from './gitBranch';
-import { watchViewerTree, viewerRoot } from './viewerWatch';
+import { currentGitBranch, readBranchLabel } from './gitBranch';
+import { watchViewerTree, viewerRoot, viewerWatchFactory, viewerWatchMode } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -382,13 +383,14 @@ async function createWindow(): Promise<void> {
     onChanged: pushViewerChanged,
   });
   const onViewerActivity = createViewerActivityHandler({ pushChanged: pushViewerChanged, warm: warmBase });
-  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
+  const viewerWatchOpts = { watch: viewerWatchFactory(viewerWatchMode(process.platform)) };
+  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity, viewerWatchOpts);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
     knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
-    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
+    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity, viewerWatchOpts);
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
@@ -552,6 +554,7 @@ async function createWindow(): Promise<void> {
       return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
     },
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };
@@ -970,8 +973,9 @@ async function createWindow(): Promise<void> {
       const load = resolveActiveDefinition(repoKey);
       return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
     },
-    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
-  });
+    refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
+    branch: repoKey => readBranchLabel(repoKey),
+  }, { branchRefreshMs: config.branchRefreshMs });
   controllerStatus.subscribe(work => {
     currentWork = work;
     for (const listener of statusListeners) listener(work);
@@ -1195,6 +1199,7 @@ async function createWindow(): Promise<void> {
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
     recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
     clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     emitError: (reason) => loopMessages.post('error', reason),
     emitNotice: (reason) => loopMessages.post('notice', reason),
@@ -1279,13 +1284,25 @@ async function createWindow(): Promise<void> {
     shadow.write(data);
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  let shellExited = false;
   ptyProcess.onExit(({ exitCode }) => {
+    shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();
     }
   });
+  app.on('will-quit', holdQuitForShell(
+    {
+      exited: () => shellExited,
+      onExit: (run) => { ptyProcess.onExit(run); },
+      forceKill: () => killShell(() => ptyProcess.kill('SIGKILL')),
+    },
+    config.shellQuitGraceMs,
+    (ms, run) => { setTimeout(run, ms); },
+    () => app.quit(),
+  ));
 
   const disposeIpc = registerIpcListeners(
     ipcMain,
@@ -1409,7 +1426,7 @@ async function createWindow(): Promise<void> {
       // Fail-closed to false.
       [CH.flowAppRedo]: (_e, m) =>
         isValidFlowAppRedo(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
-      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at RED so the
+      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at its return step so the
       // composer holds open on a failed reopen and never loses the brief. Fail-closed to false.
       [CH.flowAppBackToRed]: (_e, m) =>
         isValidFlowAppBackToRed(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,

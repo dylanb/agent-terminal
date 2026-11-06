@@ -1,5 +1,5 @@
 import { waitForConnections } from './controllerSnapshot';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { join, resolve } from 'node:path';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createControllerHarness } from './controllerHarness';
@@ -9,7 +9,19 @@ import { typeAtDesktop } from './controllerKeyboard';
 import { isFullScreen, isMinimized } from './controllerWindow';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
-import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, headerActivationLocator, statusRowLocator } from '../helpers/controllerCards';
+
+async function bringForwardFromCollapsedCard(page: Page, directory: string): Promise<void> {
+  const card = cardLocator(page, directory);
+  const toggle = cardHeaderLocator(card, directory);
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'false') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const icon = headerActivationLocator(card);
+  await expect(icon, `bring-forward icon in the collapsed header for ${directory}`).toBeVisible();
+  await icon.click();
+  await expect.soft(toggle, 'the card stays collapsed after the icon is pressed').toHaveAttribute('aria-expanded', 'false');
+}
 
 test('controller explains how to connect the first terminal', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -176,8 +188,7 @@ test('controller retains disconnected identities while another terminal remains 
     await expect.soft(cardLocator(controller.page, h.fixture.repositories[1])).toHaveCount(1);
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-    await expect(bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[1]))).toBeVisible();
-    await bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[1])).click();
+    await bringForwardFromCollapsedCard(controller.page, h.fixture.repositories[1]);
     await expect.soft.poll(() => terminals[1].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
     await terminals[1].page.locator('.xterm-screen').click();
     await terminals[1].page.keyboard.type("printf 'SURVIVOR_%s\\n' 'ALIVE'");
@@ -202,8 +213,7 @@ test('Bring forward focuses each original terminal after shell navigation', { ta
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
-      await bringForwardLocator(cardLocator(controller.page, directory)).click();
+      await bringForwardFromCollapsedCard(controller.page, directory);
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
       expect.soft(await terminals[1 - index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false);
     }
@@ -217,8 +227,7 @@ test('Bring forward restores its minimized terminal window', { tag: '@ownapp' },
     const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.repositories[0]);
     await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
     await expect.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
-    await expect(bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[0]))).toBeVisible();
-    await bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[0])).click();
+    await bringForwardFromCollapsedCard(controller.page, h.fixture.repositories[0]);
     await expect.soft(async () => {
       expect(await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(false);
     }).toPass({ timeout: 10_000 });
@@ -249,8 +258,7 @@ test('controller retains its connected terminals across close and restore and ca
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
-      await bringForwardLocator(cardLocator(controller.page, directory)).click();
+      await bringForwardFromCollapsedCard(controller.page, directory);
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
     }
   } finally { await h.dispose(); }

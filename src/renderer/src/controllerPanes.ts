@@ -2,7 +2,7 @@ import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
-import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerNotificationEntry, type Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
@@ -13,6 +13,10 @@ export interface ControllerPanesDeps {
   layout: ControllerLayout;
   applyTheme(theme: Theme): void;
 }
+
+type NotificationEntry = Extract<ControllerTimelineEntry, { kind: 'notification' }>;
+const newestNotification = (timeline: readonly ControllerTimelineEntry[] | undefined): NotificationEntry | undefined =>
+  timeline?.find((entry): entry is NotificationEntry => entry.kind === 'notification');
 
 const EXPANDED_IN_ONE_COLUMN: ReadonlySet<CardStatusClass> = new Set(['error', 'needs-human']);
 
@@ -63,7 +67,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   status.setAttribute('role', 'status');
   status.setAttribute('aria-atomic', 'true');
   let previousAttention = new Map<string, string>();
-  let previousNotifications = new Map<string, ControllerNotificationEntry>();
+  let previousNotifications = new Map<string, NotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
@@ -105,10 +109,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
 
   function announceAttention(directories: readonly ControllerDirectoryCard[]): void {
     const currentAttention = new Map<string, string>();
-    const currentNotifications = new Map<string, ControllerNotificationEntry>();
+    const currentNotifications = new Map<string, NotificationEntry>();
     const announcements: string[] = [];
     for (const directory of directories) {
-      const notification = directory.kind === 'single' ? directory.notifications?.[0] : previousNotifications.get(directory.launchDirectory);
+      const notification = directory.kind === 'single' ? newestNotification(directory.timeline) : previousNotifications.get(directory.launchDirectory);
       if (notification) currentNotifications.set(directory.launchDirectory, notification);
       if (directory.kind === 'disconnected') continue;
       const text = directory.kind === 'conflict' ? 'Duplicate directory' : attentionText(directory.work);

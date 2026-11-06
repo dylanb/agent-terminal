@@ -15,3 +15,6 @@ plan.md
 .agent-terminal/flow-state.yaml
 .pnpm-store/
 __screenshots__/
+
+# Local env, e.g. a private sync source URL (docs/sync.md)
+.env

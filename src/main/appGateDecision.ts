@@ -21,6 +21,7 @@ import type { RunAppGateCommitSideEffect } from './appGateCommit';
 import type { RunAppGatePush } from './appGatePush';
 import { stripStatusControlChars } from '../shared/loopStatus';
 import { errMsg } from './errno';
+import { approveEndsSliceBrief } from './sliceBriefReader';
 import type { SectionedReport } from './reportSections';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
@@ -55,14 +56,16 @@ export interface AppGateDecisionDeps {
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
    *  redo/polish family it is NOT approve — no accept, no advance — the flow jumps back and RED re-runs.
-   *  Returns whether the flow is now back at RED. `reopened` runs once the flow is back at RED and before the
+   *  Returns whether the flow is now back at its return step. `reopened` runs once it is and before the
    *  re-entry is recorded (§25), so the decision entry lands in the gate's step window, not RED's. */
   reopenSlice(repoDir: string, reopened: () => void): boolean;
   /** §28.4.2 — persist the operator's brief for the slice about to be reopened (the composition root keys it to
    *  the current slice). Throws when it cannot be written; the executor then does not reopen. */
   recordSliceBrief(repoDir: string, fromStep: string, text: string): void;
-  /** §28.4.2 — drop the slice brief: on a failed reopen (rollback) and when the slice ends (refactor approve). */
+  /** §28.4.2 — drop the slice brief: on a failed reopen (rollback) and when its last reader is approved. */
   clearSliceBrief(repoDir: string): void;
+  /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
+  reopenStep(repoDir: string): string | null;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
   maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string, decider?: GateDecider): EpicGateOutcome;
@@ -446,9 +449,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   } catch (e) {
     gateAudit('source-slices-failed', 1, e instanceof Error ? e.message : String(e));
   }
-  // §28.4.2 — refactor is the slice's last phase: approving it ends the slice, so its back-to-RED brief goes.
-  // Best-effort after the accept persisted; a residual brief is keyed to this slice and never reaches another.
-  if (r.def.work.completion === 'refactor') {
+  // §28.4.2 — the brief goes when its last reader is approved. Best-effort after the accept persisted.
+  if (approveEndsSliceBrief(r.def.work.completion, step, deps.reopenStep(repoDir))) {
     try {
       deps.clearSliceBrief(repoDir);
     } catch (e) {

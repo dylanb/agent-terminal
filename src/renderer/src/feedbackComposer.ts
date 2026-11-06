@@ -22,27 +22,39 @@ export interface FeedbackComposerCtx {
   /** What the composed text is for: request-changes feedback (required) or a §28.4.2 back-to-RED brief
    *  (optional — an empty submit is a plain reopen). Absent is request-changes. */
   purpose?: 'request-changes' | 'back-to-red';
+  /** The step a back-to-red reopen returns to, as its gate control names it. Absent names RED. */
+  target?: string;
 }
 
 /** The words each purpose shows; everything else about the composer is shared. */
-const PURPOSE_COPY = {
-  'request-changes': {
-    title: (step: string) => `Request changes to ${step}`,
+interface PurposeCopy {
+  title(step: string): string;
+  description: string;
+  fieldLabel: string;
+  submitLabel: string;
+  required: boolean;
+  dropped: string;
+}
+
+function purposeCopy(purpose: FeedbackComposerCtx['purpose'], target: string): PurposeCopy {
+  if (purpose === 'back-to-red')
+    return {
+      title: (step) => `Send this back to ${target} from ${step}`,
+      description: `Optional brief: what must be redone. It is handed to the ${target} step and every test-driven step that runs after it (§28.4.2).`,
+      fieldLabel: `back-to-${target} brief`,
+      submitLabel: `Back to ${target}`,
+      required: false,
+      dropped: `Could not send this back to ${target}. Your brief is kept — try again.`,
+    };
+  return {
+    title: (step) => `Request changes to ${step}`,
     description: 'Your feedback joins the next review-and-fix round alongside the reviewers’ findings (§27.9).',
     fieldLabel: 'request-changes feedback',
     submitLabel: 'Submit feedback',
     required: true,
     dropped: 'Could not start a new round — the loop was busy. Try again.',
-  },
-  'back-to-red': {
-    title: (step: string) => `Send this slice back to RED from ${step}`,
-    description: 'Optional brief: what the slice must redo. It is handed to the RED, GREEN and refactor phases of this slice (§28.4.2).',
-    fieldLabel: 'back-to-RED brief',
-    submitLabel: 'Back to RED',
-    required: false,
-    dropped: 'Could not send the slice back to RED. Your brief is kept — try again.',
-  },
-} as const;
+  };
+}
 
 /** The two §19.4 delivery modes: submit-as-is (the material verbatim) or compose-with-agent (the material
  *  framed for the next round's fixer to synthesize before addressing). Carried in the composed text itself,
@@ -83,7 +95,7 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
   return {
     render(ctx, submit) {
       if (!ctx) return shell.render(null);
-      const copy = PURPOSE_COPY[ctx.purpose ?? 'request-changes'];
+      const copy = purposeCopy(ctx.purpose, ctx.target ?? 'RED');
       shell.render(({ doc, titleId, close, confirm, presses: footGroup }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');

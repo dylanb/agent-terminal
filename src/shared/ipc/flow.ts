@@ -111,7 +111,7 @@ export const FLOW_CHANNELS = {
   },
   flowAppBackToRed: {
     name: 'flow:appBackToRed',
-    does: 'The renderer sends the current slice back to RED with a brief and learns whether the flow is back at RED.',
+    does: 'The renderer sends the flow back to its return step with a brief and learns whether the flow is back there.',
   },
   flowArmInterrupt: {
     name: 'flow:armInterrupt',
@@ -174,6 +174,8 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.
    *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
+  /** The step a `back-to-red` decision at this gate returns the flow to; present only when the gate offers it. */
+  reopenStep?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
    *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef
@@ -580,10 +582,10 @@ export interface FlowAppRedoMsg {
   instruction: string;
 }
 
-/** flow:appBackToRed request (§28.4.2): the operator's back-to-RED decision for `repoKey`, carrying the
- *  `step`+`turnKey` identity it acts on (§6) and the `brief` the reopened slice's RED, GREEN and refactor turns
- *  are handed (empty = a plain reopen). Two-way like appRedo: the reply is whether the flow is back at RED, so
- *  the composer holds open and keeps the brief when the reopen does not land. */
+/** flow:appBackToRed request (§28.4.2): the operator's back-to-red decision for `repoKey`, carrying the
+ *  `step`+`turnKey` identity it acts on (§6) and the `brief` the turns that read it are handed (empty = a plain
+ *  reopen). Two-way like appRedo: the reply is whether the flow is back at its return step, so the composer holds
+ *  open and keeps the brief when the reopen does not land. */
 export interface FlowAppBackToRedMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -712,9 +714,9 @@ export interface FlowApi {
    *  whether the work turn re-entered, so the redo composer holds open until it confirms — a drop (runner
    *  mid-turn / gate raced out) never discards the human's instruction. */
   appRedo(repoKey: string, step: string, turnKey: string, instruction: string): Promise<boolean>;
-  /** §28.4.2 — send `repoKey`'s current slice back to RED from the gate at `step`+`turnKey` (§6), carrying the
-   *  `brief` its RED, GREEN and refactor turns are handed (empty = a plain reopen). Resolves whether the flow is
-   *  back at RED, so the composer holds open and keeps the brief when it is not. */
+  /** §28.4.2 — send `repoKey`'s flow back to its return step from the gate at `step`+`turnKey` (§6), carrying the
+   *  `brief` the turns that read it are handed (empty = a plain reopen). Resolves whether the flow is
+   *  back at that step, so the composer holds open and keeps the brief when it is not. */
   appBackToRed(repoKey: string, step: string, turnKey: string, brief: string): Promise<boolean>;
   /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
    *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel

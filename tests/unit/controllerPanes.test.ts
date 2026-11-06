@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, dismissLoopMessageIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, dismissLoopMessageIn, headerActivationIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusService } from '../helpers/controllerStatusFixture';
 
@@ -92,7 +92,8 @@ describe('controller panes', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [terminal, { ...terminal, id: 'terminal-b' }] });
     try {
       const card = cardsIn(host)[0];
-      (card && bringForwardIn(card))?.click();
+      expect(card && headerActivationIn(card), 'header icon').toBeDefined();
+      (card && headerActivationIn(card))?.click();
       await vi.waitFor(() => expect({ cards: cardsIn(host).length, activated: [...service.activated].sort() }).toEqual({ cards: 1, activated: ['terminal-a', 'terminal-b'] }));
     } finally { dispose(); }
   });
@@ -101,7 +102,8 @@ describe('controller panes', () => {
     const { host, dispose } = mountControllerPanes({ controller: statusService([terminal], { activation: 'unavailable' }).api });
     try {
       const card = cardIn(host, terminal.launchDirectory);
-      (card && bringForwardIn(card))?.click();
+      expect(card && headerActivationIn(card), 'header icon').toBeDefined();
+      (card && headerActivationIn(card))?.click();
       await vi.waitFor(() => expect({
         message: host.querySelector('[role="alert"]')?.textContent ?? '',
         cards: cardsIn(host).length,
