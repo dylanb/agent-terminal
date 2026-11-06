@@ -104,7 +104,7 @@ import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
 import { currentGitBranch } from './gitBranch';
-import { watchViewerTree, viewerRoot } from './viewerWatch';
+import { watchViewerTree, viewerRoot, viewerWatchFactory, viewerWatchMode } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -354,13 +354,14 @@ async function createWindow(): Promise<void> {
     onChanged: pushViewerChanged,
   });
   const onViewerActivity = createViewerActivityHandler({ pushChanged: pushViewerChanged, warm: warmBase });
-  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
+  const viewerWatchOpts = { watch: viewerWatchFactory(viewerWatchMode(process.platform)) };
+  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity, viewerWatchOpts);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
     knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
-    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
+    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity, viewerWatchOpts);
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
