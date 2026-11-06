@@ -4,12 +4,13 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dump, load } from 'js-yaml';
-import { electron } from './registeredElectron';
+import { controllerOf, electron } from './registeredElectron';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
-import { AGENT_LOGS_BRANCH_SH, exampleConfigDir, seedFakeAgentV2 } from './fakeTools';
+import { AGENT_LOGS_BRANCH_SH, agentSwitchesBranchSh, exampleConfigDir, seedFakeAgentV2 } from './fakeTools';
 import { createAdoptionWorld, type AdoptionWorld, type AdoptionWorldOptions } from '../helpers/adoptionWorld';
 import { outwardWrites } from '../helpers/outwardWrites';
 import { readPickupRecord } from '../../src/main/appLoopState';
+import { isAdoptedPickup } from '../../src/shared/appBootstrap';
 import { createTrustedPickups } from '../../src/main/trustedPickups';
 import { inProgressRunIdentity } from '../../src/main/gateRunState';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -92,7 +93,10 @@ interface Launched {
   home: string;
 }
 
-async function launch(w: AdoptionWorld, agentTurnShell?: string): Promise<Launched> {
+type TurnShell = { work?: string[]; review?: string[]; consolidate?: string[] };
+
+/** `agentTurnShell` runs at the end of every turn when it is one command, or per turn kind when it is a map. */
+async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell): Promise<Launched> {
   const home = tempDir('agent-term-e2e-adopt-home-');
   const config = seedAdoptingConfig();
   const agentBin = tempDir('agent-term-e2e-adopt-agent-');
@@ -101,7 +105,9 @@ async function launch(w: AdoptionWorld, agentTurnShell?: string): Promise<Launch
     artifactRel: ARTIFACT_REL,
     work: 'complete',
     review: 'full',
-    ...(agentTurnShell === undefined ? {} : { extraShell: { work: [agentTurnShell], review: [agentTurnShell], consolidate: [agentTurnShell] } }),
+    ...(agentTurnShell === undefined
+      ? {}
+      : { extraShell: typeof agentTurnShell === 'string' ? { work: [agentTurnShell], review: [agentTurnShell], consolidate: [agentTurnShell] } : agentTurnShell }),
   });
   seedAdoptingFlow(w.repo);
   const app = await electron.launch({
@@ -284,4 +290,28 @@ test("a flow whose adopting step breaks the adoption rules fails to load in the 
   await expect.soft(flowControl(page)).toHaveCount(0);
   expect.soft(localBranches(w)).toEqual(['main']);
   expect.soft(outwardWrites(w.calls())).toEqual([]);
+});
+
+test("a turn that starts on a branch other than the run's fix branch is held, naming both branches and the primary ticket with its repository (#304 AC 5)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 120_000);
+  // The primary lives in the fork, so a reason naming origin's repository in its place is told apart.
+  const w = world({ prefix: 'agent-term-e2e-adopt-hold', pr: { fork: 'Contributor/Fork', closingIssues: [{ repo: 'contributor/fork', number: 177 }] } });
+  const { app, page } = await launch(w, { work: [agentSwitchesBranchSh('elsewhere')] });
+  await startOnPr(page, w, true);
+
+  await expect.poll(() => readPickupRecord(w.repo).kind, { timeout: 30_000 }).toBe('complete');
+  const record = readPickupRecord(w.repo);
+  const fixBranch = record.kind === 'complete' && isAdoptedPickup(record.bootstrap) ? record.bootstrap.fixBranch : '';
+  expect.soft(fixBranch).toMatch(namesPr(w.prNumber));
+  const controller = controllerOf(app);
+  await expect.poll(() => controller.loopMessage()?.kind, { timeout: 90_000 }).toBe('error');
+  const reason = controller.loopMessage()?.reason ?? '';
+
+  expect.soft(reason).toContain('elsewhere');
+  expect.soft(reason).toContain(fixBranch);
+  expect.soft(reason).toMatch(/contributor\/fork/i);
+  expect.soft(reason).toMatch(namesPr(177));
+  expect.soft(checkedOut(w)).toBe('elsewhere');
+  expect.soft(outwardWrites(w.calls())).toEqual([]);
+  expect.soft(w.contractBreaches()).toEqual([]);
 });

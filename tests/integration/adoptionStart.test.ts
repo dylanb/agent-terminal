@@ -164,6 +164,30 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     expect.soft(reason(result)).toContain(adoptedFixBranch(w.prNumber, 1_700_000_000_000));
   });
 
+  it('rolls a start that fails after checking out the fix branch back to the branch it started on, leaving no branch and no record', async () => {
+    const w = world();
+    const mainAt = w.git(w.repo, ['rev-parse', 'main']);
+    const git = createRealAdoptionGit(w.repo);
+    const failing: AdoptionStartDeps = {
+      ...deps(w.repo),
+      git: {
+        ...git,
+        createAndCheckOut: async (branch, oid) => {
+          await git.createAndCheckOut(branch, oid);
+          throw new Error('the checkout was interrupted');
+        },
+      },
+    };
+
+    const result = await runAdoptionStart(failing, { pr: w.prNumber, startedAt: 1_700_000_000_000 });
+
+    expect.soft(reason(result)).toContain('the checkout was interrupted');
+    expect.soft(w.git(w.repo, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
+    expect.soft(w.git(w.repo, ['rev-parse', 'main'])).toBe(mainAt);
+    expect.soft(branches(w)).toEqual(['main']);
+    expect.soft(readPickupRecord(w.repo).kind).toBe('none');
+  });
+
   it('rolls a start made from a detached HEAD back to that commit, leaving no branch and no record', async () => {
     const w = world();
     w.git(w.repo, ['checkout', '--detach', 'main']);
