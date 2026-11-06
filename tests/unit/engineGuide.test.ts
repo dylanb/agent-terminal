@@ -468,3 +468,23 @@ describe('the engine guide — the turn contract’s slot places (#276)', () => 
     expect(problems).toEqual([]);
   });
 });
+
+describe('the engine guide — a repeat’s two count sources (#278)', () => {
+  it('makes count_input and count_from each required only when the other is absent, under each key in the guide', () => {
+    const conditionUnder = (key: string, other: string): { conditional: boolean; namesOther: boolean; inGuide: boolean } => {
+      const doc = descriptorKey(ENGINE_CAPABILITIES, 'flow.steps[].repeat', key);
+      const heading = keyHeading(GUIDE, 'flow.steps[].repeat', key);
+      const condition = doc?.required.kind === 'conditional' ? doc.required.condition : '';
+      return {
+        conditional: doc?.required.kind === 'conditional',
+        namesOther: condition.includes(other),
+        inGuide: heading !== undefined && condition !== '' && intro(GUIDE, heading).includes(condition),
+      };
+    };
+    const holds = { conditional: true, namesOther: true, inGuide: true };
+    expect({ count_input: conditionUnder('count_input', 'count_from'), count_from: conditionUnder('count_from', 'count_input') }).toEqual({
+      count_input: holds,
+      count_from: holds,
+    });
+  });
+});

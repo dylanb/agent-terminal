@@ -33,6 +33,8 @@ import {
   fieldsAt,
   loadAt,
   loadWithValue,
+  loadableKeySets,
+  oneOfFirstMembers,
   plantLoopInTiers,
   requiredOnlyValuesAt,
   samplesAt,
@@ -99,6 +101,14 @@ const RULE_CASES: Readonly<Record<OracleRuleId, { breaks: () => DefLoad; mended:
   'back-to-names-earlier-step': {
     breaks: () => loadAt('flow.steps[]', { id: 'second', kind: 'manual', repeat: { back_to: 'second', count_input: 'slices' } }),
     mended: () => loadAt('flow.steps[]', { id: 'second', kind: 'manual', repeat: { back_to: 'first', count_input: 'slices' } }),
+  },
+  'exactly-one-count-source': {
+    breaks: () => loadAt('flow.steps[].repeat', fieldsAt('flow.steps[].repeat', ['back_to', 'count_input', 'count_from'])),
+    mended: () => loadAt('flow.steps[].repeat', fieldsAt('flow.steps[].repeat', ['back_to', 'count_from'])),
+  },
+  'list-only-for-json-list': {
+    breaks: () => loadAt('flow.steps[].repeat.count_from', fieldsAt('flow.steps[].repeat.count_from', ['artifact', 'format', 'list'], { format: 'impl-slices' })),
+    mended: () => loadAt('flow.steps[].repeat.count_from', fieldsAt('flow.steps[].repeat.count_from', ['artifact', 'format'], { format: 'impl-slices' })),
   },
   'declared-name-matches-resolved-name': {
     breaks: () => loadAt('loop', { ...LOOP_BASE, name: `not-${SAMPLE_LOOP}` }),
@@ -202,7 +212,7 @@ describe.each(['flow', 'loop'] as const)('the descriptor matches the %s loader a
     for (const id of ids) {
       const keys = descriptorKeys(problems, id, (k) => k.required.kind === 'always');
       if (keys === undefined) continue;
-      const load = (subset: readonly string[]) => loadAt(id, fieldsAt(id, subset, requiredOnlyValuesAt(id)));
+      const load = (subset: readonly string[]) => loadAt(id, fieldsAt(id, [...subset, ...oneOfFirstMembers(id)], requiredOnlyValuesAt(id)));
       const alone = load(keys);
       if (!alone.ok) problems.push(`${id}: the always-required keys alone do not load: ${alone.reason}`);
       for (const key of keys) if (load(keys.filter((k) => k !== key)).ok) problems.push(`${id}: loads without always-required ${key}`);
@@ -216,8 +226,10 @@ describe.each(['flow', 'loop'] as const)('the descriptor matches the %s loader a
       const position = descriptorPosition(id);
       const keys = descriptorKeys(problems, id, () => true);
       if (position === undefined || keys === undefined) continue;
-      const loads = loadAt(id, { ...fieldsAt(id, keys), not_a_read_key: 'x' }).ok;
-      if (loads !== (position.unreadKeys === 'ignored')) problems.push(`${id}: an unread key ${loads ? 'loads' : 'fails'} where the descriptor says ${position.unreadKeys}`);
+      for (const set of loadableKeySets(id, keys)) {
+        const loads = loadAt(id, { ...fieldsAt(id, set), not_a_read_key: 'x' }).ok;
+        if (loads !== (position.unreadKeys === 'ignored')) problems.push(`${id} ${set.join(' ')}: an unread key ${loads ? 'loads' : 'fails'} where the descriptor says ${position.unreadKeys}`);
+      }
     }
     expect(problems).toEqual([]);
   });
@@ -229,8 +241,10 @@ describe.each(['flow', 'loop'] as const)('every key the descriptor lists at a %s
     for (const id of positionIds(definition)) {
       const keys = descriptorKeys(problems, id, () => true);
       if (keys === undefined) continue;
-      const load = loadAt(id, fieldsAt(id, keys));
-      if (!load.ok) problems.push(`${id}: ${load.reason}`);
+      for (const set of loadableKeySets(id, keys)) {
+        const load = loadAt(id, fieldsAt(id, set));
+        if (!load.ok) problems.push(`${id} ${set.join(' ')}: ${load.reason}`);
+      }
     }
     expect(problems).toEqual([]);
   });

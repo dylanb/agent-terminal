@@ -54,7 +54,13 @@ export const FLOW_POSITIONS = {
     definition: 'flow',
     yamlPath: 'steps[].repeat',
     unreadKeys: 'ignored',
-    keys: { back_to: 'always', count_input: 'always' },
+    keys: { back_to: 'always', count_input: 'conditional', count_from: 'conditional' },
+  }),
+  'flow.steps[].repeat.count_from': position({
+    definition: 'flow',
+    yamlPath: 'steps[].repeat.count_from',
+    unreadKeys: 'ignored',
+    keys: { artifact: 'always', format: 'always', list: 'conditional' },
   }),
 } as const;
 
@@ -187,6 +193,7 @@ export const CLOSED_SETS: readonly ClosedSet[] = [
   { position: 'flow.steps[]', key: 'gate_authority', values: ['human', 'auto'] },
   { position: 'flow.steps[]', key: 'loop_namespace', values: ['app', 'legacy'] },
   { position: 'flow.steps[]', key: 'bootstrap', values: ['pickup'] },
+  { position: 'flow.steps[].repeat.count_from', key: 'format', values: ['impl-slices', 'json-list'] },
   { position: 'loop', key: 'version', values: ['v2'] },
   { position: 'loop.work', key: 'completion', values: ['red', 'green', 'refactor'] },
   { position: 'loop.work', key: 'frozen_check', values: [true] },
@@ -243,6 +250,8 @@ export const CROSS_FIELD_RULES = [
   { position: 'flow.steps[]', key: 'gate_authority', rule: 'gate-authority-only-on-loop-step' },
   { position: 'flow.steps[]', key: 'loop_namespace', rule: 'app-namespace-needs-safe-loop-name' },
   { position: 'flow.steps[].repeat', key: 'back_to', rule: 'back-to-names-earlier-step' },
+  { position: 'flow.steps[].repeat', key: 'count_from', rule: 'exactly-one-count-source' },
+  { position: 'flow.steps[].repeat.count_from', key: 'list', rule: 'list-only-for-json-list' },
   { position: 'loop', key: 'name', rule: 'declared-name-matches-resolved-name' },
   { position: 'loop', key: 'consolidator', rule: 'goal-excludes-consolidator' },
   { position: 'loop', key: 'reviewers', rule: 'reviewers-need-consolidator-or-goal' },
@@ -254,6 +263,12 @@ export const CROSS_FIELD_RULES = [
 ] as const satisfies readonly CrossFieldRule[];
 
 export type OracleRuleId = (typeof CROSS_FIELD_RULES)[number]['rule'];
+
+/** Keys of which a position holds exactly one: a definition with none of them, or with two, fails to load. */
+export const ONE_OF_KEYS = [{ position: 'flow.steps[].repeat', keys: ['count_input', 'count_from'] }] as const satisfies readonly {
+  position: FlowPositionId;
+  keys: readonly string[];
+}[];
 
 /** Keys checked at run time, never at load. */
 /** Each key's run-time outcome cases; `capCase` is the one whose outcome is the engine cap. */

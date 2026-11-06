@@ -227,3 +227,49 @@ describe('a flow\'s loops resolve in the tier its folder sits in', () => {
     }
   });
 });
+
+// #278 — a malformed `count_from` repeat fails `--validate-flow` with a flow.yaml line naming the repeat step; each
+// breaking declaration is paired with its mended one, which passes. The source loop outputs the declared artifact,
+// so the mended flow passes the artifact check too.
+describe('a count_from repeat declaration the flow loader refuses', () => {
+  const REPEAT_STEP = 'repeat-here';
+  const JSON_LIST = { artifact: 'steps', format: 'json-list', list: 'steps' };
+  const IMPL_SLICES = { artifact: 'steps', format: 'impl-slices' };
+
+  /** A repository catalog flow whose `design` loop outputs `steps`, and whose repeat step carries `repeat`. */
+  const repeatFlow = (repo: string, repeat: Readonly<Record<string, unknown>>): { folder: string; flowFile: string } => {
+    writeLoopDef(operatorLoops(), 'design-loop', { outputs: { steps: 'steps.json' }, artifact: 'steps' });
+    writeLoopDef(operatorLoops(), 'work-loop');
+    const folder = flowLocations.repoCatalogEntry(repo, 'f');
+    const flowFile = writeFlow(folder, {
+      name: 'f',
+      steps: [
+        { id: 'design', kind: 'loop', loop: 'design-loop' },
+        { id: 'build', kind: 'loop', loop: 'work-loop' },
+        { id: REPEAT_STEP, kind: 'loop', loop: 'work-loop', repeat: { raw: repeat } },
+        { id: 'finish', kind: 'loop', loop: 'work-loop' },
+      ],
+    });
+    return { folder, flowFile };
+  };
+
+  const cases: readonly { rule: string; breaks: Readonly<Record<string, unknown>>; mended: Readonly<Record<string, unknown>> }[] = [
+    { rule: 'a format outside impl-slices and json-list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, format: 'csv-list' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'list missing for json-list', breaks: { back_to: 'build', count_from: { artifact: 'steps', format: 'json-list' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'list present for impl-slices', breaks: { back_to: 'build', count_from: { ...IMPL_SLICES, list: 'steps' } }, mended: { back_to: 'build', count_from: IMPL_SLICES } },
+    { rule: 'both count_input and count_from', breaks: { back_to: 'build', count_input: 'slices', count_from: JSON_LIST }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'neither count_input nor count_from', breaks: { back_to: 'build' }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'a non-string artifact', breaks: { back_to: 'build', count_from: { ...JSON_LIST, artifact: 42 } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'an empty artifact', breaks: { back_to: 'build', count_from: { ...JSON_LIST, artifact: '' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'a non-string list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, list: 7 } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'an empty list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, list: '' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+  ];
+
+  it.each(cases)('$rule exits 1 with a flow.yaml line naming the repeat step, and the mended declaration exits 0', ({ breaks, mended }) => {
+    const repo = dir('repo');
+    const broken = repeatFlow(repo, breaks);
+    expect.soft(problemOutcome(validateIn(broken.folder, repo), realpathSync(broken.flowFile))).toEqual(naming(REPEAT_STEP));
+    const fixed = repeatFlow(repo, mended);
+    expect.soft(passOutcome(validateIn(fixed.folder, repo))).toEqual(PASSED);
+  });
+});
