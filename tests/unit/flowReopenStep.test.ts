@@ -24,7 +24,7 @@ const loadWith = (repeatOn: string | null): FlowLoad => ({
         id: 'integration',
         kind: 'loop',
         loop: 'integration-loop',
-        ...(repeatOn ? { repeat: { backTo: repeatOn, countInput: 'slices' } } : {}),
+        ...(repeatOn ? { repeat: { backTo: repeatOn, source: { kind: 'input', countInput: 'slices' } } } : {}),
       },
     ],
   },

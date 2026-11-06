@@ -26,7 +26,7 @@ import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bind
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
 import { isOneOf } from '../shared/oneOf';
-import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, REPEAT_LIST_FORMATS, type ActedInputType, type FlowBootstrap, type FlowStepKind, type RepeatListFormat } from '../shared/engineCapabilities/flow';
 
 const INPUT_TYPE_REFS: Readonly<Record<ActedInputType, keyof FlowRefs>> = { 'github-ticket': 'ticket', pr: 'pr' };
 
@@ -65,11 +65,16 @@ export interface FlowStepDef {
   bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
-   *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
-   *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
-   *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
-  repeat?: { backTo: string; countInput: string };
+   *  EARLIER step) instead of the next step, until it has looped back as many times as `source` gives —
+   *  resolved at runtime, clamped to [1, MAX_SLICES]. */
+  repeat?: { backTo: string; source: RepeatCountSource };
 }
+
+/** Where a repeat's count comes from: a flow input (`count_input`), or a list in an artifact (`count_from`). */
+export type RepeatCountSource =
+  | { kind: 'input'; countInput: string }
+  | { kind: 'list'; artifact: string; format: 'json-list'; list: string }
+  | { kind: 'list'; artifact: string; format: Exclude<RepeatListFormat, 'json-list'> };
 
 export function stepTemplateRef(step: FlowStepDef): string | null {
   return step.todoTemplate ? step.todoTemplate : null;
@@ -177,6 +182,39 @@ function flowLoadOf(read: BoundedRead, file: string, label: string): FlowLoad {
   }
 }
 
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+
+/** A step's `repeat` mapping as its loop-back, or the problem that fails the flow to load. `back_to` must name a
+ *  step already in `earlier`: a repeat is a loop-BACK, so a forward, unknown or self target is a load error. */
+function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable<FlowStepDef['repeat']> | string {
+  if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return 'has a malformed repeat (needs back_to + count_input or count_from)';
+  const backTo = raw.back_to;
+  const source = parseCountSource(raw.count_input, raw.count_from);
+  if (typeof source === 'string') return source;
+  if (!earlier.some((s) => s.id === backTo)) return `repeat.back_to "${backTo}" is not an earlier step`;
+  return { backTo, source };
+}
+
+function parseCountSource(countInput: unknown, countFrom: unknown): RepeatCountSource | string {
+  if (countInput !== undefined && countFrom !== undefined) return 'has a repeat declaring both count_input and count_from (declare exactly one)';
+  if (countFrom === undefined) {
+    return isNonEmptyString(countInput) ? { kind: 'input', countInput } : 'has a malformed repeat (needs back_to + count_input or count_from)';
+  }
+  if (!isRecord(countFrom)) return 'has a repeat.count_from that is not a mapping of artifact + format';
+  const { artifact, format, list } = countFrom;
+  if (!isNonEmptyString(artifact)) return 'has a repeat.count_from without a non-empty artifact';
+  if (!isOneOf(REPEAT_LIST_FORMATS, format))
+    return `has a repeat.count_from with unsupported format "${String(format)}" (supports: ${REPEAT_LIST_FORMATS.join(', ')})`;
+  return LIST_SOURCE_FOR[format](artifact, list);
+}
+
+const LIST_SOURCE_FOR: Readonly<Record<RepeatListFormat, (artifact: string, list: unknown) => RepeatCountSource | string>> = {
+  'json-list': (artifact, list) =>
+    isNonEmptyString(list) ? { kind: 'list', artifact, format: 'json-list', list } : 'has a json-list repeat.count_from without a non-empty list key',
+  'impl-slices': (artifact, list) =>
+    list === undefined ? { kind: 'list', artifact, format: 'impl-slices' } : 'has an impl-slices repeat.count_from with a list key, which only json-list takes',
+};
+
 function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
   try {
@@ -232,20 +270,11 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
-    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
-    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
-    let repeat: { backTo: string; countInput: string } | undefined;
+    let repeat: FlowStepDef['repeat'];
     if (raw.repeat !== undefined) {
-      if (
-        !isRecord(raw.repeat) ||
-        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
-        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
-      )
-        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
-      const backTo = raw.repeat.back_to;
-      if (!steps.some((s) => s.id === backTo))
-        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
-      repeat = { backTo, countInput: raw.repeat.count_input };
+      const parsed = parseRepeat(raw.repeat, steps);
+      if (typeof parsed === 'string') return { ok: false, error: `flow.yaml step "${raw.id}" ${parsed}` };
+      repeat = parsed;
     }
     steps.push({
       id: raw.id,
@@ -456,9 +485,11 @@ export function createFlowMachine(
   };
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
-  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
-  const slicesFor = (countInput: string): number => {
-    const n = numericInput(countInput);
+  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770). A list source runs
+  // its group once until a list sets the count.
+  const slicesFor = (source: RepeatCountSource): number => {
+    if (source.kind === 'list') return 1;
+    const n = numericInput(source.countInput);
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
   };
@@ -580,7 +611,7 @@ export function createFlowMachine(
       if (step.repeat) {
         const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
         const backIndex = names.indexOf(step.repeat.backTo);
-        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+        if (completed < slicesFor(step.repeat.source) && backIndex >= 0) {
           repeatCounts[step.id] = completed + 1;
           index = backIndex;
           persist();

@@ -8,6 +8,9 @@ export type FlowStepKind = (typeof FLOW_STEP_KINDS)[number];
 export const FLOW_BOOTSTRAPS = ['pickup'] as const;
 export type FlowBootstrap = (typeof FLOW_BOOTSTRAPS)[number];
 
+export const REPEAT_LIST_FORMATS = ['impl-slices', 'json-list'] as const;
+export type RepeatListFormat = (typeof REPEAT_LIST_FORMATS)[number];
+
 export const ACTED_INPUT_TYPES = ['github-ticket', 'pr'] as const;
 export type ActedInputType = (typeof ACTED_INPUT_TYPES)[number];
 
@@ -73,6 +76,17 @@ const INPUT_TYPE_DOCS: Record<ActedInputType, Explanation> = {
   pr: {
     does: 'A pull-request number. The engine reads it as the run’s pull request.',
     when: 'Choose it for the input that names the pull request the flow works on.',
+  },
+};
+
+const REPEAT_LIST_FORMAT_DOCS: Record<RepeatListFormat, Explanation> = {
+  'impl-slices': {
+    does: 'The artifact’s `## Impl-slices` block, read as a plan’s is: one entry per slice heading.',
+    when: 'Choose it when the artifact is a plan-shaped Markdown file.',
+  },
+  'json-list': {
+    does: 'A JSON object whose `list` key holds an array of entries, each an object whose `title` is a string that is non-empty after trimming and holds no control character, a line break included.',
+    when: 'Choose it for any other list an agent writes; the file must be JSON.',
   },
 };
 
@@ -184,8 +198,8 @@ export const FLOW_POSITIONS: readonly PositionCapability[] = [
       },
       {
         key: 'repeat',
-        does: 'Loops the flow back: on leaving this step, the run returns to an earlier step instead of going on, a number of times read from an input.',
-        when: 'Set it to run a group of steps once per slice, for example red, green and refactor for each slice of a plan.',
+        does: 'Loops the flow back: on leaving this step, the run returns to an earlier step instead of going on, a number of times read from an input (`count_input`) or from a list in an artifact (`count_from`).',
+        when: 'Set it to run a group of steps once per entry of a list, for example red, green and refactor for each slice of a plan.',
         required: { kind: 'never' },
         rules: [],
         values: { kind: 'any' },
@@ -243,8 +257,8 @@ export const FLOW_POSITIONS: readonly PositionCapability[] = [
       {
         key: 'count_input',
         does: 'The `name` of the input that holds how many times the group runs.',
-        when: 'Always set it to an input a plan or a person fills with the slice count.',
-        required: { kind: 'always' },
+        when: 'Set it to an input a plan or a person fills with the slice count, when the count does not come from `count_from`.',
+        required: { kind: 'conditional', condition: 'the repeat has no `count_from`.' },
         rules: [],
         values: {
           kind: 'not-checked-at-load',
@@ -255,6 +269,45 @@ export const FLOW_POSITIONS: readonly PositionCapability[] = [
             { case: 'above-cap', text: `When the value is above ${MAX_SLICES}, the group runs ${MAX_SLICES} times.` },
           ],
         },
+      },
+      {
+        key: 'count_from',
+        does: 'The list in an artifact whose entries set how many times the group runs. Until a list sets the count, the group runs once.',
+        when: 'Set it when a step’s artifact lists the entries the group works through, when the count does not come from `count_input`.',
+        required: { kind: 'conditional', condition: 'the repeat has no `count_input`.' },
+        rules: [{ id: 'exactly-one-count-source', text: 'A repeat that declares both `count_input` and `count_from`, or neither, fails to load.' }],
+        values: { kind: 'any' },
+      },
+    ],
+  },
+  {
+    definition: 'flow',
+    yamlPath: 'steps[].repeat.count_from',
+    unreadKeys: 'ignored',
+    keys: [
+      {
+        key: 'artifact',
+        does: 'The loop output id of the artifact that holds the list.',
+        when: 'Always set it to a non-empty string; an empty or non-string value fails to load.',
+        required: { kind: 'always' },
+        rules: [],
+        values: { kind: 'any' },
+      },
+      {
+        key: 'format',
+        does: 'How the artifact holds the list.',
+        when: 'Always set it; any value outside the list fails to load.',
+        required: { kind: 'always' },
+        rules: [],
+        values: closed(REPEAT_LIST_FORMATS, REPEAT_LIST_FORMAT_DOCS),
+      },
+      {
+        key: 'list',
+        does: 'The top-level key of the `json-list` file whose array holds the entries.',
+        when: 'Set it to a non-empty string when `format` is `json-list`.',
+        required: { kind: 'conditional', condition: 'the `format` is `json-list`.' },
+        rules: [{ id: 'list-only-for-json-list', text: 'A `json-list` source without a non-empty string `list`, or an `impl-slices` source with any `list`, fails to load.' }],
+        values: { kind: 'any' },
       },
     ],
   },
