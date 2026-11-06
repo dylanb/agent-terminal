@@ -59,6 +59,16 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (text !== undefined) created.textContent = text;
     return created;
   };
+  const icon = (path: string): SVGSVGElement => {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    const drawn = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    drawn.setAttribute('d', path);
+    svg.append(drawn);
+    return svg;
+  };
 
   const card = element('article', 'controller-card');
   card.dataset.status = status.statusClass;
@@ -124,14 +134,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     actionButton.type = 'button';
     actionButton.title = count > 1 ? 'Bring all of these terminals forward' : 'Bring this terminal forward';
     actionButton.setAttribute('aria-label', `${label} ${repositoryName} ${model.launchDirectory}`);
-    const arrow = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    arrow.setAttribute('viewBox', '0 0 24 24');
-    arrow.setAttribute('aria-hidden', 'true');
-    arrow.setAttribute('focusable', 'false');
-    const arrowPath = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-    arrowPath.setAttribute('d', 'M7 17L17 7M9 7h8v8');
-    arrow.append(arrowPath);
-    actionButton.append(arrow);
+    actionButton.append(icon('M7 17L17 7M9 7h8v8'));
     actions.bind(actionButton, deps.onAction, { key: actionKind });
     header.append(actionButton);
   }
@@ -143,14 +146,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     for (const entry of timeline) {
       const item = element('li', `controller-timeline-entry controller-timeline-${entry.kind}`);
       if (entry.kind === 'notification') {
-        const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const bell = icon('M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
         bell.classList.add('controller-notification-bell');
-        bell.setAttribute('viewBox', '0 0 24 24');
-        bell.setAttribute('aria-hidden', 'true');
-        bell.setAttribute('focusable', 'false');
-        const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-        outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
-        bell.append(outline);
         item.append(bell, element('span', 'controller-visually-hidden', 'Notification: '));
       }
       const time = element('time', 'controller-muted', new Date(entry.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));

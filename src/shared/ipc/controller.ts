@@ -63,9 +63,7 @@ export type ControllerWorkStatus = {
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */
   loopMessage?: ControllerLoopMessage | null;
-  /** Absent when either peer's minor predates identity; null when the terminal has none. */
   title?: string | null;
-  /** Absent when either peer's minor predates identity; null when the terminal has none. */
   branch?: string | null;
 };
 
@@ -79,7 +77,6 @@ export interface ControllerLoopMessage { id: string; kind: 'error' | 'notice'; r
 
 export interface ControllerTerminal {
   clearHistoryTarget?: ControllerClearTarget;
-  /** Newest first, at most three entries across both kinds. */
   timeline?: ControllerTimelineEntry[];
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';

@@ -32,7 +32,6 @@ export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text
   scope.getByRole('article', { name: new RegExp(`^(?=[\\s\\S]*${directoryPattern(directory).source})(?=[\\s\\S]*${escapeRegExp(text)})`) });
 const activationName = /^Bring\b[\s\S]*\bforward\b/;
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: activationName });
-/** The bring-forward icon button in the card's `<header>` element, apart from the disclosure toggle. */
 export const headerActivationLocator = <L extends RoleScope<L>>(card: { locator(selector: string): L }): L =>
   card.locator('header').getByRole('button', { name: activationName });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
@@ -99,18 +98,14 @@ export const windowHeaderIn = (root: ParentNode): HTMLElement | undefined =>
 const controlsIn = (scope: ParentNode, text: string | RegExp): HTMLElement[] => roleMatches(scope, ['button', 'switch'], text);
 const controlIn = (scope: ParentNode, text: string | RegExp): HTMLElement | undefined => controlsIn(scope, text)[0];
 export const bringForwardIn = (card: ParentNode) => controlIn(card, activationName);
-/** The card's activation control inside its `<header>` element that is not the disclosure toggle. */
 export function headerActivationIn(card: ParentNode): HTMLElement | undefined {
   const header = card.querySelector('header');
   return header ? roleMatches(header, ['button'], activationName).find(button => !button.hasAttribute('aria-expanded')) : undefined;
 }
-/** An activation control anywhere in the card outside its `<header>` element. */
 export const bodyActivationIn = (card: ParentNode): HTMLElement | undefined =>
   roleMatches(card, ['button'], activationName).find(button => !button.closest('header'));
-/** The first button or switch of the card outside its `<header>` element. */
 export const bodyControlIn = (card: ParentNode): HTMLElement | undefined =>
   roleMatches(card, ['button', 'switch']).find(control => !control.closest('header'));
-/** The element outside the card's `<header>`, and not inside anything hidden, whose own text holds `directory`. */
 export function bodyDirectoryIn(card: ParentNode, directory: string): HTMLElement | undefined {
   const pattern = directoryPattern(directory);
   return [...card.querySelectorAll<HTMLElement>('*')].find(element =>
@@ -145,11 +140,9 @@ export function isExpanded(card: ParentNode, directory: string): boolean {
   if (!header) throw new Error(`No disclosure header for ${directory}`);
   return header.getAttribute('aria-expanded') === 'true';
 }
-/** The card's `<header>` element, whose text is what the collapsed card shows; the toggle's accessible name is separate. */
 export const cardHeaderTextIn = (card: ParentNode): string => card.querySelector('header')?.textContent ?? '';
 export const cardHeaderElementLocator = <L>(card: { locator(selector: string): L }): L => card.locator('header');
 
-/** What a header shows beyond the parts a test named: empty when nothing but whitespace and the `·` separator is left. */
 export function headerRemainder(headerText: string, named: readonly string[]): string {
   return named.reduce((text, part) => (part ? text.split(part).join(' ') : text), headerText).replace(/[\s·]+/g, ' ').trim();
 }
@@ -183,7 +176,6 @@ export function showsFullReason(control: Element | undefined): boolean {
 export const historyLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /History\s+\d\s*\/\s*3/i });
 export const historyIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /History\s+\d\s*\/\s*3/i);
 
-/** The card's timeline: its one list of entries, newest first. */
 export const timelineLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => card.getByRole('list');
 export const timelineEntriesLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => timelineLocator(card).getByRole('listitem');
 export const timelineIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['list'])[0];
@@ -191,7 +183,6 @@ export const timelineEntriesIn = (card: ParentNode): HTMLElement[] => {
   const list = timelineIn(card);
   return list ? roleMatches(list, ['listitem']) : [];
 };
-/** The text assistive technology reads for an entry; a notification entry's identifies it as one and a status entry's does not. */
 export const entryAccessibleText = (entry: Element): string => controlName(entry);
 export const entryTimesIn = (entry: ParentNode): HTMLTimeElement[] => [...entry.querySelectorAll('time')];
 export const entryIsNotification = (entry: Element): boolean => /notification/i.test(entryAccessibleText(entry));

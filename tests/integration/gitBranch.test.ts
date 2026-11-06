@@ -145,8 +145,8 @@ describe('readBranchLabel', () => {
     }
   });
 
-  it('is null for a directory that does not exist', async () => {
-    expect(await labelOf(join(tmpdir(), 'label-missing-directory-that-does-not-exist'))).toEqual({ label: null });
+  it('rejects with the reason when git cannot run in the directory', async () => {
+    expect(await labelOf(join(tmpdir(), 'label-missing-directory-that-does-not-exist'))).toEqual({ threw: expect.stringContaining('git symbolic-ref failed') });
   });
 
   it('reads the repository it is given under a hostile ambient GIT_DIR', async () => {

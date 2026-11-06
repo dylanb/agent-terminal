@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { holdQuitForShell } from '../../src/main/shellQuit';
+import { holdQuitForShell, killShell } from '../../src/main/shellQuit';
 
-function harness(alive = true) {
+function harness(alive = true, kill: 'signalled' | 'failed' = 'signalled') {
   const state = { exited: !alive, killed: 0, quits: 0 };
   const exitListeners: Array<() => void> = [];
   const timers: Array<{ ms: number; run: () => void }> = [];
@@ -9,7 +9,7 @@ function harness(alive = true) {
     {
       exited: () => state.exited,
       onExit: (run) => { exitListeners.push(run); },
-      forceKill: () => { state.killed += 1; },
+      forceKill: () => { state.killed += 1; return kill; },
     },
     500,
     (ms, run) => { timers.push({ ms, run }); },
@@ -68,11 +68,35 @@ describe('holding the app quit until the hosted shell has exited (§5)', () => {
     expect(h.state.quits).toBe(1);
   });
 
+  it('quits without waiting for an exit when the shell cannot be killed, and lets that quit through', () => {
+    const h = harness(true, 'failed');
+    expect(h.willQuit()).toBe(true);
+    h.elapse();
+    expect(h.state.quits).toBe(1);
+    expect(h.willQuit()).toBe(false);
+  });
+
   it('does not kill a shell whose exit arrived before the grace ran out', () => {
     const h = harness();
     h.willQuit();
     h.shellExits();
     h.elapse();
     expect(h.state).toEqual({ exited: true, killed: 0, quits: 1 });
+  });
+});
+
+describe('killing the hosted shell at quit', () => {
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+
+  it('is signalled when the kill is delivered', () => {
+    expect(killShell(() => {})).toBe('signalled');
+  });
+
+  it('is signalled when the shell is already gone', () => {
+    expect(killShell(() => { throw errno('ESRCH'); })).toBe('signalled');
+  });
+
+  it.each([errno('EPERM'), new Error('no code'), 'not an error'])('has failed for any other error: %s', error => {
+    expect(killShell(() => { throw error; })).toBe('failed');
   });
 });

@@ -20,7 +20,6 @@ const DEFAULTS = {
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
-  // §5: how long a quit waits for the hung-up shell to exit before killing it.
   shellQuitGraceMs: 2000,
 } as const;
 

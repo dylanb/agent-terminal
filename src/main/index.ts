@@ -25,7 +25,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
-import { holdQuitForShell } from './shellQuit';
+import { holdQuitForShell, killShell } from './shellQuit';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
@@ -121,7 +121,7 @@ import {
   exampleInstallDirs,
   type InstallDestination,
 } from './installExamples';
-import { CONTROLLER_BRANCH_REFRESH_MS, createControllerStatus } from './controllerStatus';
+import { createControllerStatus } from './controllerStatus';
 import { createLoopMessages } from './loopMessages';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
@@ -954,11 +954,9 @@ async function createWindow(): Promise<void> {
   refreshControllerStatus = () => controllerStatus.refresh();
   const stopStatusCwd = cwdTracker.onChange(() => controllerStatus.refresh());
   const statusTimer = setInterval(() => controllerStatus.refresh(), 250);
-  const branchTimer = setInterval(() => controllerStatus.refreshBranch(), CONTROLLER_BRANCH_REFRESH_MS);
   controllerStatus.refresh();
   win.once('closed', () => {
     clearInterval(statusTimer);
-    clearInterval(branchTimer);
     stopStatusCwd();
     controllerStatus.dispose();
     statusListeners.clear();
@@ -1270,9 +1268,7 @@ async function createWindow(): Promise<void> {
     {
       exited: () => shellExited,
       onExit: (run) => { ptyProcess.onExit(run); },
-      forceKill: () => {
-        try { ptyProcess.kill('SIGKILL'); } catch { /* §5: the shell may already be gone (ESRCH) */ }
-      },
+      forceKill: () => killShell(() => ptyProcess.kill('SIGKILL')),
     },
     config.shellQuitGraceMs,
     (ms, run) => { setTimeout(run, ms); },

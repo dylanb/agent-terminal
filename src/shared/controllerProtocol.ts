@@ -9,7 +9,6 @@ export const CONTROLLER_PROTOCOL_MAJOR = 2;
 export const CONTROLLER_PROTOCOL_MINOR = 3;
 /** The first minor whose peers carry `loopMessage` in status and understand `dismiss-loop-message`. */
 export const CONTROLLER_LOOP_MESSAGE_MINOR = 1;
-/** The first minor whose peers carry `title` and `branch` in status. */
 export const CONTROLLER_IDENTITY_MINOR = 3;
 export const CONTROLLER_SUPPORTED_MAJORS: ControllerVersionRange = { min: 2, max: 2 };
 

@@ -48,7 +48,6 @@ export function sameTitle(a: StatusBarTitle | null, b: StatusBarTitle | null): b
   return a !== null && b !== null && titleKey(a) === titleKey(b);
 }
 
-/** The text the bar shows for a title: the user's name, or `#N` / `PR #N` until the ref's GitHub title resolves. Null for an unnamed work. */
 export function statusBarTitleText(title: StatusBarTitle, resolved: string | null): string | null {
   if (title.kind === 'user') return title.text.length > 0 ? title.text : null;
   if (resolved !== null) return stripDisplayControlChars(resolved);

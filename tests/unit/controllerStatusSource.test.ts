@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createControllerStatus } from '../../src/main/controllerStatus';
 import { createLoopMessages } from '../../src/main/loopMessages';
 import type { ControllerLoopMessage, ControllerWorkStatus } from '../../src/shared/ipc';
+
+let consoleError: { mock: { calls: unknown[][] }; mockRestore(): void };
+beforeEach(() => { consoleError = vi.spyOn(console, 'error').mockImplementation(() => {}); });
+afterEach(() => { consoleError.mockRestore(); });
+const recorded = (): string[] => consoleError.mock.calls.map((call: unknown[]) => call.map(String).join(' '));
 
 it.each([0, Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps known work visible when persisted ticket %s is invalid', number => {
   const source = createControllerStatus({
@@ -34,6 +39,45 @@ it.each(['Issue title', ''])('accepts only the required flow facts and a title s
     source.refresh();
     await expect.poll(() => shown?.ticket).toEqual({ availability: 'known', number: 219, title: { availability: 'known', text: title } });
     expect(shown?.attention).toEqual({ status: 'awaiting-approval', reasons: ['Review required'] });
+  } finally { source.dispose(); }
+});
+
+it('keeps publishing the work when a title or branch read throws before returning', async () => {
+  const source = createControllerStatus({
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+      stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: 219 },
+    } }),
+    refTitle: () => { throw new Error('title read failed'); },
+    branch: () => { throw new Error('branch read failed'); },
+  });
+  let shown: ControllerWorkStatus | undefined;
+  source.subscribe(work => { shown = work; });
+  try {
+    source.refresh();
+    await expect.poll(() => shown?.ticket).toEqual({ availability: 'known', number: 219, title: { availability: 'unavailable' } });
+    expect(shown).toMatchObject({ flow: { availability: 'known', name: 'delivery' }, error: null, title: '#219', branch: null });
+    expect(recorded()).toEqual(expect.arrayContaining([expect.stringContaining('title read failed'), expect.stringContaining('branch read failed')]));
+  } finally { source.dispose(); }
+});
+
+it('keeps delivering the work to every subscriber when one subscriber throws', async () => {
+  let resolveTitle: (title: string | null) => void = () => {};
+  const source = createControllerStatus({
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+      stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: 219 },
+    } }),
+    refTitle: () => new Promise(resolve => { resolveTitle = resolve; }),
+    branch: async () => null,
+  });
+  source.subscribe(work => { if (work.title === 'Fix the login redirect') throw new Error('subscriber broke'); });
+  let shown: ControllerWorkStatus | undefined;
+  source.subscribe(work => { shown = work; });
+  try {
+    source.refresh();
+    resolveTitle('Fix the login redirect');
+    await expect.poll(() => shown?.title).toBe('Fix the login redirect');
+    expect(shown?.error).toBeNull();
+    expect(recorded()).toEqual(expect.arrayContaining([expect.stringContaining('subscriber broke')]));
   } finally { source.dispose(); }
 });
 
@@ -297,6 +341,12 @@ describe('the title a terminal reports', () => {
 });
 
 describe('the branch a terminal reports', () => {
+  // §23.6 "Live work and attention": publication follows the work within two seconds.
+  const BRANCH_FOLLOW_BUDGET_MS = 2_000;
+  const timePasses = () => { vi.advanceTimersByTime(BRANCH_FOLLOW_BUDGET_MS); };
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('is what the branch read returns for the current repository', async () => {
     const { shown, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.map(request => request.repoKey)).toEqual(['/repo']);
@@ -305,33 +355,33 @@ describe('the branch a terminal reports', () => {
   });
 
   it('is null when the read finds no branch', async () => {
-    const { shown, source, branchRequests } = identitySource();
+    const { shown, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
     branchRequests[0].resolve('first-branch');
     await expect.poll(() => shown()?.branch).toBe('first-branch');
-    source.refreshBranch();
+    timePasses();
     await expect.poll(() => branchRequests.length).toBe(2);
     branchRequests[1].resolve(null);
     await expect.poll(() => shown()?.branch).toBeNull();
   });
 
-  it('is read again when the branch is refreshed after a read completes', async () => {
-    const { shown, source, branchRequests } = identitySource();
+  it('is read again as time passes, once the previous read has completed', async () => {
+    const { shown, branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
     branchRequests[0].resolve('first-branch');
     await expect.poll(() => shown()?.branch).toBe('first-branch');
-    source.refreshBranch();
+    timePasses();
     await expect.poll(() => branchRequests.length).toBe(2);
     branchRequests[1].resolve('second-branch');
     await expect.poll(() => shown()?.branch).toBe('second-branch');
   });
 
   it('does not start another read for the same repository while one is pending', async () => {
-    const { source, branchRequests } = identitySource();
+    const { branchRequests } = identitySource();
     await expect.poll(() => branchRequests.length).toBe(1);
-    source.refreshBranch();
-    source.refreshBranch();
-    source.refreshBranch();
+    timePasses();
+    timePasses();
+    timePasses();
     await flushPromises();
     expect(branchRequests.map(request => request.repoKey)).toEqual(['/repo']);
   });
@@ -376,12 +426,62 @@ describe('the branch a terminal reports', () => {
     await expect.poll(() => branchRequests.length).toBe(1);
     branchRequests[0].resolve('first-branch');
     await expect.poll(() => shown()?.branch).toBe('first-branch');
-    source.refreshBranch();
+    timePasses();
     await expect.poll(() => branchRequests.length).toBe(2);
     branchRequests[1].reject(new Error('git exploded'));
     await expect.poll(() => shown()?.branch).toBeNull();
     now.userTitle = 'Second name';
     source.refresh();
     expect(shown()?.title).toBe('Second name');
+  });
+
+  it('records why the read failed once while it keeps failing the same way, and again after it recovers', async () => {
+    const { shown, branchRequests } = identitySource();
+    const failures = () => recorded().filter(line => line.includes('git could not run')).length;
+    await expect.poll(() => branchRequests.length).toBe(1);
+    branchRequests[0].reject(new Error('git could not run'));
+    await expect.poll(failures).toBe(1);
+    timePasses();
+    await expect.poll(() => branchRequests.length).toBe(2);
+    branchRequests[1].reject(new Error('git could not run'));
+    await flushPromises();
+    expect(failures()).toBe(1);
+    timePasses();
+    await expect.poll(() => branchRequests.length).toBe(3);
+    branchRequests[2].resolve('recovered');
+    await expect.poll(() => shown()?.branch).toBe('recovered');
+    timePasses();
+    await expect.poll(() => branchRequests.length).toBe(4);
+    branchRequests[3].reject(new Error('git could not run'));
+    await expect.poll(failures).toBe(2);
+  });
+
+  it('records a failure again for a new repository even when the reason is the same', async () => {
+    const { now, source, branchRequests } = identitySource({ repoKey: '/old' });
+    const failures = () => recorded().filter(line => line.includes('git could not run')).length;
+    await expect.poll(() => branchRequests.length).toBe(1);
+    branchRequests[0].reject(new Error('git could not run'));
+    await expect.poll(failures).toBe(1);
+    now.repoKey = '/new';
+    source.refresh();
+    await expect.poll(() => branchRequests.map(request => request.repoKey)).toEqual(['/old', '/new']);
+    branchRequests[1].reject(new Error('git could not run'));
+    await expect.poll(failures).toBe(2);
+  });
+
+  it('is not read again once the status source is disposed', async () => {
+    const { source, branchRequests } = identitySource();
+    await expect.poll(() => branchRequests.length).toBe(1);
+    branchRequests[0].resolve('first-branch');
+    await flushPromises();
+    timePasses();
+    await expect.poll(() => branchRequests.length).toBe(2);
+    branchRequests[1].resolve('first-branch');
+    await flushPromises();
+    source.dispose();
+    timePasses();
+    timePasses();
+    await flushPromises();
+    expect(branchRequests).toHaveLength(2);
   });
 });

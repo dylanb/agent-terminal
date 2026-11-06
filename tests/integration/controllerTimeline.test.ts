@@ -186,6 +186,16 @@ it('the first status after an overlap ends is a baseline for the survivor', asyn
   expect.soft(statusEntries(h.card('/work/overlap')).map(item => item.receivedAt)).toEqual([6000]);
 });
 
+it('changes reported during an overlap leave no entry on the survivor\'s card', async () => {
+  const h = await fixture();
+  const a = await h.connect(undefined, '/work/overlap'); const b = await h.connect(undefined, '/work/overlap');
+  await a.report({ activity: 'active' });
+  h.time(2000); await a.report({ activity: 'quiet' });
+  await b.terminal.close();
+  await expect.poll(() => h.shown('/work/overlap').filter(t => t.status !== 'disconnected').length).toBe(1);
+  expect(statusEntries(h.card('/work/overlap'))).toEqual([]);
+});
+
 it('a notification whose text matches a status entry is a new entry, not a counted repeat', async () => {
   const h = await fixture(); const { terminal, report } = await h.connect();
   await terminal.reportCurrent(null);

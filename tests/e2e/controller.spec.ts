@@ -11,7 +11,6 @@ import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from 
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
 import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, headerActivationLocator, statusRowLocator } from '../helpers/controllerCards';
 
-/** Collapses the card for `directory`, presses the icon in its header and expects the card to stay collapsed. */
 async function bringForwardFromCollapsedCard(page: Page, directory: string): Promise<void> {
   const card = cardLocator(page, directory);
   const toggle = cardHeaderLocator(card, directory);

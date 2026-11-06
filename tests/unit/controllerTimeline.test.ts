@@ -1,9 +1,16 @@
 import { expect, it } from 'vitest';
-import type { ControllerWorkStatus } from '../../src/shared/ipc';
+import type { ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
+import { createControllerTimelines } from '../../src/main/controllerTimeline';
 
-import { statusChanges } from '../../src/shared/controllerTimeline';
-
-const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => statusChanges(previous, next);
+const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => {
+  const timelines = createControllerTimelines<string>();
+  const terminal: ControllerTerminal = { id: 'terminal', launchDirectory: '/work', repositoryRoot: '/work' };
+  timelines.registered('connection', terminal, [terminal], true);
+  if (previous) timelines.reported('connection', terminal, previous, false);
+  const before = [...(terminal.timeline ?? [])];
+  timelines.reported('connection', terminal, next, false);
+  return (terminal.timeline ?? []).filter(entry => !before.includes(entry)).flatMap(entry => (entry.kind === 'status' ? [entry.text] : []));
+};
 
 const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
 const base = (overrides: Partial<ControllerWorkStatus> = {}): ControllerWorkStatus => ({

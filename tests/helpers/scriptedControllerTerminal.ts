@@ -7,9 +7,7 @@ import { connectWebSocket } from './controllerWebSocket';
 
 export interface ScriptedControllerTerminal {
   sendStatus(work: ControllerWorkStatus): Promise<void>;
-  /** A needs-a-human request as the terminal raises it. */
   raise(notification: NotificationCondition): Promise<void>;
-  /** The request currently standing, as the terminal reports it at registration or when it clears. */
   reportCurrent(notification: NotificationCondition | null): Promise<void>;
   activations(): number;
   /** The loop message ids the controller asked this terminal to dismiss, in order. */
