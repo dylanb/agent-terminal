@@ -85,8 +85,10 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 
 - One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
 - Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
+- Each card's header shows the repository, the terminal's title (its PR's or ticket's title, else the one you gave it), its git branch and its status, so sibling checkouts of one repository are told apart even when collapsed. The branch is re-read every five minutes by default (`APP_BRANCH_REFRESH_MS`).
+- An expanded card shows a timeline of its three newest events, newest first with times: notifications, and status changes such as Working, Idle, a flow step or Disconnected. **Clear history** empties it.
 - Tray dot: amber when a human is needed, red on error.
-- **Bring forward** raises the right window. Agents sharing a directory are flagged **Duplicate directory**, with **Bring both forward**.
+- The arrow icon in each card's header (**Bring forward**) raises the right window, collapsed or expanded. Agents sharing a directory are flagged **Duplicate directory**, and the same icon brings all of them forward.
 - An always-on-top toggle.
 
   <img src="docs/images/controller.png" alt="The controller window showing three terminal cards: one Idle, one Needs a human · Working, and one Needs a human · Idle, with a summary of 0 errors, 1 needing a human, 1 idle and 1 working" width="480">
@@ -358,6 +360,7 @@ Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<rep
 | `APP_QUIET_MS` | `1000` | How long the screen must stay unchanged before the agent reads as quiet. |
 | `APP_STARTUP_EXIT_GRACE_MS` | `1000` | A shell that exits sooner than this is treated as a startup failure, and the window stays open to show the diagnostic. |
 | `APP_SHELL_INTEGRATION` | on | `0` disables the bash OSC 133 hooks used for command capture. |
+| `APP_BRANCH_REFRESH_MS` | `300000` | How often a terminal re-reads its git branch for its controller card. A branch switch can take up to this long to show; a change of repository shows at once. Lower it (e.g. `1000`) to follow switches sooner, at the cost of one `git` process per terminal per interval. |
 | `APP_AUTO_GATE_DECISION_MS` | `300000` | How long the engine may take to decide an `auto` gate before it hands the gate to a human. A non-finite or non-positive value falls back to the default; values above 2147483647 are clamped to it. |
 
 ## Architecture

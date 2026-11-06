@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
+import { bodyControlIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
+import { statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -23,8 +24,8 @@ function expanded(host: HTMLElement, directory: string): boolean | string {
   return state === 'true' || state === 'false' ? state === 'true' : `aria-expanded is ${state}`;
 }
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
-const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working' };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
+const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
 const peer = { ...statusTerminal({ activity: 'quiet' }), id: 'peer', launchDirectory: '/cards/peer' };
 
 describe('the default collapse rule', () => {
@@ -72,7 +73,8 @@ describe('an untoggled card follows the rule', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [blocked], oneColumn: true });
     try {
       const card = cardIn(host, blocked.launchDirectory);
-      (card && bringForwardIn(card))?.focus();
+      expect(card && bodyControlIn(card), 'a control in the body').toBeDefined();
+      (card && bodyControlIn(card))?.focus();
       service.publish([working]);
       const target = header(host, working.launchDirectory);
       expect({ collapsed: expanded(host, working.launchDirectory) === false, focused: target !== undefined && document.activeElement === target })
@@ -84,7 +86,8 @@ describe('an untoggled card follows the rule', () => {
     const { host, layout, dispose } = mountControllerPanes({ terminals: [working], oneColumn: false });
     try {
       const card = cardIn(host, working.launchDirectory);
-      (card && bringForwardIn(card))?.focus();
+      expect(card && bodyControlIn(card), 'a control in the body').toBeDefined();
+      (card && bodyControlIn(card))?.focus();
       layout.set(true);
       const target = header(host, working.launchDirectory);
       expect({ collapsed: expanded(host, working.launchDirectory) === false, focused: target !== undefined && document.activeElement === target })

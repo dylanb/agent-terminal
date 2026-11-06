@@ -1,11 +1,14 @@
 import WebSocket from 'ws';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, encodeControllerMessage, parseControllerMessage } from '../../src/shared/controllerProtocol';
+import type { NotificationCondition } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
 import { connectWebSocket } from './controllerWebSocket';
 
 export interface ScriptedControllerTerminal {
   sendStatus(work: ControllerWorkStatus): Promise<void>;
+  raise(notification: NotificationCondition): Promise<void>;
+  reportCurrent(notification: NotificationCondition | null): Promise<void>;
   activations(): number;
   /** The loop message ids the controller asked this terminal to dismiss, in order. */
   loopMessageDismissals(): string[];
@@ -15,6 +18,7 @@ export interface ScriptedControllerTerminal {
 export async function connectScriptedTerminal(
   controllerHome: string,
   identity: Pick<ControllerTerminal, 'launchDirectory' | 'repositoryRoot'>,
+  minor: number = CONTROLLER_PROTOCOL_MINOR,
 ): Promise<ScriptedControllerTerminal> {
   const socket = connectWebSocket(resolveControllerEndpoint(controllerHome));
   const closed = new Promise<void>(resolve => socket.once('close', () => resolve()));
@@ -36,7 +40,7 @@ export async function connectScriptedTerminal(
       socket.on('error', reject);
       socket.once('close', () => reject(new Error('Controller closed the connection before registering the terminal')));
       socket.once('open', () => {
-        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', ...identity }));
+        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor, type: 'register', ...identity }));
       });
       socket.on('message', (chunk: Buffer) => {
         const message = parseControllerMessage(chunk.toString());
@@ -48,10 +52,15 @@ export async function connectScriptedTerminal(
     await close();
     throw error;
   }
+  const send = (message: { type: 'notification'; notification: NotificationCondition } | { type: 'notification-current'; notification: NotificationCondition | null }) => new Promise<void>((resolve, reject) => {
+    socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, ...message }), error => (error ? reject(error) : resolve()));
+  });
   return {
     sendStatus: work => new Promise<void>((resolve, reject) => {
       socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => (error ? reject(error) : resolve()));
     }),
+    raise: notification => send({ type: 'notification', notification }),
+    reportCurrent: notification => send({ type: 'notification-current', notification }),
     activations: () => activations,
     loopMessageDismissals: () => [...loopMessageDismissals],
     close,

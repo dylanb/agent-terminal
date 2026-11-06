@@ -1,9 +1,8 @@
 // §22.3.1; UI-STANDARDS §1.3; WCAG 4.1.3.
 
 import type { GithubRef, GithubRefKind } from '../../shared/ipc';
-import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, TITLE_MAX, type StatusBarModel, type StatusBarTitle } from '../../shared/statusBar';
+import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, statusBarTitleText, TITLE_MAX, type StatusBarModel, type StatusBarTitle } from '../../shared/statusBar';
 import { stripStatusControlChars } from '../../shared/loopStatus';
-import { stripDisplayControlChars } from '../../shared/controlChars';
 import { sameOccurrence, type Occurrence } from '../../shared/occurrence';
 import { createSpinner } from './spinner';
 import { captureSubtreeFocus } from './dom';
@@ -134,12 +133,13 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
   }
 
   function renderName(title: StatusBarTitle & { kind: 'user' }, editable: boolean): void {
-    const named = title.text.length > 0;
+    const shown = statusBarTitleText(title, null);
+    const named = shown !== null;
     const name = doc.createElement(editable ? 'button' : 'span');
     name.className = named ? 'sb-name' : 'sb-name empty';
     name.dataset.sbTitle = '';
     if (!editable) name.tabIndex = -1; // WCAG 2.4.3
-    name.textContent = named ? title.text : 'Untitled — name this work';
+    name.textContent = shown ?? 'Untitled — name this work';
     if (name instanceof HTMLButtonElement) {
       const forRepo = repoKey!; // canEdit
       if (named) name.setAttribute('aria-label', `Rename work: ${title.text}`);
@@ -154,7 +154,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     label.className = 'sb-name';
     label.dataset.sbTitle = '';
     label.tabIndex = -1; // WCAG 2.4.3
-    label.textContent = title.kind === 'pr' ? `PR #${title.number}` : `#${title.number}`;
+    label.textContent = statusBarTitleText(title, null);
     titleSlot.replaceChildren(label);
     if (forRepo === null) return;
 
@@ -169,7 +169,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       link.className = 'sb-name sb-link';
       link.dataset.sbTitle = '';
       link.setAttribute('role', 'link'); // WAI-ARIA APG
-      const refTitle = stripDisplayControlChars(got.title);
+      const refTitle = statusBarTitleText(title, got.title);
       link.textContent = refTitle;
       // WCAG 2.4.4.
       link.setAttribute(

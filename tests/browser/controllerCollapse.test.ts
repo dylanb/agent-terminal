@@ -1,13 +1,14 @@
 import { afterEach, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import '../../src/renderer/src/styles.css';
-import { bringForwardLocator, cardHeaderIn, cardIn, cardLocator, statusRowIn } from '../helpers/controllerCards';
+import { cardHeaderIn, cardIn, cardLocator, headerActivationIn, clearHistoryLocator, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
+import { statusItem } from '../helpers/controllerHistory';
 
 afterEach(() => document.body.replaceChildren());
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
 const DIRECTORY = working.launchDirectory;
 
 async function tabTo(target: HTMLElement | undefined): Promise<boolean> {
@@ -29,7 +30,7 @@ it('toggles a card once per click, Enter and Space on its header, flipping its e
     return {
       expanded: control?.getAttribute('aria-expanded') ?? 'no header',
       bodyPainted: Boolean(card && statusRowIn(card)?.checkVisibility({ visibilityProperty: true })),
-      bodyInTree: bringForwardLocator(cardLocator(page.elementLocator(host), DIRECTORY)).query() !== null,
+      bodyInTree: clearHistoryLocator(cardLocator(page.elementLocator(host), DIRECTORY)).query() !== null,
       focused: control !== undefined && document.activeElement === control,
     };
   };
@@ -46,5 +47,38 @@ it('toggles a card once per click, Enter and Space on its header, flipping its e
     const shut = { expanded: 'false', bodyPainted: false, bodyInTree: false, focused: true };
     expect({ reached, initial, clicked, entered, spaced, activated: [...service.activated] })
       .toEqual({ reached: true, initial: open, clicked: shut, entered: open, spaced: shut, activated: [] });
+  } finally { dispose(); }
+});
+
+it.each([
+  { where: 'collapsed', oneColumn: true, expanded: 'false' },
+  { where: 'expanded', oneColumn: false, expanded: 'true' },
+])('brings the terminal forward once per click, Enter and Space on the header icon of a $where card, leaving it $where', async ({ oneColumn, expanded }) => {
+  const { host, service, dispose } = mountControllerPanes({ terminals: [working], oneColumn });
+  const icon = () => { const card = cardIn(host, DIRECTORY); return card ? headerActivationIn(card) : undefined; };
+  const read = () => {
+    const card = cardIn(host, DIRECTORY);
+    return { expanded: (card && cardHeaderIn(card, DIRECTORY))?.getAttribute('aria-expanded') ?? 'no header', activated: [...service.activated] };
+  };
+  const idle = () => expect.poll(() => icon()?.hasAttribute('aria-busy') ?? false).toBe(false);
+  try {
+    const reached = await tabTo(icon());
+    const initial = read();
+    await userEvent.keyboard('{Enter}');
+    await idle();
+    const entered = read();
+    await userEvent.keyboard(' ');
+    await idle();
+    const spaced = read();
+    await click(icon());
+    await idle();
+    const clicked = read();
+    expect({ reached, initial, entered, spaced, clicked }).toEqual({
+      reached: true,
+      initial: { expanded, activated: [] },
+      entered: { expanded, activated: [working.id] },
+      spaced: { expanded, activated: [working.id, working.id] },
+      clicked: { expanded, activated: [working.id, working.id, working.id] },
+    });
   } finally { dispose(); }
 });

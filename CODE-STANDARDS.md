@@ -326,6 +326,40 @@ throws that is not an `Error` — so the one place whose job is to explain the f
 Always coerce: `` const reason = e instanceof Error ? e.message : String(e) ``. An error surfaced with an
 empty reason has been swallowed as thoroughly as one never caught.
 
+## Every async failure is caught where it arises, at every boundary, and its reason travels on
+
+A `try` covers only the code that runs before it returns. A throw inside a `.then`, a timer, an emitter or
+socket handler, or a native module's callback runs after every enclosing `try` has gone, so it reaches
+nothing but the process's unhandled-rejection or uncaught-exception path: in the main process, a crash or
+an error dialog with no product cause. So:
+
+1. **At the earliest point.** Each async boundary that can fail has its own handler, where the failure
+   arises: every promise the code starts or receives ends in a handler, and every callback handed to a
+   timer, emitter, socket or native module catches its own failures. None relies on a caller's `try`. A
+   promise-returning function the code does not own (an injected seam, a callback) is called inside the
+   handler's `try`, or inside an `async` wrapper, because it can throw before it returns a promise. A
+   function declared `async` cannot.
+2. **At every point.** A handler's own work is a boundary too: a `.then` after a `.catch`, a listener a
+   publisher calls, or a fallback that is computed. Make that work total, by isolating each listener and
+   catching inside the fallback, rather than stacking catches no test can reach. Code that cannot throw
+   needs no handler, and you name why it cannot, as "Name the calls that throw" above requires.
+3. **The reason travels on, in the form its context needs.** A handler never discards what failed (use
+   `errMsg(error)`):
+   - **The user's next action depends on it.** Surface it with a retry or back-out path (the rule below).
+   - **It is an outcome a caller or the §25 log must tell apart.** Return a value that names each outcome
+     and carries the detail (`{ ok: false, detail }`).
+   - **It is a best-effort or cosmetic value.** Fall back to its unavailable state and record the reason
+     with `console.error`. For a polled read, record it once per distinct failure, so a read that keeps
+     failing the same way logs once and logs again after it recovers.
+   - **A failure that is the expected answer is not an error.** Examples: git's non-zero exit on a
+     detached HEAD or outside a repository, or `ENOENT` where absence is normal. Narrow to exactly that
+     case (`isErrno`, an exit code) and return the answer; let every other failure through with its
+     reason.
+
+The RED test provokes the failure at each boundary: a rejection, a throw before the promise exists, and a
+throw inside the handler's own work, such as a subscriber. It asserts the fallback and the recorded reason.
+Vitest fails a run on an unhandled rejection, so an escape fails the test even where no assertion is reached.
+
 ## Never silently swallow an error whose consequence is a state the user cannot recover from
 
 The opposite of the best-effort rule above: there, a failure in an *inessential* effect must be contained;

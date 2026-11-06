@@ -25,6 +25,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
+import { holdQuitForShell, killShell } from './shellQuit';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
@@ -103,7 +104,7 @@ import { sliceCountToSource } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
-import { currentGitBranch } from './gitBranch';
+import { currentGitBranch, readBranchLabel } from './gitBranch';
 import { watchViewerTree, viewerRoot, viewerWatchFactory, viewerWatchMode } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -944,8 +945,9 @@ async function createWindow(): Promise<void> {
       const load = resolveActiveDefinition(repoKey);
       return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
     },
-    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
-  });
+    refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
+    branch: repoKey => readBranchLabel(repoKey),
+  }, { branchRefreshMs: config.branchRefreshMs });
   controllerStatus.subscribe(work => {
     currentWork = work;
     for (const listener of statusListeners) listener(work);
@@ -1254,13 +1256,25 @@ async function createWindow(): Promise<void> {
     shadow.write(data);
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  let shellExited = false;
   ptyProcess.onExit(({ exitCode }) => {
+    shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();
     }
   });
+  app.on('will-quit', holdQuitForShell(
+    {
+      exited: () => shellExited,
+      onExit: (run) => { ptyProcess.onExit(run); },
+      forceKill: () => killShell(() => ptyProcess.kill('SIGKILL')),
+    },
+    config.shellQuitGraceMs,
+    (ms, run) => { setTimeout(run, ms); },
+    () => app.quit(),
+  ));
 
   const disposeIpc = registerIpcListeners(
     ipcMain,

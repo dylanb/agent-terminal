@@ -11,6 +11,8 @@ import { installControllerIpc } from '../../src/main/controllerIpc';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
 import { controllerApi } from '../../src/preload/controller';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot, type ControllerTerminal } from '../../src/shared/ipc';
+import { workStatus } from '../helpers/controllerStatusFixture';
+import { statusEntries } from '../helpers/controllerHistory';
 import { connectWebSocket } from '../helpers/controllerWebSocket';
 
 const boundary = vi.hoisted(() => ({
@@ -48,15 +50,14 @@ async function register(directory: string) {
   peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
   await registered;
   peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId: directory, message: `Approval for ${directory}` } }));
-  await expect.poll(() => published.find(t => t.launchDirectory === directory)?.notifications?.length).toBe(1);
+  await expect.poll(() => published.find(t => t.launchDirectory === directory)?.timeline?.length).toBe(1);
   return published.find(t => t.launchDirectory === directory)!;
 }
 
 it('round-trips Clear through preload and the installed handler, publishing deletion only for its observed target', async () => {
   const selected = await register('/work/selected'); const other = await register('/work/other');
   expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('cleared');
-  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
-  expect.soft(published.find(t => t.id === selected.id)?.notifications?.[0]).toBeUndefined();
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual([]);
   expect.soft(published.find(t => t.id === other.id)).toEqual(other);
   expect.soft(published.map(t => t.id).sort()).toEqual([selected.id, other.id].sort());
 });
@@ -73,7 +74,7 @@ it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malforme
   expect.soft(result).toBe('unavailable');
   expect.soft(published).toEqual(expect.arrayContaining([selected, other]));
   expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('cleared');
-  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual([]);
   expect.soft(published.find(t => t.id === other.id)).toEqual(other);
 });
 
@@ -81,10 +82,26 @@ it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malforme
 it('returns stale through real preload/main wiring after a new arrival and preserves it until fresh retry', async () => {
   const selected = await register('/work/selected');
   peers[0].send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId: 'new', message: 'New protected arrival' } }));
-  await expect.poll(() => published.find(t => t.id === selected.id)?.notifications?.length).toBe(2);
+  await expect.poll(() => published.find(t => t.id === selected.id)?.timeline?.length).toBe(2);
   const current = published.find(t => t.id === selected.id)!;
   expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('stale');
-  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual(current.notifications);
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual(current.timeline);
   expect.soft(await controllerApi.clearHistory(current.clearHistoryTarget!)).toBe('cleared');
-  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual([]);
+});
+
+it('returns stale after a status-change report between snapshot and Clear, and the status entry remains', async () => {
+  const selected = await register('/work/selected');
+  peers[0].send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ activity: 'active' }) }));
+  await expect.poll(() => published.find(t => t.id === selected.id)?.work?.activity).toBe('active');
+  const observed = published.find(t => t.id === selected.id)!;
+  peers[0].send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ activity: 'quiet' }) }));
+  await expect.poll(() => published.find(t => t.id === selected.id)?.timeline?.length).toBe(2);
+  const current = published.find(t => t.id === selected.id)!;
+  expect.soft(await controllerApi.clearHistory(observed.clearHistoryTarget!)).toBe('stale');
+  expect.soft(statusEntries(published.find(t => t.id === selected.id))).toHaveLength(1);
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual(current.timeline);
+  expect.soft(await controllerApi.clearHistory(current.clearHistoryTarget!)).toBe('cleared');
+  expect.soft(published.find(t => t.id === selected.id)?.timeline).toEqual([]);
+  expect.soft(published.find(t => t.id === selected.id)?.work).toEqual(current.work);
 });

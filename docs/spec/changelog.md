@@ -1,3 +1,15 @@
+## #301 — The controller's branch re-read is configurable and defaults to five minutes
+
+§23.6: a terminal re-read its git branch for the controller card every second, starting a `git` process each time. It now re-reads it every `APP_BRANCH_REFRESH_MS` (default 300000 ms, five minutes) and still reads it at once when the terminal's current repository changes. A branch switch inside the same repository can therefore take up to that interval to appear on the card, the one exception to §23.6's two-second publication. No IPC or protocol change.
+
+## #301 — Quitting waits for the shell's exit
+
+§5: the app aborted on quit about once in a few hundred quits (`terminate called after throwing an instance of 'Napi::Error'`), when node-pty delivered the hung-up shell's exit while the app was already tearing down; under load the core dump then held the process for about a minute. The quit is now held until the shell's exit is delivered, and a shell still running after `APP_SHELL_QUIT_GRACE_MS` is killed. A shell that ignored the hang-up used to keep the app from exiting at all.
+
+## #301 — Controller cards show title and branch, a header bring-forward icon, and a timeline
+
+§23.6: terminals report their status-bar title and git branch to the controller (protocol minor 3, optional `title` and `branch` on the status report, absent for older peers), and the card header reads repository · title · branch · status with the full launch directory moved into the body and kept in the card's accessible name. Bring forward is an icon button in the header, in both states, for single and conflict cards. The notification history becomes one always-visible timeline of the three newest entries across notifications and status changes (activity, flow error, request clearing, flow step, run start or finish, Disconnected), newest first with times, notification entries marked to assistive technology. The History toggle is gone; **Clear history** shows whenever the card is expanded and the timeline is nonempty. Every inherited rule survives: bound of three, exact-text repeats for notifications only, receipt order, Clear's revision refusal (now on any insertion) and current-request suppression, Dismiss/restart/overlap resets, reconstruction from current information only (the first status after a registration is a baseline). A request appearing leaves one entry; status entries are never announced.
+
 ## The viewer's file watch no longer hangs the app on macOS
 
 §20.1: the live-reload watch walked everything under `.agent-terminal/`, not just the `loop/` tree the viewer
