@@ -75,6 +75,8 @@ export interface AuditRecorder {
   recordLoop(repoKey: string, loop: LoopLike | null): void;
   /** Record resolved step inputs and any ticket association (§25.5), only while a run is open. */
   recordInputs(repoKey: string, values: Record<string, string>, typeByName: Record<string, string>): void;
+  /** Record the run's ticket association (§25.5) once its pickup accepted that ticket, only while a run is open. */
+  recordTicket(repoKey: string, ticket: number): void;
   /** Record a flow-injected command and its exit (§25.5), only while a run is open. */
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
@@ -192,6 +194,14 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, inputEvents(values, typeByName, auditTimestamp(now())));
       } catch (e) {
         log('audit recordInputs failed', e);
+      }
+    },
+
+    recordTicket(repoKey, ticket) {
+      try {
+        appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'ticket.assoc', ticket }]);
+      } catch (e) {
+        log('audit recordTicket failed', e);
       }
     },
 

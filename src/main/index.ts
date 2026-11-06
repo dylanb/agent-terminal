@@ -133,13 +133,16 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAdoptedPickup, writeAdoptedPickupIntent, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
+import { isAdoptPickup, type LoopDefV2Context, type PickupContractV2 } from './loopDefV2';
+import { compensateAdoption, runAdoptionStart, type AdoptionStartDeps } from './adoptionStart';
+import { createRealAdoptionGit, createRealAdoptionGitHub } from './adoptionPorts';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
@@ -167,6 +170,9 @@ import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
+  jobBootstrapFor,
+  jobMatchesFlowRefs,
+  trustedPickupServesJob,
   resolveAppGateRefs,
   resolvePickupBranch,
   type AppLoopBootstrapCoordinator,
@@ -454,7 +460,7 @@ async function createWindow(): Promise<void> {
   const autoGate = createAutoGate({
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     resolveDef: (repoDir, loop) => defResolutionOf(observedResolveDef(repoDir, loop)),
-    currentRun: composeCurrentRun(flowGlobalDir),
+    currentRun: composeCurrentRun(flowGlobalDir, resolveAppLoopDefTiers(iconLoc)),
     runInProgressAt: composeRunInProgressAt(),
     onViewChanged: () => pushFlowChanged(),
     emitError: (_repoDir, reason) => loopMessages.post('error', reason),
@@ -514,6 +520,7 @@ async function createWindow(): Promise<void> {
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),
         trustedAppBootstraps.get(repoDir) ?? null,
         flow.state(repoDir).refs?.ticket ?? null,
+        flow.state(repoDir).refs?.pr ?? null,
       ),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
@@ -709,7 +716,7 @@ async function createWindow(): Promise<void> {
         entry: t.entry,
         issue,
         slice,
-        bootstrap: resolved.def.pickup,
+        bootstrap: jobBootstrapFor(resolved.def.pickup, flow.state(t.repoKey).refs),
         ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
     },
@@ -718,14 +725,14 @@ async function createWindow(): Promise<void> {
   // resolveActiveDefinition), so none can resolve a different flow from another (the shared-semantics /
   // "parallel copies that agree today" rule). Its seams and the AC9 begun-run binding live in runResolver.ts,
   // the one factory the integration tests drive too.
-  const resolveRun = createRunResolver(flowGlobalDir);
+  const resolveRun = createRunResolver(flowGlobalDir, resolveAppLoopDefTiers(iconLoc));
   const resolveActiveDefinition = (repoKey: string): FlowLoad => resolveRun(repoKey).load;
   // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
   const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
   const activeFlowGate = createActiveFlowGate(worktreeLock);
   const heldRunRecovery = createHeldRunRecovery({
     lock: worktreeLock,
-    ...realHeldRunRecoveryDeps(flowGlobalDir),
+    ...realHeldRunRecoveryDeps(flowGlobalDir, resolveAppLoopDefTiers(iconLoc)),
     terminate: (repoKey) => flow.terminate(repoKey),
     selectIfUnlocked,
   });
@@ -781,7 +788,7 @@ async function createWindow(): Promise<void> {
     const reached = reachedPickupStep(load.definition.steps, view.position, (step: FlowStepDef): PickupContractV2 | null => {
       if (step.kind !== 'loop' || step.loop === undefined) return null;
       const resolved = observedResolveDef(repoKey, step.loop);
-      return resolved.ok ? resolved.def.pickup : null;
+      return resolved.ok && resolved.def.pickup !== null && !isAdoptPickup(resolved.def.pickup) ? resolved.def.pickup : null;
     });
     const held = awaitingPickupConfirm({
       run,
@@ -820,6 +827,20 @@ async function createWindow(): Promise<void> {
     appBootstrapSessions.set(repoDir, session);
     return session;
   };
+  const adoptionDepsByRepo = new Map<string, AdoptionStartDeps>();
+  const adoptionDeps = (repoDir: string): AdoptionStartDeps => {
+    const existing = adoptionDepsByRepo.get(repoDir);
+    if (existing !== undefined) return existing;
+    const deps: AdoptionStartDeps = {
+      git: createRealAdoptionGit(repoDir),
+      github: createRealAdoptionGitHub(repoDir),
+      prepareRecord: (intent) => writeAdoptedPickupIntent(repoDir, intent),
+      writeRecord: (pickup) => writeAdoptedPickup(repoDir, pickup),
+      clearRecord: () => clearAppLoopBootstrap(repoDir),
+    };
+    adoptionDepsByRepo.set(repoDir, deps);
+    return deps;
+  };
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
       pickupInFlight = {
@@ -835,32 +856,42 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
       }
     },
+    adopt: async (repoDir, pr) => {
+      pickupInFlight = { repoKey: repoDir, issue: pr, wipe: false };
+      pushFlowChanged();
+      try {
+        const run = inProgressRunIdentity(repoDir);
+        if (run === null) return { ok: false, kind: 'error', error: 'adopting a pull request needs a run in progress' };
+        return await runAdoptionStart(adoptionDeps(repoDir), { pr, startedAt: run.startedAt });
+      } finally {
+        if (pickupInFlight?.repoKey === repoDir) pickupInFlight = null;
+        pushFlowChanged();
+      }
+    },
     compensateBootstrap: (job, ownership) =>
-      appBootstrapSession(job.repoDir).compensate(ownership),
+      'kind' in ownership ? compensateAdoption(adoptionDeps(job.repoDir), ownership) : appBootstrapSession(job.repoDir).compensate(ownership),
     finalizeBootstrap: (job, identity) => {
-      if (job.issue === null || job.bootstrap === null) return Promise.resolve();
+      if (job.issue === null || job.bootstrap === null || isAdoptPickup(job.bootstrap)) return Promise.resolve();
       return appBootstrapSession(job.repoDir).finalize(
         { issue: job.issue, spec: job.bootstrap },
         identity,
       );
     },
-    hasBootstrapForJob: (job) => {
-      const trusted = trustedAppBootstraps.get(job.repoDir);
-      return trusted?.issue === job.issue;
-    },
+    hasBootstrapForJob: (job) => trustedPickupServesJob(job, trustedAppBootstraps.get(job.repoDir)),
     isCurrentJob: (job) => {
       const current = flow.state(job.repoDir);
       return (
         currentFlowEntryTokens.get(job.repoDir) === job.entryToken &&
         current.status === 'in_progress' &&
         current.stepName === job.stepId &&
-        (current.refs?.ticket ?? null) === job.issue
+        jobMatchesFlowRefs(job, current.refs)
       );
     },
     canEnterWork: () => appEngine.canEnter(),
     acceptBootstrap: (job, identity) => {
       trustedAppBootstraps.set(job.repoDir, identity);
       pickupRecordPredatesRun.delete(job.repoDir);
+      if (isAdoptedPickup(identity)) audit.recordTicket(job.repoDir, identity.primary.number);
     },
     rollbackStep: (job) => {
       const current = flow.state(job.repoDir);
@@ -868,7 +899,7 @@ async function createWindow(): Promise<void> {
         currentFlowEntryTokens.get(job.repoDir) !== job.entryToken ||
         current.status !== 'in_progress' ||
         current.stepName !== job.stepId ||
-        (current.refs?.ticket ?? null) !== job.issue
+        !jobMatchesFlowRefs(job, current.refs)
       ) {
         return false;
       }

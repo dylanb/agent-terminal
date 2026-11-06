@@ -236,9 +236,17 @@ if (args[0] === 'repo' && args[1] === 'view') {
 if (args[0] === 'pr' && args[1] === 'view') {
   const o = options(args.slice(2), ['--repo', '-R', '--json'], [], PR_ARGV_BODY);
   namedRepo(o);
-  if (o.positional.length !== 1 || !/^[1-9][0-9]*$/.test(o.positional[0])) contract('pr view names one PR number');
-  const pr = state.pulls.find((p) => p.number === Number(o.positional[0]));
-  if (!pr) fail(1, 'GraphQL: Could not resolve to a PullRequest with the number of ' + o.positional[0] + '.');
+  if (o.positional.length !== 1) contract('pr view names one PR number or branch');
+  const selector = o.positional[0];
+  const byNumber = /^[1-9][0-9]*$/.test(selector);
+  // As gh does for a branch: a PR whose head is that branch, an open one first; same-repository for a bare branch,
+  // and from that owner's repository for <owner>:<branch>.
+  const colon = selector.indexOf(':');
+  const headOwner = colon < 0 ? null : selector.slice(0, colon);
+  const headBranch = colon < 0 ? selector : selector.slice(colon + 1);
+  const forBranch = state.pulls.filter((p) => p.headRefName === headBranch && (headOwner === null ? !p.isCrossRepository : p.headRepo !== null && same(p.headRepo.split('/')[0], headOwner)));
+  const pr = byNumber ? state.pulls.find((p) => p.number === Number(selector)) : (forBranch.find((p) => p.state === 'OPEN') ?? forBranch[forBranch.length - 1]);
+  if (!pr) fail(1, byNumber ? 'GraphQL: Could not resolve to a PullRequest with the number of ' + selector + '.' : 'no pull requests found for branch "' + selector + '"');
   out(project(pr, o.values['--json'], PULL_FIELDS));
 }
 
@@ -365,7 +373,8 @@ contract('unmodelled gh operation');
  *
  * - `repo view github.com/<owner>/<name> --json <fields>`, for each of `repositories`: `nameWithOwner`, `url`,
  *   `defaultBranchRef`, `viewerPermission`.
- * - `pr view <n> --repo github.com/<origin> --json <fields>` and `pr list --repo … [--head b] [--base b]
+ * - `pr view <n|branch|owner:branch> --repo github.com/<origin> --json <fields>` (a bare branch names its
+ *   same-repository PR and `owner:branch` that owner's, an open one first) and `pr list --repo … [--head b] [--base b]
  *   [--state open|closed|merged|all, where closed includes merged as in gh] [--limit n] --json <fields>`, projecting `pulls` onto `number`, `url`,
  *   `state`, `title`, `body`, `isDraft`, `author`, `headRefName`, `headRefOid`, `baseRefName`,
  *   `isCrossRepository`, `headRepository`, `headRepositoryOwner` and `closingIssuesReferences`.

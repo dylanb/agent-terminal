@@ -265,3 +265,23 @@ for (const refusal of REFUSALS) {
     expect.soft(w.contractBreaches()).toEqual([]);
   });
 }
+
+test("a flow whose adopting step breaks the adoption rules fails to load in the app, against the operator's own loop def (#304 AC 25)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 60_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-load' });
+  const { page } = await launch(w);
+  const flowFile = join(w.repo, '.agent-terminal', 'flow.yaml');
+  const flowDoc = load(readFileSync(flowFile, 'utf8')) as { steps: Array<Record<string, unknown>> };
+  for (const step of flowDoc.steps) if (step.id === STEP) step.gate_authority = 'auto';
+  writeFileSync(flowFile, dump(flowDoc));
+
+  await expect(page.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+
+  const loadError = page.locator('#flow-strip .flow-error');
+  await expect.soft(loadError).toContainText(STEP, { timeout: 10_000 });
+  await expect.soft(loadError).toContainText('gate_authority');
+  await expect.soft(flowControl(page)).toHaveCount(0);
+  expect.soft(localBranches(w)).toEqual(['main']);
+  expect.soft(outwardWrites(w.calls())).toEqual([]);
+});

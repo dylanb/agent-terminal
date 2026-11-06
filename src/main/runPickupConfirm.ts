@@ -5,7 +5,8 @@ import { errMsg } from './errno';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { pickupMismatch, type PullRequestLookup } from './pullRequestLookup';
 import { runPickupRel } from './trustedPickups';
-import type { AppLoopBootstrap, PickupRecord } from './appLoopState';
+import type { AppLoopBootstrap, PickupRecord, ReadAppLoopBootstrap } from './appLoopState';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import type { ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
 
 export const PICKUP_CONFIRM_FIRST =
@@ -38,12 +39,18 @@ export interface PickupHoldFacts {
 export function awaitingPickupConfirm(f: PickupHoldFacts): RunIdentity | null {
   if (f.run === null || f.pickupInFlight || f.pickupStep === 'none' || f.runBegunHere) return null;
   const record = f.bootstrapRecord;
+  const opened = openedPickupOf(record);
   const { ticket, pr } = f.flowRefs;
-  const recordAgrees = record.kind === 'none' || (record.kind === 'complete' && record.bootstrap.pr === pr && record.bootstrap.issue === ticket);
+  const recordAgrees = record.kind === 'none' || (opened !== null && opened.pr === pr && opened.issue === ticket);
   if (ticket !== null && pr !== null && recordAgrees) return null;
   if (f.pickupStep === 'behind') return f.run;
   if (record.kind === 'pending') return f.run;
-  return record.kind === 'complete' && ticket !== null && record.bootstrap.issue === ticket ? f.run : null;
+  return opened !== null && ticket !== null && opened.issue === ticket ? f.run : null;
+}
+
+/** The ticket run's pickup a record holds; an adopted PR's record is never one. */
+function openedPickupOf(record: PickupRecord): ReadAppLoopBootstrap | null {
+  return record.kind === 'complete' && !isAdoptedPickup(record.bootstrap) ? record.bootstrap : null;
 }
 
 export interface PickupEvidence {
@@ -62,7 +69,10 @@ export interface PickupProposal {
 export async function proposeRunPickup(evidence: PickupEvidence, lookup: PullRequestLookup): Promise<PickupProposal> {
   const problems: string[] = [];
   const record = evidence.bootstrapRecord;
-  const recorded = record.kind === 'complete' ? record.bootstrap : null;
+  const recorded = openedPickupOf(record);
+  if (record.kind === 'complete' && isAdoptedPickup(record.bootstrap)) {
+    problems.push(`The pickup record is the one a run adopting pull request #${record.bootstrap.pr} wrote, not this ticket run's.`);
+  }
   if (record.kind === 'invalid') problems.push(`The pickup record could not be used: ${record.detail}. Its turns stay stopped until it is repaired, even after you confirm.`);
   const { branch } = evidence;
   let pr: number | null = null;

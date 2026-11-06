@@ -1034,6 +1034,9 @@ function deferDepDefaults() {
     triggerWork: vi.fn(),
     cancelWork: vi.fn(),
     armDeferDeadline: (_onLapse: () => void) => () => {},
+    adopt: async (): Promise<never> => {
+      throw new Error('a ticket-run pickup never adopts a pull request');
+    },
   };
 }
 
@@ -1346,6 +1349,93 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       reason: expect.stringMatching(/ticket|issue/i),
     });
     expect(x.enterWork).not.toHaveBeenCalled();
+  });
+
+  it('reuses an adopted pickup for the same PR without adopting it again', () => {
+    const enterWork = vi.fn(() => 'entered' as const);
+    const adopt = vi.fn(async (): Promise<never> => {
+      throw new Error('the adoption must not run again');
+    });
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt,
+      run: vi.fn(async () => success),
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: (candidate) => candidate.bootstrap !== null && 'adopt' in candidate.bootstrap && candidate.bootstrap.pr === 41,
+      isCurrentJob: () => true,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep: () => true,
+      enterWork,
+      emitError: vi.fn(),
+      emitConflict: vi.fn(),
+      audit: vi.fn(),
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+
+    expect(adopt).not.toHaveBeenCalled();
+    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1);
+  });
+
+  it('rolls back an adopt-form step whose flow names no PR, naming the pr input', async () => {
+    const x = coordinator(success);
+    x.c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: null } }));
+    await vi.waitFor(() => expect(x.rollbackStep).toHaveBeenCalledWith(expect.objectContaining({ repoDir: '/repo', stepId: 'plan', entryToken: 1 })));
+    expect(x.emitError).toHaveBeenCalledWith({ repoDir: '/repo', stepId: 'plan', reason: expect.stringMatching(/\bpr input\b/) });
+    expect(x.enterWork).not.toHaveBeenCalled();
+  });
+
+  it('tells the operator a stale adoption removed its fix branch, never a draft PR', async () => {
+    const emitError = vi.fn();
+    const compensateBootstrap = vi.fn(async () => {});
+    let current = true;
+    const ownership = { kind: 'adopted' as const, fixBranch: 'agent-terminal/review-pr-41-1700000000000', headOid: 'a'.repeat(40) };
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt: async () => {
+        current = false;
+        return {
+          ok: true,
+          identity: {
+            kind: 'adopted',
+            pr: 41,
+            fixBranch: ownership.fixBranch,
+            startedAt: 1_700_000_000_000,
+            headRef: 'feature/reviewed-change',
+            baseRef: 'main',
+            headRepo: 'owner/repo',
+            crossRepository: false,
+            tickets: [{ repo: 'owner/repo', number: 176 }],
+            primary: { repo: 'owner/repo', number: 176 },
+            headOid: ownership.headOid,
+            baseOid: 'b'.repeat(40),
+          },
+          ownership,
+        };
+      },
+      run: vi.fn(async () => success),
+      compensateBootstrap,
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => current,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep: () => true,
+      enterWork: vi.fn(() => 'entered' as const),
+      emitError,
+      emitConflict: vi.fn(),
+      audit: vi.fn(),
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+
+    await vi.waitFor(() => expect(emitError).toHaveBeenCalled());
+    expect(compensateBootstrap).toHaveBeenCalledWith(expect.anything(), ownership);
+    const reason = String((emitError.mock.calls[0]?.[0] as { reason: string }).reason);
+    expect.soft(reason).toContain(ownership.fixBranch);
+    expect.soft(reason).not.toMatch(/draft PR/i);
   });
 
   it('compensates a stale success instead of entering work against a different step', async () => {

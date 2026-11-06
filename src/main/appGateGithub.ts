@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { errMsg } from './errno';
+import { GH_ACTION } from './gateEffects';
 import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
@@ -57,12 +58,12 @@ export function createAppGateGitHub(
 
   return async (action, ctx) => {
     switch (action) {
-      case 'mark-ready':
+      case GH_ACTION.markReady:
         if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
         await verifyBootstrap(ctx);
         await github.markPullRequestReady(ctx.pr);
         return { outcome: 'done' };
-      case 'update-issue-body':
+      case GH_ACTION.updateIssueBody:
         if (ctx.ticket === null) {
           return { outcome: 'no-target', reason: 'no issue to publish the body to' };
         }
@@ -71,7 +72,7 @@ export function createAppGateGitHub(
         }
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
         return { outcome: 'done' };
-      case 'publish-pr-body':
+      case GH_ACTION.publishPrBody:
         if (ctx.pr === null) {
           return { outcome: 'no-target', reason: 'no PR to publish the body to' };
         }

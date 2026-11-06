@@ -1,6 +1,7 @@
 import { runAppCommand } from './appCommand';
 import { run } from './appBootstrapCommand';
 import { isRecord } from './yamlRecord';
+import { isPickupBranchName, isRepositoryPart } from '../shared/appBootstrap';
 import {
   createOriginConfigReader,
   originUrls,
@@ -41,8 +42,6 @@ export function createGitHubRepositorySource(
   };
 }
 
-const REPOSITORY_PART = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
-const BRANCH_NAME = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
 function repositoryFromRemote(
   value: string,
@@ -80,10 +79,7 @@ function repositoryFromRemote(
   const parts = repositoryPath.split('/');
   if (
     parts.length !== 2 ||
-    !REPOSITORY_PART.test(host) ||
-    !REPOSITORY_PART.test(parts[0] ?? '') ||
-    !REPOSITORY_PART.test(parts[1] ?? '') ||
-    [host, ...parts].some((part) => part === '.' || part === '..')
+    ![host, ...parts].every((part) => isRepositoryPart(part ?? ''))
   ) {
     return null;
   }
@@ -104,10 +100,7 @@ export function validGitHubRepositorySelector(value: string): boolean {
   const parts = value.split('/');
   return (
     parts.length === 3 &&
-    parts.every(
-      (part) =>
-        REPOSITORY_PART.test(part) && part !== '.' && part !== '..',
-    )
+    parts.every(isRepositoryPart)
   );
 }
 
@@ -166,6 +159,27 @@ export async function originGitHubRepository(
   return { ...expected, fetchUrl: (fetchUrls[0] ?? '').trim(), pushUrl: (pushUrls[0] ?? '').trim() };
 }
 
+/** Origin's repository as its fetch URL names it: the one a read reaches, whatever origin pushes to. */
+export async function originFetchGitHubRepository(
+  repoDir: string,
+): Promise<Omit<GitHubRepositoryIdentity, 'defaultBranch'>> {
+  const fetchUrls = await originUrls(originConfigReader(repoDir), 'fetch');
+  const repository = fetchUrls.length === 1 ? repositoryFromRemote(fetchUrls[0] ?? '') : null;
+  if (repository === null) throw new Error('invalid origin repository');
+  return repository;
+}
+
+/** The GitHub repository origin pushes to when it is not the one origin fetches from (a fork), else null. */
+export async function originPushForkRepository(
+  repoDir: string,
+): Promise<Omit<GitHubRepositoryIdentity, 'defaultBranch'> | null> {
+  const reader = originConfigReader(repoDir);
+  const [fetchUrls, pushUrls] = [await originUrls(reader, 'fetch'), await originUrls(reader, 'push')];
+  const fetched = fetchUrls.length === 1 ? repositoryFromRemote(fetchUrls[0] ?? '') : null;
+  const pushed = pushUrls.length === 1 ? repositoryFromRemote(pushUrls[0] ?? '') : null;
+  return pushed !== null && fetched !== null && pushed.selector !== fetched.selector ? pushed : null;
+}
+
 export async function resolveGitHubRepository(
   repoDir: string,
 ): Promise<ResolvedGitHubRepository> {
@@ -193,7 +207,7 @@ export async function resolveGitHubRepository(
     typeof raw.url !== 'string' ||
     !isRecord(raw.defaultBranchRef) ||
     typeof raw.defaultBranchRef.name !== 'string' ||
-    !BRANCH_NAME.test(raw.defaultBranchRef.name)
+    !isPickupBranchName(raw.defaultBranchRef.name)
   ) {
     throw new Error('invalid repository identity');
   }

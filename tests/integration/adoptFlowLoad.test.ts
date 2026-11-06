@@ -5,6 +5,7 @@ import { dump } from 'js-yaml';
 import { createRunResolver } from '../../src/main/runResolver';
 import { flowHomeDir, FLOW_DEF_FILE, type FlowLoad } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // #304 AC 25 — a flow that adopts a pull request fails to load when another of its steps, inputs or gates could
 // act on a ticket run's pickup, its PR body or its draft state, or let the flow's PR differ from the adopted one.
@@ -65,7 +66,7 @@ function load(f: Fixture): FlowLoad {
     { id: 'other-step', kind: 'loop', loop: 'other-loop', ...f.otherStep },
   ];
   writeFileSync(join(flowHomeDir(wt), FLOW_DEF_FILE), dump({ name: 'adopt-load', steps }));
-  return createRunResolver(home)(wt).load;
+  return createRunResolver(home, repoOnlyDefTiers())(wt).load;
 }
 
 const loadError = (f: Fixture): string => {
@@ -151,5 +152,11 @@ describe('a flow that adopts a pull request loads only when nothing else in it c
     const error = loadError({ adoptGate: approveWith({ kind: 'gh', action: 'publish-pr-review', artifact: 'not-an-output' }) });
     expect.soft(error).toContain('adopt-step');
     expect.soft(error).toContain('not-an-output');
+  });
+
+  it('fails when a second step also adopts a pull request, naming both steps', () => {
+    const error = loadError({ otherPickup: { adopt: 'pr' } });
+    expect.soft(error).toContain('adopt-step');
+    expect.soft(error).toContain('other-step');
   });
 });

@@ -5,10 +5,12 @@
 
 import { execFile } from 'node:child_process';
 import type { GithubRef, GithubRefKind } from '../shared/ipc';
+import { originFetchGitHubRepository } from './githubRepository';
 
-/** The `gh` sub-command + args that emit a ref's title/body/url as JSON. */
-export function ghArgs(kind: GithubRefKind, number: number): string[] {
-  return [kind, 'view', String(number), '--json', 'title,body,url'];
+/** The `gh` sub-command + args that emit a ref's title/body/url as JSON, from the repository `selector` names
+ *  (`<host>/<owner>/<name>`), so gh's own default repository never decides it. */
+export function ghArgs(kind: GithubRefKind, number: number, selector: string): string[] {
+  return [kind, 'view', String(number), '--repo', selector, '--json', 'title,body,url'];
 }
 
 /** Parse `gh ... --json` output into a ref, or null for null/non-JSON/ill-typed input (never throws). */
@@ -28,9 +30,15 @@ export function parseGithubRef(raw: string | null): GithubRef | null {
 
 const GH_TIMEOUT_MS = 5000;
 
-function runGh(repoKey: string, kind: GithubRefKind, number: number): Promise<string | null> {
+async function runGh(repoKey: string, kind: GithubRefKind, number: number): Promise<string | null> {
+  let selector: string;
+  try {
+    selector = (await originFetchGitHubRepository(repoKey)).selector;
+  } catch {
+    return null;
+  }
   return new Promise((resolve) => {
-    execFile('gh', ghArgs(kind, number), { cwd: repoKey, timeout: GH_TIMEOUT_MS }, (err, stdout) => {
+    execFile('gh', ghArgs(kind, number, selector), { cwd: repoKey, timeout: GH_TIMEOUT_MS }, (err, stdout) => {
       resolve(err ? null : stdout);
     });
   });

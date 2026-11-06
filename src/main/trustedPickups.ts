@@ -10,12 +10,16 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { isRecord } from './yamlRecord';
 import { errMsg } from './errno';
+import { isAdoptedPickup, parseAdoptedPickup, serializeAdoptedPickup, type AdoptedPickup } from '../shared/appBootstrap';
 
 const RUN_PICKUP_FILE = 'run-pickup.yaml';
 
+/** The pickup a run's side effects trust: the ticket run's opened draft PR, or the PR it adopted. */
+export type RunPickup = AppLoopBootstrap | AdoptedPickup;
+
 export interface TrustedPickups {
-  get(repoDir: string): AppLoopBootstrap | undefined;
-  set(repoDir: string, pickup: AppLoopBootstrap): void;
+  get(repoDir: string): RunPickup | undefined;
+  set(repoDir: string, pickup: RunPickup): void;
   /** Whether the saved file is gone; this app trusts the forgotten run's pickup no more either way. */
   delete(repoDir: string): boolean;
   /** Forget the pickup only once its saved file is gone; when it cannot be removed, nothing changes. */
@@ -33,7 +37,7 @@ export interface TrustedPickupsDeps {
 }
 
 export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
-  const loaded = new Map<string, { run: RunIdentity | null; pickup: AppLoopBootstrap }>();
+  const loaded = new Map<string, { run: RunIdentity | null; pickup: RunPickup }>();
   const forgotten = new Map<string, RunIdentity>();
   const forgottenRun = (repoDir: string): RunIdentity | null =>
     loaded.get(repoDir)?.run ?? readRunPickup(repoDir)?.run ?? deps.currentRun(repoDir);
@@ -90,27 +94,26 @@ function remove(repoDir: string): { ok: true } | { ok: false; reason: string } {
   }
 }
 
-function writeRunPickup(repoDir: string, run: RunIdentity, pickup: AppLoopBootstrap): void {
-  if (!isPositiveInt(pickup.pr) || !isPositiveInt(pickup.issue) || !isNonBlank(pickup.branch) || !isNonBlank(pickup.initialStatus)) {
-    throw new Error('invalid §27 run pickup');
-  }
+function writeRunPickup(repoDir: string, run: RunIdentity, pickup: RunPickup): void {
   const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
-  const doc = {
-    schema_version: APP_LOOP_STATE_SCHEMA,
-    flow: run.flow,
-    started_at: run.startedAt,
-    pr: pickup.pr,
-    branch: pickup.branch,
-    issue: pickup.issue,
-    initial_status: pickup.initialStatus,
-  };
+  const runFields = { schema_version: APP_LOOP_STATE_SCHEMA, flow: run.flow, started_at: run.startedAt };
+  let doc: Record<string, unknown>;
+  if (isAdoptedPickup(pickup)) {
+    doc = { ...runFields, ...serializeAdoptedPickup(pickup) };
+    if (pickup.startedAt !== run.startedAt || !parseAdoptedPickup(doc).ok) throw new Error('invalid §27 run pickup');
+  } else {
+    if (!isPositiveInt(pickup.pr) || !isPositiveInt(pickup.issue) || !isNonBlank(pickup.branch) || !isNonBlank(pickup.initialStatus)) {
+      throw new Error('invalid §27 run pickup');
+    }
+    doc = { ...runFields, pr: pickup.pr, branch: pickup.branch, issue: pickup.issue, initial_status: pickup.initialStatus };
+  }
   if (!atomicWriteFileSync(file, yaml.dump(doc))) {
     throw new Error(`cannot write §27 run pickup: ${path.dirname(file)} is not a real directory`);
   }
 }
 
-function readRunPickup(repoDir: string): { run: RunIdentity; pickup: AppLoopBootstrap } | null {
+function readRunPickup(repoDir: string): { run: RunIdentity; pickup: RunPickup } | null {
   const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
   if (file === null) return null;
   let doc: unknown;
@@ -122,6 +125,11 @@ function readRunPickup(repoDir: string): { run: RunIdentity; pickup: AppLoopBoot
   if (!isRecord(doc) || String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
   const { flow, started_at, pr, branch, issue, initial_status } = doc;
   if (typeof flow !== 'string' || typeof started_at !== 'number' || !Number.isFinite(started_at)) return null;
+  const run = { flow, startedAt: started_at };
+  if (doc.kind !== undefined) {
+    const adopted = parseAdoptedPickup(doc);
+    return adopted.ok ? { run, pickup: adopted.pickup } : null;
+  }
   if (!isPositiveInt(pr) || !isPositiveInt(issue) || !isNonBlank(branch) || !isNonBlank(initial_status)) return null;
-  return { run: { flow, startedAt: started_at }, pickup: { pr, branch, issue, initialStatus: initial_status } };
+  return { run, pickup: { pr, branch, issue, initialStatus: initial_status } };
 }
