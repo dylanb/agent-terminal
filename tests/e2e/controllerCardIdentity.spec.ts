@@ -29,9 +29,9 @@ async function typeInTerminal(terminal: Page, command: string): Promise<void> {
   await terminal.keyboard.press('Enter');
 }
 
-async function launchPair(h: Harness, directory: string) {
+async function launchPair(h: Harness, directory: string, terminalEnv: Record<string, string> = {}) {
   const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-  const terminal = await h.launch(terminalTarget, directory);
+  const terminal = await h.launch(terminalTarget, directory, { env: terminalEnv });
   const card = cardLocator(controller.page, directory);
   const toggle = cardHeaderLocator(card, directory);
   const header = cardHeaderElementLocator<Locator>(card);
@@ -121,7 +121,7 @@ test('the card header follows a branch switch in the terminal\'s repository', { 
   const repo = h.fixture.repositories[0];
   const switched = 'feature/switched-in-terminal';
   try {
-    const { terminal, header, setExpanded } = await launchPair(h, repo);
+    const { terminal, header, setExpanded } = await launchPair(h, repo, { APP_BRANCH_REFRESH_MS: '1000' });
     await setExpanded(true);
     await expect.soft(header, 'initial branch').toContainText('main', { timeout: STATUS_BUDGET_MS });
     await typeInTerminal(terminal.page, `git switch -c ${switched}`);

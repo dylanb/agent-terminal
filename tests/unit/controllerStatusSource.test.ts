@@ -15,7 +15,7 @@ it.each([0, Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps known work visible wh
     } }),
     refTitle: async () => null,
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
   try {
@@ -32,7 +32,7 @@ it.each(['Issue title', ''])('accepts only the required flow facts and a title s
     } }),
     refTitle: async () => title,
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
   try {
@@ -49,7 +49,7 @@ it('keeps publishing the work when a title or branch read throws before returnin
     } }),
     refTitle: () => { throw new Error('title read failed'); },
     branch: () => { throw new Error('branch read failed'); },
-  });
+  }, { branchRefreshMs: 1_000 });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
   try {
@@ -68,7 +68,7 @@ it('keeps delivering the work to every subscriber when one subscriber throws', a
     } }),
     refTitle: () => new Promise(resolve => { resolveTitle = resolve; }),
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   source.subscribe(work => { if (work.title === 'Fix the login redirect') throw new Error('subscriber broke'); });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
@@ -89,7 +89,7 @@ it('gives each status subscriber its own snapshot, including late subscribers', 
     } }),
     refTitle: async () => null,
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   source.subscribe(work => { work.attention?.reasons.push('Subscriber edit'); });
   let observed: ControllerWorkStatus | undefined;
   source.subscribe(work => { observed = work; });
@@ -109,7 +109,7 @@ it('publishes the latest loop message beside the flow\'s own error, and none whe
     } }),
     refTitle: async () => null,
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
   try {
@@ -132,7 +132,7 @@ function stepSource(initial: { step: string; loop: string; message: ControllerLo
     },
     refTitle: async () => null,
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   let shown: ControllerWorkStatus | undefined;
   source.subscribe(work => { shown = work; });
   source.refresh();
@@ -251,8 +251,9 @@ const sources: Array<{ dispose(): void }> = [];
 afterEach(() => { for (const source of sources.splice(0)) source.dispose(); });
 const flushPromises = () => new Promise<void>(resolve => setImmediate(resolve));
 
-function identitySource(initial: { repoKey?: string; refs?: Refs; userTitle?: string } = {}) {
-  const now = { repoKey: '/repo', refs: {} as Refs, userTitle: undefined as string | undefined, ...initial };
+function identitySource(initial: { repoKey?: string; refs?: Refs; userTitle?: string; branchRefreshMs?: number } = {}) {
+  const { branchRefreshMs = 1_000, ...start } = initial;
+  const now = { repoKey: '/repo', refs: {} as Refs, userTitle: undefined as string | undefined, ...start };
   const titleRequests: TitleRequest[] = [];
   const branchRequests: BranchRequest[] = [];
   const source = createControllerStatus({
@@ -262,7 +263,7 @@ function identitySource(initial: { repoKey?: string; refs?: Refs; userTitle?: st
     } }),
     refTitle: (repoKey, kind, number) => new Promise(resolve => { titleRequests.push({ repoKey, kind, number, resolve }); }),
     branch: repoKey => new Promise((resolve, reject) => { branchRequests.push({ repoKey, resolve, reject }); }),
-  });
+  }, { branchRefreshMs });
   sources.push(source);
   const seen: ControllerWorkStatus[] = [];
   let shown: ControllerWorkStatus | undefined;
@@ -374,6 +375,18 @@ describe('the branch a terminal reports', () => {
     await expect.poll(() => branchRequests.length).toBe(2);
     branchRequests[1].resolve('second-branch');
     await expect.poll(() => shown()?.branch).toBe('second-branch');
+  });
+
+  it('is read again only once the configured interval has passed', async () => {
+    const { branchRequests } = identitySource({ branchRefreshMs: 300_000 });
+    await expect.poll(() => branchRequests.length).toBe(1);
+    branchRequests[0].resolve('first-branch');
+    await flushPromises();
+    vi.advanceTimersByTime(299_999);
+    await flushPromises();
+    expect(branchRequests).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    await expect.poll(() => branchRequests.length).toBe(2);
   });
 
   it('does not start another read for the same repository while one is pending', async () => {

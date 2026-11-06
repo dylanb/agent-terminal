@@ -57,7 +57,7 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
     } }),
     refTitle: async directory => directory === '/old' ? pending : 'CURRENT_TITLE',
     branch: async () => null,
-  });
+  }, { branchRefreshMs: 1_000 });
   stops.push(() => source.dispose());
   source.refresh();
   stops.push(registerControllerTerminal(home, { launchDirectory: '/fixed', repositoryRoot: '/fixed' }, () => 'activated', () => {}, source.subscribe));
