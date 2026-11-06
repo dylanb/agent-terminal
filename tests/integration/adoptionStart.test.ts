@@ -93,6 +93,8 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     const result = await runAdoptionStart(deps(w.repo), { pr: w.prNumber, startedAt: 1_700_000_000_000 });
 
     expect.soft(result.ok).toBe(false);
+    expect.soft(reason(result)).toContain(adoptedFixBranch(w.prNumber, 1_700_000_000_000));
+    expect.soft(reason(result)).toMatch(/ignored file/);
     expect.soft(readFileSync(own, 'utf8')).toBe('source: non-catalog\n');
     expect.soft(branches(w)).toEqual(['main']);
     expect.soft(checkedOut(w)).toBe('main');
@@ -162,6 +164,31 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     expect.soft(reason(result)).toContain(adoptedFixBranch(w.prNumber, 1_700_000_000_000));
   });
 
+  it('rolls a start made from a detached HEAD back to that commit, leaving no branch and no record', async () => {
+    const w = world();
+    w.git(w.repo, ['checkout', '--detach', 'main']);
+    const startCommit = w.git(w.repo, ['rev-parse', 'HEAD']);
+    const git = createRealAdoptionGit(w.repo);
+    const failing: AdoptionStartDeps = {
+      ...deps(w.repo),
+      git: {
+        ...git,
+        createAndCheckOut: async (branch, oid) => {
+          await git.createAndCheckOut(branch, oid);
+          throw new Error('the checkout was interrupted');
+        },
+      },
+    };
+
+    const result = await runAdoptionStart(failing, { pr: w.prNumber, startedAt: 1_700_000_000_000 });
+
+    expect.soft(reason(result)).toContain('the checkout was interrupted');
+    expect.soft(checkedOut(w)).toBe('HEAD');
+    expect.soft(w.git(w.repo, ['rev-parse', 'HEAD'])).toBe(startCommit);
+    expect.soft(branches(w)).toEqual(['main']);
+    expect.soft(readPickupRecord(w.repo).kind).toBe('none');
+  });
+
   it('refuses a working tree with uncommitted changes, creating no branch and no record', async () => {
     const w = world();
     writeFileSync(join(w.repo, 'README.md'), 'an uncommitted edit\n');
@@ -176,6 +203,7 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
 
   it.each<[string, (pr: StandInPull) => void, RegExp]>([
     ['GitHub reports no head repository (a deleted fork)', (pr) => { pr.headRepo = null; }, /no head repository/],
+    ['its head repository is a name the record cannot hold', (pr) => { pr.headRepo = 'owner/..'; }, /head repository owner\/\.\. is not a repository name/],
     ['its base branch is a name the record cannot hold', (pr) => { pr.baseRefName = 'base+name'; }, /base branch base\+name is not a branch name/],
     ['GitHub reports a state that is not open', (pr) => { (pr as { state: string }).state = 'DRAFTED'; }, /not open/],
     ['it closes two acceptable tickets, until the operator can pick one', (pr) => { pr.closingIssues = [{ repo: 'owner/repo', number: 176 }, { repo: 'owner/repo', number: 178 }]; }, /owner\/repo#176, owner\/repo#178/],
