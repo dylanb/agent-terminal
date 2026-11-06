@@ -445,6 +445,16 @@ export function seedFakeAgentV2(binDir: string, opts: StepScript & { stepId: str
   seedFakeAgentSteps(binDir, { [stepId]: step });
 }
 
+// Shell for one scripted turn of an adopted-PR run, given through `StepScript.extraShell`.
+/** Commits `contents` at `path` on the checked-out branch: one fix commit. */
+export const agentCommitsFixSh = (path: string, contents: string, message: string): string =>
+  `mkdir -p "$(dirname ${shellQuote(path)})"; printf %s '${b64(contents)}' | base64 -d > ${shellQuote(path)}; ` +
+  `git add -- ${shellQuote(path)}; git commit -q -m ${shellQuote(message)}`;
+/** Appends the checked-out branch to `.agent-terminal/branches-seen`, one line per turn. */
+export const AGENT_LOGS_BRANCH_SH = 'mkdir -p .agent-terminal; git rev-parse --abbrev-ref HEAD >> .agent-terminal/branches-seen';
+/** Checks out `branch`, creating or resetting it at the current commit, so the next turn starts on it. */
+export const agentSwitchesBranchSh = (branch: string): string => `git checkout -q -B ${shellQuote(branch)}`;
+
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {
   const file = catalogEntryDefFile(home, id);
   mkdirSync(dirname(file), { recursive: true });
