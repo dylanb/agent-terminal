@@ -1,27 +1,24 @@
 // The `json-list` artifact contract (§28.4.1): a JSON object whose named key holds a non-empty array of entries,
 // each an object with a `title`. One predicate, read by the engine's sourcer and by `--check-repeat-list`.
 
-/** The rules a file can break, in the order they are checked. An entry rule is reported with its position. */
-export const JSON_LIST_RULES = [
-  'parses',
-  'top-level-object',
-  'key-present',
-  'value-array',
-  'at-least-one-entry',
-  'entry-object',
-  'title-string',
-  'title-not-blank',
-  'title-no-control-character',
-] as const;
-export type JsonListRule = (typeof JSON_LIST_RULES)[number];
+/** The rules the document as a whole can break, in the order they are checked. */
+export const JSON_LIST_DOCUMENT_RULES = ['parses', 'top-level-object', 'key-present', 'value-array', 'at-least-one-entry'] as const;
+export type JsonListDocumentRule = (typeof JSON_LIST_DOCUMENT_RULES)[number];
+
+/** The rules one entry can break, in the order they are checked, after every document rule. */
+export const JSON_LIST_ENTRY_RULES = ['entry-object', 'title-string', 'title-not-blank', 'title-no-control-character'] as const;
+export type JsonListEntryRule = (typeof JSON_LIST_ENTRY_RULES)[number];
 
 /** The entry titles in order, or the first rule broken, with the entry's position counted from 1 for an entry rule. */
-export type JsonListCheck = { ok: true; titles: readonly string[] } | { ok: false; rule: JsonListRule; position?: number };
+export type JsonListCheck =
+  | { ok: true; titles: readonly string[] }
+  | { ok: false; rule: JsonListDocumentRule }
+  | { ok: false; rule: JsonListEntryRule; position: number };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
-function entryTitle(entry: unknown): { title: string } | { rule: JsonListRule } {
+function entryTitle(entry: unknown): { title: string } | { rule: JsonListEntryRule } {
   if (!isObject(entry)) return { rule: 'entry-object' };
   const title = entry.title;
   if (typeof title !== 'string') return { rule: 'title-string' };

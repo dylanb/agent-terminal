@@ -7,7 +7,7 @@ import { JSON_LIST_CASES, type JsonListVerdict } from '../helpers/jsonListCases'
 const verdictOf = (text: string, list: string): JsonListVerdict => {
   const r = checkJsonList(text, list);
   if (r.ok) return { wellFormed: true, titles: r.titles };
-  return r.position === undefined ? { wellFormed: false, rule: r.rule } : { wellFormed: false, rule: r.rule, position: r.position };
+  return 'position' in r ? { wellFormed: false, rule: r.rule, position: r.position } : { wellFormed: false, rule: r.rule };
 };
 
 describe('checkJsonList — a well-formed json-list file gives its titles, a bad one the first rule it breaks', () => {
