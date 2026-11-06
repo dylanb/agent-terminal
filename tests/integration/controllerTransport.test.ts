@@ -305,6 +305,16 @@ describe('controller real local transport', () => {
     ]));
   });
 
+  it('refuses a second controller by naming the running controller, not a worktree flow', async () => {
+    server = await startControllerTransport(appHome);
+    const refusal = await startControllerTransport(appHome).then(
+      async value => { await value.dispose(); return 'started'; },
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(refusal).toContain(`process ${process.pid}`);
+    expect(refusal).not.toMatch(/worktree/i);
+  });
+
   it('activates only the selected equal-directory connection and returns its confirmed result', async () => {
     server = await startControllerTransport(appHome);
     const received: ControllerMessage[][] = [[], []];

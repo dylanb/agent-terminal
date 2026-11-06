@@ -41,6 +41,17 @@ export interface WorktreeLockDeps {
   beforeReclaim?: () => void;
   /** Creates `file` holding `content`, failing with EEXIST when it already exists. */
   writeNewFile?: (file: string, content: string) => void;
+  /** What a refusal tells the user; defaults to the worktree-flow wording. */
+  wording?: LockRefusalWording;
+}
+
+/** A refusal's user-facing text, named for what the lock guards. */
+export interface LockRefusalWording {
+  /** `holder` is null when the lock changed hands too often to name one. */
+  held(holder: LockHolder | null): string;
+  /** `target` is the display-safe file the user must delete. */
+  unidentified(target: string): string;
+  unusable(detail: string): string;
 }
 
 export interface WorktreeLock {
@@ -56,32 +67,15 @@ export const PROCESS_START_TIME_TIMEOUT_MS = 2_000;
 /** Bounds the acquire ↔ reclaim retry by attempt count, never by elapsed time. */
 export const MAX_ACQUIRE_ATTEMPTS = 4;
 
-const HELD_REASON =
-  "Another Agent Terminal window is changing this worktree's flow right now; try again in a moment.";
+const WORKTREE_WORDING: LockRefusalWording = {
+  held: () => "Another Agent Terminal window is changing this worktree's flow right now; try again in a moment.",
+  unidentified: (target) =>
+    "The worktree lock is held by a process that cannot be identified. If no other Agent Terminal window is working in " +
+    `this worktree, delete ${target} and try again.`,
+  unusable: (detail) => `The worktree lock could not be taken: ${detail}`,
+};
 
 const reclaimGuard = (file: string): string => `${file}.reclaim`;
-
-const HELD: LockAcquire = { ok: false, cause: 'held', reason: HELD_REASON };
-
-function unusable(detail: string): LockAcquire {
-  return {
-    ok: false,
-    cause: 'lock-unusable',
-    reason: `The worktree lock could not be taken: ${displaySafeEcho(detail, MAX_ECHOED_REASON_LENGTH)}`,
-  };
-}
-
-function unidentifiedHolder(lockFile: string): LockAcquire {
-  const shown = displaySafeEcho(lockFile, MAX_ECHOED_PATH_LENGTH);
-  const target = shown === lockFile ? lockFile : `the file ${path.basename(lockFile)} in Agent Terminal's lock directory`;
-  return {
-    ok: false,
-    cause: 'holder-unreadable',
-    reason:
-      "The worktree lock is held by a process that cannot be identified. If no other Agent Terminal window is working in " +
-      `this worktree, delete ${target} and try again.`,
-  };
-}
 
 /** The lockfiles' directory under the app-state home — the one location every app instance derives. */
 export function worktreeLockRoot(appHome: string): string {
@@ -206,6 +200,19 @@ function tryCreate(file: string, content: string, writeNewFile: (file: string, c
 export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   const liveness = deps.holderLiveness ?? realHolderLiveness;
   const writeNewFile = deps.writeNewFile ?? writeNewPrivateFile;
+  const wording = deps.wording ?? WORKTREE_WORDING;
+
+  const held = (holder: LockHolder | null): LockAcquire => ({ ok: false, cause: 'held', reason: wording.held(holder) });
+  const unusable = (detail: string): LockAcquire => ({
+    ok: false,
+    cause: 'lock-unusable',
+    reason: wording.unusable(displaySafeEcho(detail, MAX_ECHOED_REASON_LENGTH)),
+  });
+  const unidentifiedHolder = (lockFile: string): LockAcquire => {
+    const shown = displaySafeEcho(lockFile, MAX_ECHOED_PATH_LENGTH);
+    const target = shown === lockFile ? lockFile : `the file ${path.basename(lockFile)} in Agent Terminal's lock directory`;
+    return { ok: false, cause: 'holder-unreadable', reason: wording.unidentified(target) };
+  };
 
   const isStale = (text: string): boolean | 'unknown' => {
     const holder = parseLockHolder(text);
@@ -238,7 +245,7 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   /** The refusal a lock holding `text` owes its would-be acquirer, or null when that holder is stale. */
   const refusalFor = (lockFile: string, text: string): LockAcquire | null => {
     const stale = isStale(text);
-    if (stale === false) return HELD;
+    if (stale === false) return held(parseLockHolder(text));
     return stale === 'unknown' ? unidentifiedHolder(lockFile) : null;
   };
 
@@ -286,7 +293,7 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
     } catch (e) {
       return heldBy(file) ?? unusable(errMsg(e));
     }
-    if (sawLive) return HELD;
+    if (sawLive) return held(null);
     if (sawUnreadable) return unidentifiedHolder(reclaimGuard(file));
     return unusable('every stale-lock reclaim was lost');
   };

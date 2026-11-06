@@ -170,3 +170,15 @@ test('startup waiting cannot be bypassed by terminal input or flow start', { tag
     expect.soft(load(readFileSync(state, 'utf8'))).toMatchObject({ status: 'not_started' });
   } finally { await h.dispose(); }
 });
+
+test('a second controller launch says a controller is already running and leaves the first one serving', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  try {
+    const first = await h.launch(controllerTarget, h.fixture.nonGit);
+    const second = await h.launch(controllerTarget, h.fixture.nonGit);
+    await expect(second.page.locator('body')).toContainText(`process ${first.app.process().pid}`);
+    await expect(second.page.locator('body')).not.toContainText(/worktree/i);
+    await h.launch(terminalTarget, h.fixture.nonGit);
+    await expect(cardLocator(first.page, h.fixture.nonGit)).toHaveCount(1);
+  } finally { await h.dispose(); }
+});
