@@ -21,9 +21,11 @@ import {
   isAdoptedPickup,
   isPickupBranchName,
   sameAppBootstrapConflictTarget,
+  sameTicketRef,
   type AppBootstrapConflictTarget,
+  type TicketRef,
 } from '../shared/appBootstrap';
-import type { FlowRefs } from '../shared/ipc';
+import type { AdoptTicketAnswer, FlowRefs, ResolveAdoptTicketResult } from '../shared/ipc';
 
 export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
@@ -448,8 +450,9 @@ type PickupStartResult = AppLoopBootstrapResult | AdoptionStartResult;
 
 export interface AppLoopBootstrapCoordinatorDeps {
   run(repoDir: string, request: AppLoopBootstrapRequest): Promise<AppLoopBootstrapResult>;
-  /** Starts the run on pull request `pr`, for a pickup that adopts one. */
-  adopt(repoDir: string, pr: number): Promise<AdoptionStartResult>;
+  /** Starts the run on pull request `pr`, for a pickup that adopts one, with the operator's pick of its primary
+   *  ticket when they made one. */
+  adopt(repoDir: string, pr: number, pick?: TicketRef): Promise<AdoptionStartResult>;
   compensateBootstrap(job: AppLoopBootstrapJob, ownership: AppLoopBootstrapOwnership | AdoptionOwnership): Promise<void>;
   finalizeBootstrap(job: AppLoopBootstrapJob, identity: AppLoopBootstrap): Promise<void>;
   hasBootstrapForJob(job: AppLoopBootstrapJob): boolean;
@@ -485,6 +488,8 @@ export interface AppLoopBootstrapCoordinatorDeps {
   emitConflict(
     conflict: { repoDir: string; stepId: string } & AppBootstrapConflictTarget,
   ): void;
+  /** Asks the operator which of `tickets` is the primary of the run adopting PR `pr`; `choiceId` names this offer. */
+  emitTicketChoice(choice: { repoDir: string; stepId: string; pr: number; choiceId: string; tickets: TicketRef[] }): void;
   audit(repoDir: string, kind: AppBootstrapAuditKind, stepId: string, detail?: string): void;
 }
 
@@ -496,20 +501,24 @@ export interface AppLoopBootstrapCoordinator {
     wipe: boolean,
     target: AppBootstrapConflictTarget,
   ): void;
+  /** The operator's answer to ticket-choice offer `choiceId`: refused, with the job still held, unless it answers
+   *  the step's current offer with Cancel or one of the tickets it offered. */
+  resolveTicket(repoDir: string, stepId: string, choiceId: string, answer: AdoptTicketAnswer): ResolveAdoptTicketResult;
 }
+
+/** What a held start was answered with: a confirmed wipe of a ticket run's conflict, or an adopting run's pick. */
+type StartAnswer = { confirmedWipe?: AppBootstrapConflictTarget; pick?: TicketRef };
 
 export function createAppLoopBootstrapCoordinator(
   deps: AppLoopBootstrapCoordinatorDeps,
 ): AppLoopBootstrapCoordinator {
   let inFlight: { token: symbol; job: AppLoopBootstrapJob } | null = null;
-  const pending = new Map<
-    string,
-    { job: AppLoopBootstrapJob; confirmedWipe?: AppBootstrapConflictTarget }
-  >();
+  const pending = new Map<string, { job: AppLoopBootstrapJob; answer: StartAnswer }>();
   const held = new Map<
     string,
     { job: AppLoopBootstrapJob; target: AppBootstrapConflictTarget }
   >();
+  const heldChoices = new Map<string, { job: AppLoopBootstrapJob; choiceId: string; tickets: TicketRef[] }>();
   const heldKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
   const callEnterWork = (job: AppLoopBootstrapJob, deferRequest: boolean): AppLoopEnterResult =>
     deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry, deferRequest, job.slice);
@@ -527,6 +536,11 @@ export function createAppLoopBootstrapCoordinator(
   const emitNotice = (job: AppLoopBootstrapJob, notice: string): void => {
     try {
       deps.emitNotice({ repoDir: job.repoDir, stepId: job.stepId, notice });
+    } catch {}
+  };
+  const emitTicketChoice = (job: AppLoopBootstrapJob, pr: number, choiceId: string, tickets: TicketRef[]): void => {
+    try {
+      deps.emitTicketChoice({ repoDir: job.repoDir, stepId: job.stepId, pr, choiceId, tickets });
     } catch {}
   };
   const emitConflict = (
@@ -724,14 +738,9 @@ export function createAppLoopBootstrapCoordinator(
     }
   };
 
-  let dispatchJob: (
-    job: AppLoopBootstrapJob,
-    confirmedWipe?: AppBootstrapConflictTarget,
-  ) => void;
-  const start = (
-    job: AppLoopBootstrapJob,
-    confirmedWipe?: AppBootstrapConflictTarget,
-  ): void => {
+  let dispatchJob: (job: AppLoopBootstrapJob, answer?: StartAnswer) => void;
+  const start = (job: AppLoopBootstrapJob, answer: StartAnswer = {}): void => {
+    const { confirmedWipe, pick } = answer;
     const bootstrap = job.bootstrap;
     if (bootstrap === null) {
       enterFastPath(job);
@@ -757,7 +766,7 @@ export function createAppLoopBootstrapCoordinator(
         if (nextEntry.done) return;
         const [repoDir, next] = nextEntry.value;
         pending.delete(repoDir);
-        dispatchJob(next.job, next.confirmedWipe);
+        dispatchJob(next.job, next.answer);
       }
     };
     const resolve = async (result: PickupStartResult): Promise<void> => {
@@ -824,6 +833,12 @@ export function createAppLoopBootstrapCoordinator(
           emitConflict(job, result.conflict);
           return;
         }
+        if (result.kind === 'choose-ticket') {
+          const choiceId = randomUUID();
+          heldChoices.set(heldKey(job.repoDir, job.stepId), { job, choiceId, tickets: result.tickets });
+          emitTicketChoice(job, result.pr, choiceId, result.tickets);
+          return;
+        }
         audit(job, 'failure', result.error);
         rollbackJob(job, result.error);
       } catch (e) {
@@ -840,7 +855,12 @@ export function createAppLoopBootstrapCoordinator(
     try {
       if (isAdoptPickup(bootstrap)) {
         const pr = bootstrap.pr;
-        operation = pr === null ? refused('adopting a pull request requires a resolved pr input') : deps.adopt(job.repoDir, pr);
+        operation =
+          pr === null
+            ? refused('adopting a pull request requires a resolved pr input')
+            : pick === undefined
+              ? deps.adopt(job.repoDir, pr)
+              : deps.adopt(job.repoDir, pr, pick);
       } else {
         operation =
           job.issue === null
@@ -860,13 +880,14 @@ export function createAppLoopBootstrapCoordinator(
     );
   };
 
-  dispatchJob = (job, confirmedWipe) => {
+  dispatchJob = (job, answer = {}) => {
+    heldChoices.delete(heldKey(job.repoDir, job.stepId));
     if (inFlight !== null) {
       if (
         inFlight.job.repoDir !== job.repoDir ||
         inFlight.job.entryToken !== job.entryToken
       ) {
-        pending.set(job.repoDir, { job, confirmedWipe });
+        pending.set(job.repoDir, { job, answer });
       }
       return;
     }
@@ -884,22 +905,23 @@ export function createAppLoopBootstrapCoordinator(
       return;
     }
     const hasInput = isAdoptPickup(job.bootstrap) ? job.bootstrap.pr !== null : job.issue !== null;
-    if (confirmedWipe === undefined && hasInput && deps.hasBootstrapForJob(job)) {
+    if (answer.confirmedWipe === undefined && hasInput && deps.hasBootstrapForJob(job)) {
       enterFastPath(job);
       return;
     }
-    start(job, confirmedWipe);
+    start(job, answer);
   };
 
-  const declineWipe = (job: AppLoopBootstrapJob): void => {
+  /** Rolls the step back with no error dialog, because the operator chose not to go on with the held start. */
+  const declineHeldStart = (job: AppLoopBootstrapJob, declined: { audited: string; after: string }): void => {
     try {
       if (!deps.rollbackStep(job)) {
         audit(job, 'stale');
         return;
       }
-      audit(job, 'rollback', 'operator declined branch wipe');
+      audit(job, 'rollback', declined.audited);
     } catch (e) {
-      const reason = `could not roll back step ${job.stepId} after a declined wipe: ${errMsg(e)}`;
+      const reason = `could not roll back step ${job.stepId} after ${declined.after}: ${errMsg(e)}`;
       audit(job, 'rollback-failed', reason);
       emitError(job, reason);
     }
@@ -924,11 +946,37 @@ export function createAppLoopBootstrapCoordinator(
       }
       if (wipe) {
         audit(conflict.job, 'wipe', conflict.target.branch);
-        dispatchJob(conflict.job, conflict.target);
+        dispatchJob(conflict.job, { confirmedWipe: conflict.target });
         return;
       }
       audit(conflict.job, 'decline', conflict.target.branch);
-      declineWipe(conflict.job);
+      declineHeldStart(conflict.job, { audited: 'operator declined branch wipe', after: 'a declined wipe' });
+    },
+    resolveTicket(repoDir, stepId, choiceId, answer) {
+      const key = heldKey(repoDir, stepId);
+      const choice = heldChoices.get(key);
+      if (choice === undefined || choice.choiceId !== choiceId) {
+        return { ok: false, reason: `step ${stepId} is not waiting for an answer to that ticket choice` };
+      }
+      if (answer.kind === 'ticket' && !choice.tickets.some((t) => sameTicketRef(t, answer.ticket))) {
+        return { ok: false, reason: `${answer.ticket.repo}#${answer.ticket.number} was not offered as the primary ticket` };
+      }
+      heldChoices.delete(key);
+      const status = currentStatus(choice.job);
+      if (status.kind === 'failed') {
+        rollbackUnverifiableJob(choice.job, status.reason);
+        return { ok: true };
+      }
+      if (status.kind === 'stale') {
+        audit(choice.job, 'stale');
+        return { ok: false, reason: `step ${stepId} is no longer current` };
+      }
+      if (answer.kind === 'cancel') {
+        declineHeldStart(choice.job, { audited: 'operator cancelled the ticket choice', after: 'a cancelled ticket choice' });
+        return { ok: true };
+      }
+      dispatchJob(choice.job, { pick: answer.ticket });
+      return { ok: true };
     },
   };
 }

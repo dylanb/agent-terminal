@@ -12,6 +12,7 @@ import {
   type FlowCatalogListResult,
   type RebindResult,
   type ConfirmRunPickupResult,
+  type ResolveAdoptTicketResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -46,6 +47,7 @@ import {
   isValidFlowRebindHeldRun,
   isValidFlowConfirmRunPickup,
   isValidFlowResolveAppBootstrapConflict,
+  isValidFlowResolveAdoptTicket,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -141,6 +143,7 @@ import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isAdoptPickup, type LoopDefV2Context, type PickupContractV2 } from './loopDefV2';
 import { compensateAdoption, runAdoptionStart, type AdoptionStartDeps } from './adoptionStart';
+import { adoptedRunRefs } from '../shared/currentTicket';
 import { createRealAdoptionGit, createRealAdoptionGitHub } from './adoptionPorts';
 import { isAdoptedPickup } from '../shared/appBootstrap';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -533,8 +536,9 @@ async function createWindow(): Promise<void> {
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
     reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
-      const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
-      return { ticket: r.ticket, pr: r.pr };
+      const trusted = trustedAppBootstraps.get(repoDir) ?? null;
+      const r = resolveAppGateRefs(flow.state(repoDir).refs, trusted);
+      return { ticket: r.ticket, pr: r.pr, ...(trusted !== null && isAdoptedPickup(trusted) ? { adoption: adoptedRunRefs(trusted) } : {}) };
     },
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
@@ -856,13 +860,13 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
       }
     },
-    adopt: async (repoDir, pr) => {
+    adopt: async (repoDir, pr, pick) => {
       pickupInFlight = { repoKey: repoDir, issue: pr, wipe: false };
       pushFlowChanged();
       try {
         const run = inProgressRunIdentity(repoDir);
         if (run === null) return { ok: false, kind: 'error', error: 'adopting a pull request needs a run in progress' };
-        return await runAdoptionStart(adoptionDeps(repoDir), { pr, startedAt: run.startedAt });
+        return await runAdoptionStart(adoptionDeps(repoDir), { pr, startedAt: run.startedAt, ...(pick === undefined ? {} : { pick }) });
       } finally {
         if (pickupInFlight?.repoKey === repoDir) pickupInFlight = null;
         pushFlowChanged();
@@ -891,7 +895,7 @@ async function createWindow(): Promise<void> {
     acceptBootstrap: (job, identity) => {
       trustedAppBootstraps.set(job.repoDir, identity);
       pickupRecordPredatesRun.delete(job.repoDir);
-      if (isAdoptedPickup(identity)) audit.recordTicket(job.repoDir, identity.primary.number);
+      if (isAdoptedPickup(identity)) audit.recordTicket(job.repoDir, identity.primary);
     },
     rollbackStep: (job) => {
       const current = flow.state(job.repoDir);
@@ -951,6 +955,15 @@ async function createWindow(): Promise<void> {
         repoKey: repoDir,
         step: stepId,
         ...conflict,
+      }),
+    emitTicketChoice: ({ repoDir, stepId, pr, choiceId, tickets }) =>
+      send(CH.flowOnAdoptTicketChoice, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        pr,
+        choiceId,
+        tickets: tickets.map((t) => ({ repo: t.repo, number: t.number })),
       }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
@@ -1569,6 +1582,11 @@ async function createWindow(): Promise<void> {
         return catalogListResult(() =>
           listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
         );
+      },
+      // §27.10 — the answer names its offer, so it can never pick for a start the operator was not shown.
+      [CH.flowResolveAdoptTicket]: (_e, m): ResolveAdoptTicketResult => {
+        if (!isValidFlowResolveAdoptTicket(m)) return { ok: false, reason: 'invalid flow:resolveAdoptTicket request' };
+        return appBootstrapCoordinator?.resolveTicket(m.repoKey, m.step, m.choiceId, m.answer) ?? { ok: false, reason: 'no pickup is waiting for a ticket choice' };
       },
       [CH.flowConfirmRunPickup]: (_e, m): Promise<ConfirmRunPickupResult> =>
         isValidFlowConfirmRunPickup(m) && knownRepoKeys.has(m.repoKey)

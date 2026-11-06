@@ -3,7 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
-import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
+import { isAppBootstrapConflictTarget, isTicketRef } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -382,7 +382,11 @@ export function isValidFlowResolveAppBootstrapConflict(
 
 /** flow:resolveAdoptTicket — the operator's answer to one ticket-choice offer. */
 export function isValidFlowResolveAdoptTicket(m: unknown): m is FlowResolveAdoptTicketMsg {
-  return isRecord(m);
+  if (!isRecord(m) || !isLiveSession(m) || !isSafeRepoKey(m.repoKey)) return false;
+  if (typeof m.step !== 'string' || m.step.length === 0 || typeof m.choiceId !== 'string' || m.choiceId.length === 0) return false;
+  const answer = m.answer;
+  if (!isRecord(answer)) return false;
+  return answer.kind === 'cancel' || (answer.kind === 'ticket' && isTicketRef(answer.ticket));
 }
 
 /** flow:resolveEpicPromotion — the operator's confirm/decline of the §28.7 confirm-first preview. `repoKey`

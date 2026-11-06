@@ -96,6 +96,11 @@ describe.each(SITES)('$site of an adopting run (#304 AC 6, 7)', ({ compose }) =>
     expect.soft(lines.filter((l) => ticketRunChangeLines.includes(l))).toEqual([]);
   });
 
+  it("names the run's own uncommitted fixes as part of the change: a diff from the recorded merge-base to the working tree", () => {
+    const lines = linesOf(compose({ adoption: ADOPTION }));
+    expect(lines.filter((l) => l.includes(ADOPTION.baseOid) && !l.includes(ADOPTION.fixBranch))).not.toEqual([]);
+  });
+
   it("adds a line about the tree's .agent-terminal/ content that a ticket run's prompt does not have", () => {
     const ticketRun = linesOf(compose({ ticket: 176 }));
     expect(linesOf(compose({ adoption: ADOPTION })).filter((l) => l.includes('.agent-terminal/') && !l.includes(ADOPTION.fixBranch) && !ticketRun.includes(l))).not.toEqual([]);

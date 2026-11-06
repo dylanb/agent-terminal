@@ -120,6 +120,24 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
     expect(prompt).toContain(`turn-done:${TURN_KEY}`);
   });
 
+  it("hands an adopting run's reviewers its pull request's tickets, each read through gh in its own repository, not the primary's number as an issue (#304 AC 6)", () => {
+    const engine = makeEngine();
+    h.workRefsResult = {
+      ticket: 177,
+      pr: 41,
+      adoption: { pr: 41, host: 'github.com', tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }], baseOid: 'b'.repeat(40), fixBranch: 'agent-terminal/review-fixture-branch' },
+    };
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = promptFile(goalCommand());
+    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END)).split('\n');
+    const readsTicket = (repo: string, n: number): string[] => handoff.filter((l) => /\bgh\b/.test(l) && l.includes(`github.com/${repo}`) && new RegExp(`(^|\\D)${n}(\\D|$)`).test(l));
+    expect.soft(readsTicket('owner/repo', 176)).not.toEqual([]);
+    expect.soft(readsTicket('contributor/fork', 177)).not.toEqual([]);
+    expect.soft(handoff.filter((l) => l.includes('gh issue view 177 --comments'))).toEqual([]);
+  });
+
   it('refuses the goal turn before submitting it when a reviewer sub-agent is not installed', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
       reviewerAgentProblem: (r) => (r.persona === 'review-plan-security' ? `no sub-agent ${r.loop}--${r.persona} is installed` : null),

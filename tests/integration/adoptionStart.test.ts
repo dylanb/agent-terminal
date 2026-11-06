@@ -37,7 +37,7 @@ const deps = (repo: string): AdoptionStartDeps => ({
 
 const branches = (w: AdoptionWorld): string[] => w.git(w.repo, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).split('\n').filter(Boolean);
 const checkedOut = (w: AdoptionWorld): string => w.git(w.repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
-const reason = (r: Awaited<ReturnType<typeof runAdoptionStart>>): string => (r.ok ? 'started' : r.error);
+const reason = (r: Awaited<ReturnType<typeof runAdoptionStart>>): string => (r.ok ? 'started' : r.kind === 'error' ? r.error : r.kind);
 
 describe('runAdoptionStart — the record it writes (#304)', () => {
   it("records the fork point of the PR as its base, not the base branch's tip once the base has moved on", async () => {
@@ -158,7 +158,7 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     const result = await runAdoptionStart(failing, { pr: w.prNumber, startedAt: 1_700_000_000_000 });
 
     expect.soft(result.ok).toBe(false);
-    expect.soft(!result.ok && result.requiresAttention).toBe(true);
+    expect.soft(!result.ok && result.kind === 'error' && result.requiresAttention).toBe(true);
     expect.soft(reason(result)).toContain('the checkout was interrupted');
     expect.soft(reason(result)).toContain('the branch is locked');
     expect.soft(reason(result)).toContain(adoptedFixBranch(w.prNumber, 1_700_000_000_000));
@@ -230,7 +230,6 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     ['its head repository is a name the record cannot hold', (pr) => { pr.headRepo = 'owner/..'; }, /head repository owner\/\.\. is not a repository name/],
     ['its base branch is a name the record cannot hold', (pr) => { pr.baseRefName = 'base+name'; }, /base branch base\+name is not a branch name/],
     ['GitHub reports a state that is not open', (pr) => { (pr as { state: string }).state = 'DRAFTED'; }, /not open/],
-    ['it closes two acceptable tickets, until the operator can pick one', (pr) => { pr.closingIssues = [{ repo: 'owner/repo', number: 176 }, { repo: 'owner/repo', number: 178 }]; }, /owner\/repo#176, owner\/repo#178/],
   ])('refuses a PR when %s, creating no branch', async (_case, edit, why) => {
     const w = world();
     w.gh.update((state) => edit(state.pulls[0] as StandInPull));
@@ -305,5 +304,28 @@ describe('runAdoptionStart — the primary ticket of a PR that closes several (#
 
     expect.soft(reason(result)).toBe('started');
     expect.soft(recorded(w)).toEqual({ primary: FORK_TICKET, tickets: [FORK_TICKET] });
+  });
+});
+
+describe("runAdoptionStart — origin's host (#304 AC 6)", () => {
+  it("records origin's own host, which every ticket's gh instruction names", async () => {
+    const w = world();
+    const real = createRealAdoptionGitHub(w.repo);
+    const onEnterprise: AdoptionStartDeps = {
+      ...deps(w.repo),
+      github: {
+        origin: async () => ({ selector: 'ghe.example.com/owner/repo', owner: 'owner', name: 'repo', defaultBranch: 'main' }),
+        pullRequest: async (n) => {
+          const pr = await real.pullRequest(n);
+          return { ...pr, closingIssues: pr.closingIssues.map((i) => ({ ...i, url: i.url.replace(/^https:\/\/github\.com\//, 'https://ghe.example.com/') })) };
+        },
+      },
+    };
+
+    const result = await runAdoptionStart(onEnterprise, { pr: w.prNumber, startedAt: 1_700_000_000_000 });
+
+    expect.soft(reason(result)).toBe('started');
+    const record = readPickupRecord(w.repo);
+    expect.soft(record.kind === 'complete' && isAdoptedPickup(record.bootstrap) ? record.bootstrap.host : record.kind).toBe('ghe.example.com');
   });
 });

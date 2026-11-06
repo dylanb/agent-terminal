@@ -17,6 +17,8 @@ import {
   type FlowApi,
   type FlowBootstrapErrorMsg,
   type FlowAppBootstrapConflictMsg,
+  type FlowAdoptTicketChoiceMsg,
+  type ResolveAdoptTicketResult,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
   type ActiveFlowWriteResult,
@@ -192,8 +194,20 @@ const flowApi: FlowApi = {
       wipe,
       ...target,
     }),
-  onAdoptTicketChoice: () => () => {},
-  resolveAdoptTicket: () => Promise.reject(new Error('the ticket choice is not built yet')),
+  onAdoptTicketChoice: (cb) => {
+    const handler = (_e: unknown, msg: FlowAdoptTicketChoiceMsg): void =>
+      cb({
+        repoKey: msg.repoKey,
+        step: msg.step,
+        pr: msg.pr,
+        choiceId: msg.choiceId,
+        tickets: msg.tickets.map((t) => ({ repo: t.repo, number: t.number })),
+      });
+    ipcRenderer.on(CH.flowOnAdoptTicketChoice, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnAdoptTicketChoice, handler);
+  },
+  resolveAdoptTicket: (repoKey, step, choiceId, answer) =>
+    ipcRenderer.invoke(CH.flowResolveAdoptTicket, { sessionId: SESSION_ID, repoKey, step, choiceId, answer }) as Promise<ResolveAdoptTicketResult>,
   onEpicPromotionPreview: (cb) => {
     const handler = (_e: unknown, msg: FlowEpicPromotionPreviewMsg): void =>
       cb({ repoKey: msg.repoKey, step: msg.step, epic: msg.epic, pr: msg.pr, subTickets: msg.subTickets });

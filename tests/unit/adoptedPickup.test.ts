@@ -12,6 +12,7 @@ const BASE = 'b'.repeat(40);
 const ADOPTED: AdoptedPickup = {
   kind: 'adopted',
   pr: 41,
+  host: 'github.com',
   fixBranch: 'agent-terminal/review-pr-41-1700000000000',
   startedAt: 1_700_000_000_000,
   headRef: 'feature/reviewed-change',
@@ -37,6 +38,10 @@ describe('parseAdoptedPickup — the one validator both pickup files read throug
     ['a fix_branch its run does not derive', { fix_branch: 'agent-terminal/review-pr-41-1' }],
     ['a head_ref the branch rule refuses', { head_ref: 'feature/a+b' }],
     ['a base_ref the branch rule refuses', { base_ref: 'base+name' }],
+    ["a host that is not origin's lowercased host", { host: 'GitHub.com' }],
+    ['no host', { host: undefined }],
+    ['a host that is not one host part', { host: 'ghe.example.com/x' }],
+    ['an empty host', { host: '' }],
     ['a ticket other than its primary that is not {repo, number}', { tickets: [{ repo: 'owner/repo', number: 0 }, { repo: 'owner/repo', number: 176 }] }],
   ])('refuses %s', (_case, change) => {
     expect(parseAdoptedPickup({ ...serializeAdoptedPickup(ADOPTED), ...change }).ok).toBe(false);

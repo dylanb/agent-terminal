@@ -13,6 +13,7 @@ const RUN: RunIdentity = { flow: 'adopt-pr-fixture', startedAt: 1_700_000_000_00
 const adopted = (startedAt: number): AdoptedPickup => ({
   kind: 'adopted',
   pr: 41,
+  host: 'github.com',
   fixBranch: adoptedFixBranch(41, startedAt),
   startedAt,
   headRef: 'feature/reviewed-change',

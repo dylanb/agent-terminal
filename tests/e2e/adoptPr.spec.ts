@@ -415,10 +415,9 @@ test('Cancel in the ticket choice rolls the step back with no error, creating no
   expect.soft(checkedOut(w)).toBe('main');
   expect.soft(readPickupRecord(w.repo).kind).toBe('none');
 
-  // A second start offers again; an answer to the cancelled offer is refused, and the new one stays open.
+  // A second start, on the PR input the rolled-back step kept, offers again; an answer to the cancelled offer is
+  // refused, and the new one stays open.
   await use(flowControl(page), (control) => control.click({ timeout: 10_000 }));
-  await use(inputModal(page).locator('.field input'), (field) => field.fill(String(w.prNumber)));
-  await use(inputModal(page).locator('.confirm'), (button) => button.click({ timeout: 10_000 }));
   await expect.soft(ticketChoice(page)).toBeVisible({ timeout: 30_000 });
   const second = await lastOffer(page);
   expect.soft(second?.choiceId ?? null).not.toBe(first?.choiceId ?? null);

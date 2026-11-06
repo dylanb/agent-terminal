@@ -1,6 +1,6 @@
 import { errMsg } from './errno';
 import { matchesGitHubRepositoryUrl, repositoryHost, type GitHubRepositoryIdentity } from './githubRepository';
-import { adoptedFixBranch, isPickupBranchName, isRepositoryName, type AdoptedPickup, type TicketRef } from '../shared/appBootstrap';
+import { adoptedFixBranch, isPickupBranchName, isRepositoryName, sameTicketRef, type AdoptedPickup, type TicketRef } from '../shared/appBootstrap';
 
 /** A pull request as the adoption start reads it from GitHub. */
 export interface AdoptionPullRequest {
@@ -62,7 +62,9 @@ export interface AdoptionOwnership {
 
 export type AdoptionStartResult =
   | { ok: true; identity: AdoptedPickup; ownership: AdoptionOwnership }
-  | { ok: false; kind: 'error'; error: string; requiresAttention?: true };
+  | { ok: false; kind: 'error'; error: string; requiresAttention?: true }
+  /** The PR closes several acceptable tickets and no pick was made: nothing was touched. */
+  | { ok: false; kind: 'choose-ticket'; pr: number; tickets: TicketRef[] };
 
 const OPEN = 'OPEN';
 
@@ -109,12 +111,14 @@ export async function runAdoptionStart(deps: AdoptionStartDeps, req: AdoptionReq
     if (!checked.ok) return fail(checked.reason);
     const { headRepo } = checked;
     const tickets = acceptableTickets(pr, origin);
-    const primary = tickets[0];
     const repositories = headRepo === `${origin.owner}/${origin.name}` ? `${origin.owner}/${origin.name}` : `${origin.owner}/${origin.name} or ${headRepo}`;
-    if (primary === undefined) return fail(`pull request #${req.pr} closes no ticket in ${repositories}`);
-    if (tickets.length > 1) {
-      return fail(`pull request #${req.pr} closes ${tickets.length} tickets (${tickets.map((t) => `${t.repo}#${t.number}`).join(', ')}), and a run is for one`);
+    if (tickets.length === 0) return fail(`pull request #${req.pr} closes no ticket in ${repositories}`);
+    const { pick } = req;
+    const primary = pick === undefined ? (tickets.length === 1 ? tickets[0] : undefined) : tickets.find((t) => sameTicketRef(t, pick));
+    if (pick !== undefined && primary === undefined) {
+      return fail(`pull request #${req.pr} does not close ${pick.repo}#${pick.number} in ${repositories}, so it cannot be the run's primary ticket`);
     }
+    if (primary === undefined) return { ok: false, kind: 'choose-ticket', pr: req.pr, tickets };
     const headOid = await deps.git.fetchPullRequestHead(req.pr);
     const planted = await deps.git.trackedRunStatePaths(headOid);
     if (planted.length > 0) {
@@ -128,6 +132,7 @@ export async function runAdoptionStart(deps: AdoptionStartDeps, req: AdoptionReq
     const identity: AdoptedPickup = {
       kind: 'adopted',
       pr: req.pr,
+      host: repositoryHost(origin),
       fixBranch,
       startedAt: req.startedAt,
       headRef: pr.headRef,

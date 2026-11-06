@@ -116,6 +116,8 @@ export const sameTicketRef = (a: TicketRef, b: TicketRef): boolean => a.repo ===
 export interface AdoptedPickup {
   kind: 'adopted';
   pr: number;
+  /** origin's GitHub host, lowercased: the host every ticket and the PR are on. */
+  host: string;
   fixBranch: string;
   /** The adopting run's Start instant, which `fixBranch` is derived from. */
   startedAt: number;
@@ -139,6 +141,7 @@ export function serializeAdoptedPickup(p: AdoptedPickup): Record<string, unknown
   return {
     kind: 'adopted',
     pr: p.pr,
+    host: p.host,
     fix_branch: p.fixBranch,
     started_at: p.startedAt,
     head_ref: p.headRef,
@@ -155,9 +158,10 @@ export function serializeAdoptedPickup(p: AdoptedPickup): Record<string, unknown
 /** The adopted pickup a pickup file's mapping holds, or why it holds none. */
 export function parseAdoptedPickup(doc: Record<string, unknown>): { ok: true; pickup: AdoptedPickup } | { ok: false; reason: string } {
   const bad = (reason: string): { ok: false; reason: string } => ({ ok: false, reason });
-  const { pr, fix_branch, started_at, head_ref, base_ref, head_repo, cross_repository, tickets, primary, head_oid, base_oid } = doc;
+  const { pr, host, fix_branch, started_at, head_ref, base_ref, head_repo, cross_repository, tickets, primary, head_oid, base_oid } = doc;
   if (doc.kind !== 'adopted') return bad('is not an adopted pickup');
   if (!isTicketNumber(pr)) return bad('needs a positive integer pr');
+  if (typeof host !== 'string' || host !== host.toLowerCase() || !isRepositoryPart(host)) return bad("needs origin's host, lowercased");
   if (typeof started_at !== 'number' || !Number.isSafeInteger(started_at) || started_at < 0) return bad('needs the run start as started_at');
   if (fix_branch !== adoptedFixBranch(pr, started_at)) return bad('has a fix_branch that is not the one its run derives');
   if (!isPickupBranchName(head_ref) || !isPickupBranchName(base_ref)) return bad('needs head_ref and base_ref branch names');
@@ -173,6 +177,7 @@ export function parseAdoptedPickup(doc: Record<string, unknown>): { ok: true; pi
     pickup: {
       kind: 'adopted',
       pr,
+      host,
       fixBranch: fix_branch,
       startedAt: started_at,
       headRef: head_ref,

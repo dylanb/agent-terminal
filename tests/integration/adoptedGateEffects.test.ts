@@ -50,7 +50,7 @@ async function adoptedRun(): Promise<Adopted> {
     },
     { pr: w.prNumber, startedAt: 1_700_000_000_000 },
   );
-  if (!started.ok) throw new Error(`the adoption start was refused: ${started.error}`);
+  if (!started.ok) throw new Error(`the adoption start was refused: ${started.kind === 'error' ? started.error : started.kind}`);
   const report = join(w.repo, '.agent-terminal', 'report.md');
   writeFileSync(report, 'A report this run wrote.\n');
   return { w, pickup: started.identity, report };

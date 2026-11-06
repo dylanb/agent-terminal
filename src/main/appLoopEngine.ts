@@ -34,6 +34,7 @@ import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRoun
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import type { AdoptedRunRefs } from '../shared/currentTicket';
 import type { TicketRef } from '../shared/appBootstrap';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
@@ -90,6 +91,19 @@ export interface AppLoopLiveError {
   round?: number;
   /** §27.12 */
   stalled?: true;
+}
+
+/** The refs a turn's prompt binds to; `adoption` is present only for an adopting run, read from its trusted pickup. */
+export interface WorkRefs {
+  ticket: number | null;
+  pr: number | null;
+  adoption?: AdoptedRunRefs;
+}
+
+/** The one selection every prompt site makes: an adopting run presents its PR and tickets, a ticket run its ticket. */
+function promptIntent(refs: WorkRefs): { adoption: AdoptedRunRefs } | { ticket: number } | Record<string, never> {
+  if (refs.adoption !== undefined) return { adoption: refs.adoption };
+  return refs.ticket !== null ? { ticket: refs.ticket } : {};
 }
 
 /** The completion contract of the work turn, as a discriminated union so no mode carries a field another
@@ -190,7 +204,7 @@ export interface AppLoopEngineDeps {
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
    *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
-  workRefs(repoDir: string): { ticket: number | null; pr: number | null };
+  workRefs(repoDir: string): WorkRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
   sliceBrief(repoDir: string): SliceBrief | null;
   /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
@@ -1128,12 +1142,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     });
 
   /** §27.3/§27.4 */
-  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, ticket: number | null): string[] => {
+  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, refs: WorkRefs): string[] => {
     const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
     return composeGoalReviewLines(
       run.reviewers,
       {
-        ...(ticket !== null ? { ticket } : {}),
+        ...promptIntent(refs),
         ...(subjectRel !== undefined ? { subjectRel } : {}),
         ...(run.slicePhase ? { slice: deps.currentSlice(turn.repoDir) } : {}),
         carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
@@ -1163,7 +1177,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (body === null) return null;
         // §19.1 — bind the consolidator to the engine-resolved issue it judges the round against, the SAME
         // identity the work turn and gate side-effects use, never one re-derived from the branch/PR/cwd.
-        const consolidateTicket = deps.workRefs(active.repoDir).ticket;
+        const consolidateRefs = deps.workRefs(active.repoDir);
         return composeConsolidatePrompt({
           recipeBody: body,
           catalog: active.catalog,
@@ -1173,14 +1187,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
-          ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
+          ...promptIntent(consolidateRefs),
         });
       }
       if (active.phase === 'review') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
         // §19.1 — the ticket handed to each reviewer is the engine-resolved issue, the SAME identity every other
         // turn binds to, never one a reviewer re-derives from the branch/PR/cwd.
-        const reviewTicket = deps.workRefs(active.repoDir).ticket;
+        const reviewRefs = deps.workRefs(active.repoDir);
         const loopBrief = readBrief(active);
         if (loopBrief === null) return null;
         return composeReviewAndFixPrompt({
@@ -1193,7 +1207,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(reportCheck(active)),
-          ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
+          ...promptIntent(reviewRefs),
           ...(active.subjectRel !== undefined ? { subjectRel: active.subjectRel } : {}),
           ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
           ...briefFor(active),
@@ -1221,12 +1235,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (body === null || workBrief === null) return null;
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
-      const ticket = deps.workRefs(active.repoDir).ticket;
+      const workRefs = deps.workRefs(active.repoDir);
       const prompt = composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
-        ...(ticket !== null ? { ticket } : {}),
+        ...promptIntent(workRefs),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
@@ -1254,7 +1268,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
         ...(active.run.kind === 'goal'
           ? {
-              goalReview: goalReviewFor(active, active.run, ticket),
+              goalReview: goalReviewFor(active, active.run, workRefs),
               goalProgress: goalProgressLines({
                 progressRel: goalProgressRel(active.run.session),
                 notesRel: goalNotesRel(active.run.session),

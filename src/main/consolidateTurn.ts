@@ -9,7 +9,7 @@ import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
-import { ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { checkerLines } from './artifactCheck';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
@@ -113,7 +113,8 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
   const lines: string[] = [];
   lines.push(req.recipeBody.trimEnd());
   // §19.1 — bind the consolidator to the engine-resolved ticket it judges the round against (one shared source).
-  if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption));
+  else if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   lines.push(
     '',
     `This is the consolidator turn for round ${req.round}.`,

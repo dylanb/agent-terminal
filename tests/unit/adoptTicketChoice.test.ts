@@ -236,3 +236,88 @@ describe('the ticket-choice dialog, relocated (UI-STANDARDS §3.3)', () => {
     });
   });
 });
+
+describe('the ticket-choice dialog when main does not accept an answer (#304 AC 4)', () => {
+  it('Cancel closes the dialog even when main refuses the answer, so the operator is never held inside it', async () => {
+    const m = mount(placements[0].host());
+    m.answer.mockResolvedValueOnce({ ok: false, reason: 'step review is not waiting for an answer to that ticket choice' });
+    terminal.focus();
+    m.offer();
+    const opened = dialogOf(m.host) !== null;
+    buttonOf(dialogOf(m.host) ?? m.host, /^cancel/i)?.click();
+    await flush();
+    expect.soft(opened).toBe(true);
+    expect.soft(m.answer.mock.calls).toEqual([['/repo', 'review', 'offer-1', { kind: 'cancel' }]]);
+    expect.soft(dialogOf(m.host)).toBeNull();
+    expect.soft(document.activeElement).toBe(terminal);
+  });
+
+  it('a Confirm whose answer cannot reach main keeps the dialog open and announces why', async () => {
+    const m = mount(placements[0].host());
+    m.answer.mockRejectedValueOnce(new Error('the main process did not answer'));
+    m.offer();
+    buttonOf(dialogOf(m.host) ?? m.host, /^confirm/i)?.click();
+    await flush();
+    expect.soft(dialogOf(m.host)).not.toBeNull();
+    expect.soft(dialogOf(m.host)?.querySelector('[role="alert"]')?.textContent ?? '').toContain('the main process did not answer');
+  });
+});
+
+describe('the ticket-choice dialog with a ticket other than the first chosen (#304 AC 4, UI-STANDARDS §5)', () => {
+  it('Shift-Tab from the chosen ticket keeps focus inside the dialog', () => {
+    const m = mount(placements[0].host());
+    terminal.focus();
+    m.offer();
+    const dialog = dialogOf(m.host);
+    const fork = dialog === null ? undefined : radioFor(dialog, FORK_TICKET);
+    fork?.click();
+    fork?.focus();
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    dialog?.dispatchEvent(event);
+    // A browser moves focus out of the dialog on a Shift-Tab the dialog does not take over.
+    expect.soft(event.defaultPrevented).toBe(true);
+    expect.soft(document.activeElement).toBe(buttonOf(dialog ?? m.host, /^confirm/i));
+  });
+});
+
+describe('the ticket-choice dialog when a second offer arrives while one is open (#304 AC 4)', () => {
+  it('answers the displaced offer with Cancel, so its held start is rolled back rather than left waiting', async () => {
+    const m = mount(placements[0].host());
+    m.offer();
+    m.offer({ ...OFFER, repoKey: '/other-repo', choiceId: 'offer-2' });
+    await flush();
+    expect.soft(m.answer.mock.calls).toEqual([['/repo', 'review', 'offer-1', { kind: 'cancel' }]]);
+    expect.soft(dialogOf(m.host)).not.toBeNull();
+  });
+});
+
+describe('the ticket-choice dialog: Tab and a late answer (#304 AC 4, UI-STANDARDS §5)', () => {
+  it('Tab from the last control wraps onto the chosen ticket, the radio group\'s one tab stop', () => {
+    const m = mount(placements[0].host());
+    m.offer();
+    const dialog = dialogOf(m.host);
+    const fork = dialog === null ? undefined : radioFor(dialog, FORK_TICKET);
+    fork?.click();
+    buttonOf(dialog ?? m.host, /^confirm/i)?.focus();
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    dialog?.dispatchEvent(event);
+    expect.soft(event.defaultPrevented).toBe(true);
+    expect.soft(document.activeElement).toBe(fork);
+  });
+
+  it('a Confirm that main accepts after a newer offer replaced it leaves the newer offer open and unanswered', async () => {
+    const m = mount(placements[0].host());
+    let settle!: (r: ResolveAdoptTicketResult) => void;
+    m.answer.mockImplementationOnce(() => new Promise((res) => (settle = res)));
+    m.offer();
+    buttonOf(dialogOf(m.host) ?? m.host, /^confirm/i)?.click();
+    m.offer({ ...OFFER, repoKey: '/other-repo', choiceId: 'offer-2', pr: 52 });
+    settle({ ok: true });
+    await flush();
+    const dialog = dialogOf(m.host);
+    expect.soft(dialog).not.toBeNull();
+    const titleId = dialog?.getAttribute('aria-labelledby') ?? '';
+    expect.soft(titleId === '' ? '' : m.host.ownerDocument.getElementById(titleId)?.textContent ?? '').toMatch(/(^|\D)52(\D|$)/);
+    expect.soft(m.answer.mock.calls.filter((c) => c[2] === 'offer-2')).toEqual([]);
+  });
+});
