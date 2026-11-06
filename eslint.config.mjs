@@ -92,7 +92,7 @@ const INSTALLED_RUNTIME_SPEC_RULES = {
   'no-restricted-properties': ['error', { object: 'process', property: 'env', message: INSTALLED_RUNTIME_MESSAGE }],
   'no-restricted-syntax': ['error', ...[NO_SLEEP, NO_PROMISE_SLEEP].map(({ selector }) => ({ selector, message: INSTALLED_RUNTIME_MESSAGE }))],
 };
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts'];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts', 'tests/helpers/jsonListCases.ts'];
 
 const ONE_OF_MESSAGE =
   'Check a value against a closed list with isOneOf from src/shared/oneOf.ts, never a hand-written includes (CODE-STANDARDS.md § Closed lists).';

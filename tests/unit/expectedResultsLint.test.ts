@@ -20,7 +20,8 @@ describe('an expected-results fixture never imports the code it checks', () => {
       reExport: await ruleErrors("export { cardStatus } from '../../src/shared/controllerCardClassification';\n"),
       inCardHelper: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCards.ts'),
       inCapabilityOracle: await ruleErrors("import { GATE_AUTHORITIES } from '../../src/shared/gateAuthority';\n", 'tests/helpers/engineCapabilityOracle.ts'),
-    }).toEqual({ renderer: 1, shared: 1, reExport: 1, inCardHelper: 1, inCapabilityOracle: 1 });
+      inJsonListCases: await ruleErrors("import { JSON_LIST_DESCRIPTOR } from '../../src/shared/jsonList';\n", 'tests/helpers/jsonListCases.ts'),
+    }).toEqual({ renderer: 1, shared: 1, reExport: 1, inCardHelper: 1, inCapabilityOracle: 1, inJsonListCases: 1 });
   });
 
   it('allows the IPC contract and other test helpers, and leaves other files alone', async () => {
@@ -33,7 +34,7 @@ describe('an expected-results fixture never imports the code it checks', () => {
   });
 
   it('the expected-results fixtures in the tree follow the rule', async () => {
-    const results = await eslint.lintFiles([FIXTURE, 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts']);
+    const results = await eslint.lintFiles([FIXTURE, 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts', 'tests/helpers/jsonListCases.ts']);
     const offenders = results.flatMap((r) =>
       r.messages.filter((m) => INDEPENDENT.test(m.message)).map((m) => `${r.filePath.slice(root.length + 1)}:${m.line}`),
     );
