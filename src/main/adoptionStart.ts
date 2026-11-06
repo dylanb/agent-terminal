@@ -49,6 +49,8 @@ export interface AdoptionRequest {
   pr: number;
   /** The adopting run's Start instant. */
   startedAt: number;
+  /** The ticket the operator picked as the run's primary, when the PR closes more than one acceptable ticket. */
+  pick?: TicketRef;
 }
 
 /** What a started adoption owns, so a work entry that fails after it can undo it. */

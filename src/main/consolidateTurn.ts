@@ -9,7 +9,7 @@ import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { checkerLines } from './artifactCheck';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
@@ -51,6 +51,8 @@ export interface ConsolidatePromptReq {
    *  consolidator judges the round against THIS ticket, never one re-derived from the branch/PR/cwd. Absent when
    *  the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
 }
 
 /** The verdict format rules (§27.6), from the shared consolidator-output vocabulary. */

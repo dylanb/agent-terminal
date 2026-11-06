@@ -7,8 +7,8 @@ import { runAdoptionStart, type AdoptionStartDeps } from '../../src/main/adoptio
 import { createRealAdoptionGit, createRealAdoptionGitHub } from '../../src/main/adoptionPorts';
 import { clearAppLoopBootstrap, readPickupRecord, writeAdoptedPickup, writeAdoptedPickupIntent } from '../../src/main/appLoopState';
 import { adoptedFixBranch, isAdoptedPickup } from '../../src/shared/appBootstrap';
-import { createAdoptionWorld, type AdoptionWorld } from '../helpers/adoptionWorld';
-import type { StandInPull } from '../helpers/adoptionGh';
+import { createAdoptionWorld, type AdoptionWorld, type AdoptionWorldOptions } from '../helpers/adoptionWorld';
+import type { StandInPull, StandInTicket } from '../helpers/adoptionGh';
 
 // #304 — the adoption start's refusals that leave the operator's checkout as it was, through real git against the
 // adoption world's bare origin and its gh stand-in.
@@ -18,8 +18,8 @@ afterEach(() => {
   for (const w of worlds.splice(0)) w.dispose();
 });
 
-function world(): AdoptionWorld {
-  const w = createAdoptionWorld({ prefix: 'adoption-start' });
+function world(pr?: AdoptionWorldOptions['pr']): AdoptionWorld {
+  const w = createAdoptionWorld({ prefix: 'adoption-start', ...(pr === undefined ? {} : { pr }) });
   worlds.push(w);
   w.activate();
   // The operator's clone ignores the app's own state folder, as a repository using the app does.
@@ -240,5 +240,70 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     expect.soft(reason(result)).toMatch(why);
     expect.soft(branches(w)).toEqual(['main']);
     expect.soft(readPickupRecord(w.repo).kind).toBe('none');
+  });
+});
+
+describe('runAdoptionStart — the primary ticket of a PR that closes several (#304 AC 4)', () => {
+  const ORIGIN_TICKET: StandInTicket = { repo: 'owner/repo', number: 176 };
+  const FORK_TICKET: StandInTicket = { repo: 'contributor/fork', number: 177 };
+  const twoTickets = (): AdoptionWorld => world({ fork: 'Contributor/Fork', closingIssues: [ORIGIN_TICKET, FORK_TICKET] });
+  const recorded = (w: AdoptionWorld): unknown => {
+    const record = readPickupRecord(w.repo);
+    return record.kind === 'complete' && isAdoptedPickup(record.bootstrap) ? { primary: record.bootstrap.primary, tickets: record.bootstrap.tickets } : record.kind;
+  };
+  const offered = (r: Awaited<ReturnType<typeof runAdoptionStart>>): unknown => (r.ok ? 'started' : 'tickets' in r ? r.tickets : r.error);
+  const byNumber = (tickets: unknown): unknown =>
+    Array.isArray(tickets) ? [...(tickets as Array<{ number: number }>)].sort((a, b) => a.number - b.number) : tickets;
+
+  it('asks which ticket is the primary, offering each acceptable one with its repository, and touches nothing', async () => {
+    const w = twoTickets();
+
+    const result = await runAdoptionStart(deps(w.repo), { pr: w.prNumber, startedAt: 1_700_000_000_000 });
+
+    expect.soft(result).toMatchObject({ ok: false, kind: 'choose-ticket' });
+    expect.soft(byNumber(offered(result))).toEqual([ORIGIN_TICKET, FORK_TICKET]);
+    expect.soft(branches(w)).toEqual(['main']);
+    expect.soft(checkedOut(w)).toBe('main');
+    expect.soft(readPickupRecord(w.repo).kind).toBe('none');
+  });
+
+  it("starts with the operator's pick as the primary, and keeps every acceptable ticket", async () => {
+    const w = twoTickets();
+
+    const result = await runAdoptionStart(deps(w.repo), { pr: w.prNumber, startedAt: 1_700_000_000_000, pick: FORK_TICKET });
+
+    expect.soft(reason(result)).toBe('started');
+    const record = recorded(w) as { primary?: unknown; tickets?: unknown };
+    expect.soft(record.primary).toEqual(FORK_TICKET);
+    expect.soft(byNumber(record.tickets)).toEqual([ORIGIN_TICKET, FORK_TICKET]);
+  });
+
+  // The PR closes one acceptable ticket, so the start runs today: only refusing the pick tells these apart.
+  const UNACCEPTABLE: Array<{ title: string; closes: StandInTicket[]; pick: StandInTicket }> = [
+    { title: 'a ticket the PR does not close', closes: [ORIGIN_TICKET], pick: { repo: 'owner/repo', number: 999 } },
+    { title: 'a ticket the PR closes outside its base and head repositories', closes: [ORIGIN_TICKET, { repo: 'elsewhere/other', number: 9 }], pick: { repo: 'elsewhere/other', number: 9 } },
+    { title: "a closed ticket's number in the head repository, where the PR closes no such ticket", closes: [ORIGIN_TICKET], pick: { repo: 'contributor/fork', number: 176 } },
+  ];
+  for (const row of UNACCEPTABLE) {
+    it(`refuses a pick of ${row.title}, naming it, and touches nothing`, async () => {
+      const w = world({ fork: 'Contributor/Fork', closingIssues: row.closes });
+
+      const result = await runAdoptionStart(deps(w.repo), { pr: w.prNumber, startedAt: 1_700_000_000_000, pick: row.pick });
+
+      expect.soft(reason(result)).toMatch(new RegExp(`(^|\\D)${row.pick.number}(\\D|$)`));
+      expect.soft(reason(result)).toContain(row.pick.repo);
+      expect.soft(branches(w)).toEqual(['main']);
+      expect.soft(checkedOut(w)).toBe('main');
+      expect.soft(readPickupRecord(w.repo).kind).toBe('none');
+    });
+  }
+
+  it('starts a PR that closes one acceptable ticket with it as the primary, asking nothing', async () => {
+    const w = world({ fork: 'Contributor/Fork', closingIssues: [FORK_TICKET, { repo: 'elsewhere/other', number: 9 }] });
+
+    const result = await runAdoptionStart(deps(w.repo), { pr: w.prNumber, startedAt: 1_700_000_000_000 });
+
+    expect.soft(reason(result)).toBe('started');
+    expect.soft(recorded(w)).toEqual({ primary: FORK_TICKET, tickets: [FORK_TICKET] });
   });
 });

@@ -192,6 +192,8 @@ const flowApi: FlowApi = {
       wipe,
       ...target,
     }),
+  onAdoptTicketChoice: () => () => {},
+  resolveAdoptTicket: () => Promise.reject(new Error('the ticket choice is not built yet')),
   onEpicPromotionPreview: (cb) => {
     const handler = (_e: unknown, msg: FlowEpicPromotionPreviewMsg): void =>
       cb({ repoKey: msg.repoKey, step: msg.step, epic: msg.epic, pr: msg.pr, subTickets: msg.subTickets });

@@ -41,6 +41,7 @@ import {
   type StepMissingConsent,
   CATALOG_ORIGINS,
   type FlowResolveAppBootstrapConflictMsg,
+  type FlowResolveAdoptTicketMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
@@ -377,6 +378,11 @@ export function isValidFlowResolveAppBootstrapConflict(
     typeof m.wipe === 'boolean' &&
     isAppBootstrapConflictTarget(m)
   );
+}
+
+/** flow:resolveAdoptTicket — the operator's answer to one ticket-choice offer. */
+export function isValidFlowResolveAdoptTicket(m: unknown): m is FlowResolveAdoptTicketMsg {
+  return isRecord(m);
 }
 
 /** flow:resolveEpicPromotion — the operator's confirm/decline of the §28.7 confirm-first preview. `repoKey`

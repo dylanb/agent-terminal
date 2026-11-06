@@ -10,7 +10,7 @@ import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
@@ -101,6 +101,8 @@ export interface AppWorkPromptReq {
    *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
    *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
   sliceBrief?: SliceBriefDelivery;
   /** §27.3 */

@@ -15,7 +15,7 @@ import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/ph
 import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
 
@@ -94,6 +94,8 @@ export interface ReviewAndFixPromptReq {
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
    *  or a phase-result file (the reviewers then pull the diff themselves). */
   subjectRel?: string;
@@ -170,7 +172,7 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
+export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'adoption' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
 
 /** §27.4 */
 export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
