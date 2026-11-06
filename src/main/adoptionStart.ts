@@ -79,16 +79,17 @@ export function acceptableTickets(pr: AdoptionPullRequest, origin: GitHubReposit
   });
 }
 
-/** Why GitHub's `pr` cannot be adopted, or null when it can. */
-function refusal(number: number, pr: AdoptionPullRequest): string | null {
-  if (pr.state === 'CLOSED') return `pull request #${number} is closed`;
-  if (pr.state === 'MERGED') return `pull request #${number} is merged`;
-  if (pr.state !== OPEN) return `pull request #${number} is not open`;
-  if (!isPickupBranchName(pr.headRef)) return `pull request #${number}'s head branch ${pr.headRef} is not a branch name a pickup can record`;
-  if (!isPickupBranchName(pr.baseRef)) return `pull request #${number}'s base branch ${pr.baseRef} is not a branch name a pickup can record`;
-  if (pr.headRepo === null) return `pull request #${number} has no head repository on GitHub`;
-  if (!isRepositoryName(pr.headRepo)) return `pull request #${number}'s head repository ${pr.headRepo} is not a repository name a pickup can record`;
-  return null;
+/** GitHub's `pr` as the adoption records it — its head repository — or why it cannot be adopted. */
+function adoptable(number: number, pr: AdoptionPullRequest): { ok: true; headRepo: string } | { ok: false; reason: string } {
+  const refuse = (reason: string) => ({ ok: false as const, reason });
+  if (pr.state === 'CLOSED') return refuse(`pull request #${number} is closed`);
+  if (pr.state === 'MERGED') return refuse(`pull request #${number} is merged`);
+  if (pr.state !== OPEN) return refuse(`pull request #${number} is not open`);
+  if (!isPickupBranchName(pr.headRef)) return refuse(`pull request #${number}'s head branch ${pr.headRef} is not a branch name a pickup can record`);
+  if (!isPickupBranchName(pr.baseRef)) return refuse(`pull request #${number}'s base branch ${pr.baseRef} is not a branch name a pickup can record`);
+  if (pr.headRepo === null) return refuse(`pull request #${number} has no head repository on GitHub`);
+  if (!isRepositoryName(pr.headRepo)) return refuse(`pull request #${number}'s head repository ${pr.headRepo} is not a repository name a pickup can record`);
+  return { ok: true, headRepo: pr.headRepo };
 }
 
 /** Starts a run on an existing pull request: a fix branch of the run's own at the PR head, checked out, and its
@@ -102,9 +103,9 @@ export async function runAdoptionStart(deps: AdoptionStartDeps, req: AdoptionReq
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const origin = await deps.github.origin();
     const pr = await deps.github.pullRequest(req.pr);
-    const refused = refusal(req.pr, pr);
-    if (refused !== null) return fail(refused);
-    const headRepo = pr.headRepo as string;
+    const checked = adoptable(req.pr, pr);
+    if (!checked.ok) return fail(checked.reason);
+    const { headRepo } = checked;
     const tickets = acceptableTickets(pr, origin);
     const primary = tickets[0];
     const repositories = headRepo === `${origin.owner}/${origin.name}` ? `${origin.owner}/${origin.name}` : `${origin.owner}/${origin.name} or ${headRepo}`;
