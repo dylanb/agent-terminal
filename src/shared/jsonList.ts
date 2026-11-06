@@ -9,6 +9,13 @@ export type JsonListDocumentRule = (typeof JSON_LIST_DOCUMENT_RULES)[number];
 export const JSON_LIST_ENTRY_RULES = ['entry-object', 'title-string', 'title-not-blank', 'title-no-control-character'] as const;
 export type JsonListEntryRule = (typeof JSON_LIST_ENTRY_RULES)[number];
 
+/** The `json-list` shape: the key each entry carries its title under, and the rules a file is checked against. */
+export const JSON_LIST_SHAPE = {
+  entryTitleKey: 'title',
+  documentRules: JSON_LIST_DOCUMENT_RULES,
+  entryRules: JSON_LIST_ENTRY_RULES,
+} as const;
+
 /** The entry titles in order, or the first rule broken, with the entry's position counted from 1 for an entry rule. */
 export type JsonListCheck =
   | { ok: true; titles: readonly string[] }
@@ -20,7 +27,7 @@ const CONTROL_CHARACTER = /\p{Cc}/u;
 
 function entryTitle(entry: unknown): { title: string } | { rule: JsonListEntryRule } {
   if (!isObject(entry)) return { rule: 'entry-object' };
-  const title = entry.title;
+  const title = entry[JSON_LIST_SHAPE.entryTitleKey];
   if (typeof title !== 'string') return { rule: 'title-string' };
   if (title.trim().length === 0) return { rule: 'title-not-blank' };
   if (CONTROL_CHARACTER.test(title)) return { rule: 'title-no-control-character' };
@@ -50,6 +57,6 @@ export function checkJsonList(text: string, list: string): JsonListCheck {
 
 /** A well-formed `json-list` file holding `n` entries under `key`. */
 export function exampleJsonList(key: string, n: number): string {
-  const entries = Array.from({ length: n }, (_, i) => ({ title: `Entry ${i + 1}` }));
+  const entries = Array.from({ length: n }, (_, i) => ({ [JSON_LIST_SHAPE.entryTitleKey]: `Entry ${i + 1}` }));
   return `${JSON.stringify({ [key]: entries }, null, 2)}\n`;
 }
