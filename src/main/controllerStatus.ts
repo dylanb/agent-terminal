@@ -30,8 +30,6 @@ export interface ControllerStatusSource {
   branch(repoKey: string): Promise<string | null>;
 }
 
-const BRANCH_REFRESH_MS = 1_000;
-
 type TitleState = Extract<ControllerWorkStatus['ticket'], { availability: 'known' }>['title'];
 
 function createLatestRead<T>(what: string, initial: T, failed: T, settled: () => void) {
@@ -66,7 +64,7 @@ function createLatestRead<T>(what: string, initial: T, failed: T, settled: () =>
   };
 }
 
-export function createControllerStatus(source: ControllerStatusSource): {
+export function createControllerStatus(source: ControllerStatusSource, { branchRefreshMs }: { branchRefreshMs: number }): {
   refresh(): void;
   /** Each delivery is a detached value owned by the subscriber. */
   subscribe(listener: (work: ControllerWorkStatus) => void): () => void;
@@ -146,7 +144,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
       publish();
     }
   };
-  const branchTimer = setInterval(() => refresh(true), BRANCH_REFRESH_MS);
+  const branchTimer = setInterval(() => refresh(true), branchRefreshMs);
   branchTimer.unref?.();
   return {
     refresh: () => refresh(),

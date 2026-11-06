@@ -947,7 +947,7 @@ async function createWindow(): Promise<void> {
     },
     refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
     branch: repoKey => readBranchLabel(repoKey),
-  });
+  }, { branchRefreshMs: config.branchRefreshMs });
   controllerStatus.subscribe(work => {
     currentWork = work;
     for (const listener of statusListeners) listener(work);

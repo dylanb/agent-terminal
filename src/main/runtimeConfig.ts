@@ -21,6 +21,7 @@ const DEFAULTS = {
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
   shellQuitGraceMs: 2000,
+  branchRefreshMs: 300_000,
 } as const;
 
 export interface RuntimeConfig {
@@ -37,6 +38,7 @@ export interface RuntimeConfig {
   stallTimeoutMs: number;
   startupExitGraceMs: number;
   shellQuitGraceMs: number;
+  branchRefreshMs: number;
   autoGateDecisionMs: number;
 }
 
@@ -69,6 +71,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
     shellQuitGraceMs: timerMs(env.APP_SHELL_QUIT_GRACE_MS, DEFAULTS.shellQuitGraceMs),
+    branchRefreshMs: timerMs(env.APP_BRANCH_REFRESH_MS, DEFAULTS.branchRefreshMs),
     autoGateDecisionMs: timerMs(env.APP_AUTO_GATE_DECISION_MS, AUTO_GATE_DECISION_DEFAULT_MS),
   };
 }

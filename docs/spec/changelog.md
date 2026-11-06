@@ -1,3 +1,7 @@
+## #301 — The controller's branch re-read is configurable and defaults to five minutes
+
+§23.6: a terminal re-read its git branch for the controller card every second, starting a `git` process each time. It now re-reads it every `APP_BRANCH_REFRESH_MS` (default 300000 ms, five minutes) and still reads it at once when the terminal's current repository changes. A branch switch inside the same repository can therefore take up to that interval to appear on the card, the one exception to §23.6's two-second publication. No IPC or protocol change.
+
 ## #301 — Quitting waits for the shell's exit
 
 §5: the app aborted on quit about once in a few hundred quits (`terminate called after throwing an instance of 'Napi::Error'`), when node-pty delivered the hung-up shell's exit while the app was already tearing down; under load the core dump then held the process for about a minute. The quit is now held until the shell's exit is delivered, and a shell still running after `APP_SHELL_QUIT_GRACE_MS` is killed. A shell that ignored the hang-up used to keep the app from exiting at all.
