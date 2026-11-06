@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { dump, load } from 'js-yaml';
 import { controllerOf, electron } from './registeredElectron';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
-import { AGENT_LOGS_BRANCH_SH, agentSwitchesBranchSh, exampleConfigDir, seedFakeAgentV2 } from './fakeTools';
+import { AGENT_LOGS_BRANCH_SH, agentCommitsFixSh, agentSwitchesBranchSh, exampleConfigDir, seedFakeAgentV2 } from './fakeTools';
 import { createAdoptionWorld, type AdoptionWorld, type AdoptionWorldOptions } from '../helpers/adoptionWorld';
-import { outwardWrites } from '../helpers/outwardWrites';
+import { forcePushes, outwardWrites } from '../helpers/outwardWrites';
 import { readPickupRecord } from '../../src/main/appLoopState';
 import { isAdoptedPickup } from '../../src/shared/appBootstrap';
 import { createTrustedPickups } from '../../src/main/trustedPickups';
@@ -61,15 +61,18 @@ function world(options: AdoptionWorldOptions): AdoptionWorld {
   return w;
 }
 
-// The fixture's loop def: the shipped plan-loop, adopting the step's pr input, with a gate that publishes nothing.
-function seedAdoptingConfig(): string {
+const QUIET_GATE = [{ option: 'approve' }, { option: 'request-changes' }];
+
+// The fixture's loop def: the shipped plan-loop, adopting the step's pr input, with `gate` (default: one that
+// publishes nothing).
+function seedAdoptingConfig(gate: unknown[] = QUIET_GATE): string {
   const root = tempDir('agent-term-e2e-adopt-config-');
   const target = join(root, 'loops-v2', 'plan-loop');
   cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
   const defFile = join(target, 'plan-loop.yaml');
   const def = load(readFileSync(defFile, 'utf8')) as Record<string, unknown>;
   def.pickup = { adopt: 'pr' };
-  def.gate = [{ option: 'approve' }, { option: 'request-changes' }];
+  def.gate = gate;
   writeFileSync(defFile, dump(def));
   cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
   return root;
@@ -84,6 +87,7 @@ function seedAdoptingFlow(repo: string): void {
       steps: [
         { id: 'prep', kind: 'manual' },
         { id: STEP, kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup', inputs: [{ name: 'pr', type: 'pr', required: true }] },
+        { id: 'done', kind: 'manual' },
       ],
     }),
   );
@@ -98,10 +102,17 @@ interface Launched {
 
 type TurnShell = { work?: string[]; review?: string[]; consolidate?: string[] };
 
+interface LaunchOptions {
+  /** The adopting step's gate; default one that publishes nothing. */
+  gate?: unknown[];
+  /** A relaunch: the earlier launch's home, with the repository's flow and run files left as they are. */
+  relaunchOf?: Launched;
+}
+
 /** `agentTurnShell` runs at the end of every turn when it is one command, or per turn kind when it is a map. */
-async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell, agent: { logInjected?: boolean } = {}): Promise<Launched> {
-  const home = tempDir('agent-term-e2e-adopt-home-');
-  const config = seedAdoptingConfig();
+async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell, agent: { logInjected?: boolean } = {}, options: LaunchOptions = {}): Promise<Launched> {
+  const home = options.relaunchOf?.home ?? tempDir('agent-term-e2e-adopt-home-');
+  const config = seedAdoptingConfig(options.gate);
   const agentBin = tempDir('agent-term-e2e-adopt-agent-');
   seedFakeAgentV2(agentBin, {
     stepId: STEP,
@@ -113,7 +124,7 @@ async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell, age
       ? {}
       : { extraShell: typeof agentTurnShell === 'string' ? { work: [agentTurnShell], review: [agentTurnShell], consolidate: [agentTurnShell] } : agentTurnShell }),
   });
-  seedAdoptingFlow(w.repo);
+  if (options.relaunchOf === undefined) seedAdoptingFlow(w.repo);
   const app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -493,5 +504,326 @@ test('a pick that is no longer acceptable when the start re-reads the PR rolls t
   expect.soft(checkedOut(w)).toBe('main');
   expect.soft(readPickupRecord(w.repo).kind).toBe('none');
   expect.soft(outwardWrites(w.calls())).toEqual([]);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+// #304 slice 4 — approving an adopting run's gate publishes exactly one outcome into the reviewed PR, or writes
+// nothing and holds the gate with the reason shown; a relaunch keeps acting on the same PR.
+
+const PUBLISH_GATE = [{ option: 'approve', side_effects: [{ kind: 'gh', action: 'publish-pr-review', artifact: 'plan' }] }, { option: 'request-changes' }];
+const COMMITS_FIX = { work: [agentCommitsFixSh('change.txt', 'the fixed change\n', 'Fix the reviewed change')] };
+const RUN_STATE_REL = ['.agent-terminal', 'loop', 'run-state.yaml'];
+
+const reviewedPrComments = (w: AdoptionWorld) => w.gh.read().comments[String(w.prNumber)] ?? [];
+const runComments = (w: AdoptionWorld) => reviewedPrComments(w).filter((c) => c.login === w.gh.read().login);
+const fixPrs = (w: AdoptionWorld, fixBranch: string) => w.gh.read().pulls.filter((p) => p.number !== w.prNumber && p.headRefName === fixBranch);
+const linksTo = (body: string | undefined, w: AdoptionWorld, number: number | undefined): boolean =>
+  body !== undefined && number !== undefined && (body.includes(`https://github.com/${w.origin}/pull/${number}`) || new RegExp(`(^|[^\\w/])#${number}(?!\\d)`).test(body));
+const gitPushes = (w: AdoptionWorld, from = 0) => w.calls().slice(from).filter((c) => c.tool === 'git' && c.argv.includes('push'));
+const ghWrites = (w: AdoptionWorld, from = 0) => outwardWrites(w.calls().slice(from)).filter((c) => c.tool === 'gh');
+const flowStep = (w: AdoptionWorld): string | undefined => createFlowStateStore(w.repo).read()?.step;
+const reportOf = (w: AdoptionWorld): string => readIf(join(w.repo, ARTIFACT_REL));
+
+function fixBranchOf(w: AdoptionWorld): string {
+  const record = readPickupRecord(w.repo);
+  return record.kind === 'complete' && isAdoptedPickup(record.bootstrap) ? record.bootstrap.fixBranch : '';
+}
+
+/** Starts the run on the PR and waits for its gate. */
+async function toGate(page: Page, w: AdoptionWorld): Promise<void> {
+  await startOnPr(page, w, true);
+  await expect.poll(() => readIf(join(w.repo, ...RUN_STATE_REL)), { timeout: 90_000 }).toContain('verdict: clean');
+}
+
+/** Presses Approve on the gate, opening the loop read-out first when the gate is not showing. */
+async function approveAtGate(page: Page): Promise<void> {
+  const approveOption = page.locator('#loop-panel [data-gate-option="approve"]');
+  if (!(await approveOption.isVisible())) await use(page.locator('#flow-strip .loopstat'), (readout) => readout.click());
+  await use(approveOption, (option) => option.click());
+}
+
+/** The loop message once it is an error; null when none shows in time. */
+async function heldReason(app: ElectronApplication): Promise<string | null> {
+  const controller = controllerOf(app);
+  await expect.soft.poll(() => controller.loopMessage()?.kind, { timeout: 30_000 }).toBe('error');
+  const message = controller.loopMessage();
+  return message?.kind === 'error' ? message.reason : null;
+}
+
+const OUTCOMES: Array<{ title: string; world: Omit<AdoptionWorldOptions, 'prefix'>; fixes: boolean; outcome: 'fix-pr' | 'report-comment' | 'patch-comment' }> = [
+  { title: 'with a fix the operator can push, opens a draft fix PR into the head branch and links it (AC 9)', world: {}, fixes: true, outcome: 'fix-pr' },
+  { title: 'with no fix, posts the report as the run comment (AC 10)', world: {}, fixes: false, outcome: 'report-comment' },
+  { title: 'with a fix on a fork, posts the report and a patch based on the fetched head (AC 11)', world: { pr: { fork: 'Contributor/Fork' } }, fixes: true, outcome: 'patch-comment' },
+  { title: 'with a fix and no write permission, posts the report and a patch based on the fetched head (AC 11)', world: { viewerPermission: 'READ' }, fixes: true, outcome: 'patch-comment' },
+];
+
+for (const o of OUTCOMES) {
+  test(`approving an adopting run's gate ${o.title} (#304)`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
+    const w = world({ prefix: 'agent-term-e2e-adopt-publish', ...o.world });
+    const { page } = await launch(w, o.fixes ? COMMITS_FIX : undefined, {}, { gate: PUBLISH_GATE });
+    await toGate(page, w);
+    const fixBranch = fixBranchOf(w);
+    const report = reportOf(w).trim();
+    const before = w.calls().length;
+
+    await approveAtGate(page);
+
+    await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+    const comments = runComments(w);
+    const opened = fixPrs(w, fixBranch);
+    expect.soft(report).not.toBe('');
+    expect.soft(comments).toHaveLength(1);
+    expect.soft(forcePushes(w.calls())).toEqual([]);
+    if (o.outcome === 'fix-pr') {
+      expect.soft(w.remoteRef(`refs/heads/${fixBranch}`)).toBe(w.git(w.repo, ['rev-parse', fixBranch]));
+      expect.soft(opened).toHaveLength(1);
+      expect.soft(opened[0]?.isDraft).toBe(true);
+      expect.soft(opened[0]?.baseRefName).toBe(w.headBranch);
+      expect.soft(opened[0]?.body.trim()).toBe(report);
+      expect.soft(linksTo(comments[0]?.body, w, opened[0]?.number)).toBe(true);
+    } else {
+      expect.soft(gitPushes(w, before)).toEqual([]);
+      expect.soft(w.gh.read().pulls).toHaveLength(1);
+      expect.soft(comments[0]?.body ?? '').toContain(report);
+      if (o.outcome === 'patch-comment') {
+        expect.soft(comments[0]?.body ?? '').toMatch(/^From [0-9a-f]{40} /m);
+        expect.soft(comments[0]?.body ?? '').toContain(w.startHeadOid);
+        expect.soft(comments[0]?.body ?? '').toContain('Fix the reviewed change');
+      }
+    }
+    expect.soft(w.contractBreaches()).toEqual([]);
+  });
+}
+
+const HOLDS: Array<{ title: string; before: (w: AdoptionWorld, fixBranch: string) => void; reason: (fixBranch: string) => RegExp }> = [
+  { title: 'the report is missing at approval (AC 12)', before: (w) => rmSync(join(w.repo, ARTIFACT_REL)), reason: () => /report|plan\.md/i },
+  {
+    title: "a branch with the run's fix branch name appeared on GitHub after the start (AC 19)",
+    before: (w, fixBranch) => void w.pushAs(fixBranch, 'other.txt', 'someone else\n', 'Someone else’s commit', w.startHeadOid),
+    reason: (fixBranch) => new RegExp(fixBranch.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')),
+  },
+  {
+    title: 'the reviewed PR was closed before approval (AC 21)',
+    before: (w) =>
+      w.gh.update((state) => {
+        for (const pull of state.pulls) if (pull.number === w.prNumber) pull.state = 'CLOSED';
+      }),
+    reason: () => /closed/i,
+  },
+];
+
+for (const h of HOLDS) {
+  test(`approving when ${h.title} writes nothing and holds the gate, showing the reason (#304)`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
+    const w = world({ prefix: 'agent-term-e2e-adopt-held' });
+    const { app, page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+    await toGate(page, w);
+    const fixBranch = fixBranchOf(w);
+    h.before(w, fixBranch);
+    const github = JSON.stringify({ pulls: w.gh.read().pulls, comments: w.gh.read().comments });
+    const before = w.calls().length;
+
+    await approveAtGate(page);
+
+    expect.soft(await heldReason(app)).toMatch(h.reason(fixBranch));
+    expect.soft(flowStep(w)).toBe(STEP);
+    expect.soft(JSON.stringify({ pulls: w.gh.read().pulls, comments: w.gh.read().comments })).toBe(github);
+    expect.soft(ghWrites(w, before)).toEqual([]);
+    expect.soft(gitPushes(w, before)).toEqual([]);
+    expect.soft(forcePushes(w.calls())).toEqual([]);
+    expect.soft(w.contractBreaches()).toEqual([]);
+  });
+}
+
+test('when push permission drops from WRITE to READ after the gate shows, approving with a fix posts the patch comment and pushes nothing (#304 AC 22)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-permission' });
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+  await toGate(page, w);
+  w.gh.update((state) => {
+    for (const repo of state.repositories) repo.viewerPermission = 'READ';
+  });
+  const before = w.calls().length;
+
+  await approveAtGate(page);
+
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  expect.soft(runComments(w)).toHaveLength(1);
+  expect.soft(runComments(w)[0]?.body ?? '').toMatch(/^From [0-9a-f]{40} /m);
+  expect.soft(gitPushes(w, before)).toEqual([]);
+  expect.soft(w.gh.read().pulls).toHaveLength(1);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+test('a publish whose run comment failed completes on the next approve, with one fix PR and one run comment (#304 AC 23)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-retry' });
+  const { app, page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+  await toGate(page, w);
+  const fixBranch = fixBranchOf(w);
+  w.gh.set({ failOnce: ['comment-create'] });
+
+  await approveAtGate(page);
+  const firstReason = await heldReason(app);
+  expect.soft(flowStep(w)).toBe(STEP);
+  expect.soft(fixPrs(w, fixBranch)).toHaveLength(1);
+  await approveAtGate(page);
+
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  expect.soft(firstReason).not.toBeNull();
+  expect.soft(fixPrs(w, fixBranch)).toHaveLength(1);
+  expect.soft(runComments(w)).toHaveLength(1);
+  expect.soft(linksTo(runComments(w)[0]?.body, w, fixPrs(w, fixBranch)[0]?.number)).toBe(true);
+  expect.soft(forcePushes(w.calls())).toEqual([]);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+test("a new run on a PR an earlier run published to opens its own fix PR and run comment, leaving the earlier run's unchanged (#304 AC 13)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-earlier' });
+  const earlierBranch = 'agent-terminal/review-pr-41-1600000000000';
+  const earlierOid = w.pushAs(earlierBranch, 'earlier.txt', 'an earlier run’s fix\n', 'An earlier run’s fix', w.startHeadOid);
+  w.git(w.repo, ['fetch', '-q', 'origin', `${earlierBranch}:${earlierBranch}`]);
+  w.gh.update((state) => {
+    state.pulls.push({
+      number: 880, state: 'OPEN', title: 'Review fixes for #41', body: 'The earlier run’s report.', isDraft: true, author: state.login,
+      headRefName: earlierBranch, headRefOid: earlierOid, baseRefName: w.headBranch, headRepo: state.origin, isCrossRepository: false, closingIssues: [],
+    });
+    state.comments[String(w.prNumber)] = [{ id: 6001, login: state.login, body: `<!-- agent-terminal:pr-review-run:${earlierBranch} -->\nThe earlier run’s fix PR: #880` }];
+  });
+  const earlier = JSON.stringify({ pull: w.gh.read().pulls.find((p) => p.number === 880), comment: reviewedPrComments(w)[0] });
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+  await toGate(page, w);
+  const fixBranch = fixBranchOf(w);
+
+  await approveAtGate(page);
+
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  const own = fixPrs(w, fixBranch);
+  expect.soft(fixBranch).not.toBe(earlierBranch);
+  expect.soft(own).toHaveLength(1);
+  expect.soft(runComments(w)).toHaveLength(2);
+  expect.soft(linksTo(runComments(w).find((c) => c.id !== 6001)?.body, w, own[0]?.number)).toBe(true);
+  expect.soft(JSON.stringify({ pull: w.gh.read().pulls.find((p) => p.number === 880), comment: reviewedPrComments(w).find((c) => c.id === 6001) })).toBe(earlier);
+  expect.soft(w.remoteRef(`refs/heads/${earlierBranch}`)).toBe(earlierOid);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+/** Starts a fork run whose primary is the fork's ticket, lets it reach its gate with a fix, then closes the app. */
+async function toGateThenClose(w: AdoptionWorld): Promise<Launched> {
+  const launched = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+  await toGate(launched.page, w);
+  await launched.app.close();
+  return launched;
+}
+
+const FORK_PRIMARY: Omit<AdoptionWorldOptions, 'prefix'> = { pr: { fork: 'Contributor/Fork', closingIssues: [{ repo: 'contributor/fork', number: 177 }] } };
+
+test('after a relaunch at the gate, approve acts on the same reviewed PR (#304 AC 24)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-relaunch' });
+  const first = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE });
+  await toGate(first.page, w);
+  const fixBranch = fixBranchOf(w);
+  await first.app.close();
+
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE, relaunchOf: first });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+  await typeCommand(page, 'fake-agent');
+  await approveAtGate(page);
+
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  const opened = fixPrs(w, fixBranch);
+  expect.soft(opened).toHaveLength(1);
+  expect.soft(opened[0]?.baseRefName).toBe(w.headBranch);
+  expect.soft(runComments(w)).toHaveLength(1);
+  expect.soft(linksTo(runComments(w)[0]?.body, w, opened[0]?.number)).toBe(true);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+const pickupConfirm = (page: Page): Locator => page.getByRole('alertdialog').filter({ hasText: /pull request/i });
+/** The confirm dialog's text and the values of its fields, as the operator reads them. */
+const dialogReads = (dialog: Locator): Promise<string> =>
+  dialog.evaluate((el) => `${el.textContent ?? ''} ${[...el.querySelectorAll('input')].map((i) => i.value).join(' ')}`).catch(() => '');
+const editableFields = (dialog: Locator): Promise<number> =>
+  dialog.evaluate((el) => [...el.querySelectorAll('input, textarea, select')].filter((f) => !(f as HTMLInputElement).readOnly && !(f as HTMLInputElement).disabled).length).catch(() => -1);
+
+test('a relaunched adopting run with no saved pickup is held, showing the PR and its primary read-only, and refuses the gate until confirmed (#304 AC 24)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-confirm', ...FORK_PRIMARY });
+  const first = await toGateThenClose(w);
+  rmSync(join(w.repo, ...RUN_PICKUP_REL));
+
+  const { app, page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE, relaunchOf: first });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+  const dialog = pickupConfirm(page);
+  await expect.soft(dialog).toBeVisible({ timeout: 15_000 });
+  const reads = await dialogReads(dialog);
+  expect.soft(reads).toMatch(namesPr(w.prNumber));
+  expect.soft(reads).toMatch(namesTicket('contributor/fork', 177));
+  expect.soft(await editableFields(dialog)).toBe(0);
+
+  await use(dialog.getByRole('button', { name: 'Not now' }), (button) => button.click());
+  await typeCommand(page, 'fake-agent');
+  await approveAtGate(page);
+  expect.soft(await heldReason(app)).toMatch(/confirm/i);
+  expect.soft(flowStep(w)).toBe(STEP);
+  expect.soft(ghWrites(w)).toEqual([]);
+
+  await use(page.getByRole('button', { name: /^confirm .+/i }), (button) => button.click());
+  await use(dialog.getByRole('button', { name: 'Confirm' }), (button) => button.click());
+  await expect.soft(dialog).toBeHidden({ timeout: 15_000 });
+  await approveAtGate(page);
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  expect.soft(runComments(w)).toHaveLength(1);
+  expect.soft(runComments(w)[0]?.body ?? '').toMatch(/^From [0-9a-f]{40} /m);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+test("a relaunched adopting run's confirm is refused when the PR now closes the primary's number in another repository instead (#304 AC 24)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-confirm-repo', ...FORK_PRIMARY });
+  const first = await toGateThenClose(w);
+  rmSync(join(w.repo, ...RUN_PICKUP_REL));
+  w.gh.update((state) => {
+    for (const pr of state.pulls) if (pr.number === w.prNumber) pr.closingIssues = [{ repo: 'owner/repo', number: 177 }];
+  });
+
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE, relaunchOf: first });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+  const dialog = pickupConfirm(page);
+  await expect.soft(dialog).toBeVisible({ timeout: 15_000 });
+  await use(dialog.getByRole('button', { name: 'Confirm' }), (button) => button.click());
+  await expect.soft(dialog.getByRole('alert')).toHaveText(/177/, { timeout: 30_000 });
+  await expect.soft(dialog).toBeVisible();
+  expect.soft(existsSync(join(w.repo, ...RUN_PICKUP_REL))).toBe(false);
+  expect.soft(flowStep(w)).toBe(STEP);
+  expect.soft(ghWrites(w)).toEqual([]);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
+test('a relaunched adopting run with neither its saved pickup nor its start record names the PR, says the primary cannot be recovered, and refuses the confirm (#304 AC 24)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({ prefix: 'agent-term-e2e-adopt-unrecoverable', ...FORK_PRIMARY });
+  const first = await toGateThenClose(w);
+  rmSync(join(w.repo, ...RUN_PICKUP_REL));
+  rmSync(join(w.repo, ...BOOTSTRAP_REL));
+
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE, relaunchOf: first });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+  const dialog = pickupConfirm(page);
+  await expect.soft(dialog).toBeVisible({ timeout: 15_000 });
+  const reads = await dialogReads(dialog);
+  expect.soft(reads).toMatch(namesPr(w.prNumber));
+  expect.soft(reads).toMatch(/can(no|')t be recovered|cannot recover|unrecoverable/i);
+  expect.soft(reads).toMatch(/terminate/i);
+
+  await use(dialog.getByRole('button', { name: 'Confirm' }), (button) => button.click());
+  await expect.soft(dialog.getByRole('alert')).toHaveText(/terminat|can(no|')t be recovered|cannot recover|unrecoverable/i, { timeout: 30_000 });
+  await expect.soft(dialog).toBeVisible();
+  expect.soft(existsSync(join(w.repo, ...RUN_PICKUP_REL))).toBe(false);
+  expect.soft(flowStep(w)).toBe(STEP);
+  expect.soft(ghWrites(w)).toEqual([]);
   expect.soft(w.contractBreaches()).toEqual([]);
 });
