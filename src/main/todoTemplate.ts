@@ -1,13 +1,14 @@
 // Todo templates: a template is a markdown list parsed per §21.2.
 
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
+import { TODO_TEMPLATES_SUBDIR } from './flowHome';
+import { readBoundedNoFollow } from './boundedRead';
 
 /** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
  *  by the reader that lists them and the installer that seeds them — two copies would let the installer
  *  seed a directory, or a file extension, the reader does not look for (CLAUDE.md writer↔reader rule). */
-export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
 export function todoTemplatesDir(flowDir: string): string {
   return path.join(flowDir, TODO_TEMPLATES_SUBDIR);
 }
@@ -45,23 +46,22 @@ function resolveContained(root: string, candidate: string): string | null {
   }
 }
 
+export const MAX_TODO_TEMPLATE_BYTES = 256 * 1024;
+
 /**
  * Resolve a step's `todo_template` ref to a file inside the templates dir (§18.6/§21.2) — the one
  * `todoTemplatesDir` returns, which is how callers name it. Returns the markdown, or null for a missing or
- * escaping path (never throws).
+ * escaping path, or one that is not a regular file or is larger than `MAX_TODO_TEMPLATE_BYTES` (never throws).
  */
 export function loadTodoTemplateFile(baseDir: string, ref: string): string | null {
   const root = path.resolve(baseDir);
-  const read = (candidate: string): string | null => {
-    const real = resolveContained(root, candidate);
-    if (real === null) return null;
-    try {
-      return readFileSync(real, 'utf8');
-    } catch {
-      return null;
-    }
-  };
-  return read(ref) ?? (isTodoTemplateFile(ref) ? null : read(todoTemplateFile(ref)));
+  for (const name of isTodoTemplateFile(ref) ? [ref] : [ref, todoTemplateFile(ref)]) {
+    const real = resolveContained(root, name);
+    if (real === null) continue;
+    const read = readBoundedNoFollow(real, MAX_TODO_TEMPLATE_BYTES);
+    if (read.ok) return read.text;
+  }
+  return null;
 }
 
 function humanize(ref: string): string {
@@ -89,12 +89,9 @@ export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
     if (real === null) continue;
     const ref = todoTemplateRef(file);
     let name = humanize(ref);
-    try {
-      const h1 = readFileSync(real, 'utf8').match(/^#\s+(.+?)\s*$/m);
-      if (h1) name = h1[1].trim();
-    } catch {
-      /* unreadable file → keep the humanized fallback */
-    }
+    const read = readBoundedNoFollow(real, MAX_TODO_TEMPLATE_BYTES);
+    const h1 = read.ok ? read.text.match(/^#\s+(.+?)\s*$/m) : null;
+    if (h1) name = h1[1].trim();
     refs.push({ ref, name });
   }
   return refs;

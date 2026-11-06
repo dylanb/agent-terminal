@@ -3,33 +3,30 @@
 // drift. The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
 // coordinator (§27.10).
 
-import { readFileSync, statSync } from 'node:fs';
+import { readBoundedNoFollow } from './boundedRead';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
+import { APPROVE_OPTION, PROMOTE_KIND } from '../shared/engineCapabilities/loop';
 import { epicPromotionAuditCmd, type GateDecider } from '../shared/audit';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 
 // The plan is free-form agent prose read synchronously; cap it so a runaway artifact cannot block (CWE-400).
-const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
+export const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
 
 /** The ordered sub-tickets an epic-capable loop's plan declares, or null when the approve gate has no `promote`
  *  side-effect, the artifact is unreadable/oversized, or the plan is not classified an epic. */
 export function readEpicSubTicketsAtGate(def: LoopDefV2): EpicSubTicket[] | null {
-  const approve = def.gate.find((g) => g.option === 'approve');
-  const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
+  const approve = def.gate.find((g) => g.option === APPROVE_OPTION);
+  const promote = approve?.sideEffects.find((se) => se.kind === PROMOTE_KIND);
   const artifactId = promote && typeof promote.args.artifact === 'string' ? promote.args.artifact : null;
   if (artifactId === null) return null;
   const binding = [...def.inputs, ...def.outputs].find((b) => b.id === artifactId);
   if (binding === undefined) return null;
-  let text: string;
-  try {
-    if (statSync(binding.path).size > EPIC_PLAN_MAX_BYTES) return null;
-    text = readFileSync(binding.path, 'utf8');
-  } catch {
-    return null;
-  }
+  const read = readBoundedNoFollow(binding.path, EPIC_PLAN_MAX_BYTES);
+  if (!read.ok) return null;
+  const text = read.text;
   // §28.5.5 — the MINIMAL-contract gate BEFORE any preview: a not-well-formed epic (a sub-ticket missing its AC,
   // or a duplicate index that would collapse two slices onto one issue) must not be promotable, so the
   // confirm-first preview can never over-promise what promotion will actually create.

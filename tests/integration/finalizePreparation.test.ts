@@ -6,6 +6,9 @@ import { applyInstallExamples, exampleInstallDirs } from '../../src/main/install
 import { flowCatalogDir, loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { loadTodoTemplateFile, parseTodoTemplate } from '../../src/main/todoTemplate';
+import { useBuiltBundle } from '../helpers/builtBundle';
+
+const builtBundle = useBuiltBundle();
 
 let root: string;
 let operator: string;
@@ -16,7 +19,7 @@ beforeAll(() => {
   repo = join(root, 'target-repository');
   flows = join(root, 'flows');
   mkdirSync(repo);
-  const dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, {
+  const dirs = exampleInstallDirs(builtBundle(), {
     flowGlobalDir: flows, configDir: join(root, 'config'), codexHome: join(root, '.codex'),
   });
   applyInstallExamples(dirs, []);

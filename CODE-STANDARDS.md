@@ -158,6 +158,26 @@ lexical escape (CWE-22), a symlink the caller would follow out (CWE-59), and a l
 the read (CWE-367). It lives in `src/main/`, not `src/shared/`, because it needs `node:fs` and `src/shared/`
 must stay renderer-importable.
 
+## Reading repo-derived files — `src/main/boundedRead.ts`, never a plain read
+
+A file whose path is derived from repo content is read with `readBoundedNoFollow(file, MAX_…_BYTES)`, never
+with `readFileSync` or a `stat` check followed by a read. Confinement (above) decides *which* file is read;
+this decides *how*, and both apply. A plain read of repository content fails three ways:
+- **A named pipe blocks the main process** until something writes to it (CWE-400). The app's own state and
+  every terminal hang with it.
+- **A check, then a read, is a race** (CWE-367). A file that `stat` saw as regular can be swapped for a pipe
+  before the read opens it. `readBoundedNoFollow` opens one descriptor without blocking and checks *that
+  descriptor*, so there is nothing to swap.
+- **An unbounded read takes whatever size it is given** (CWE-400). Each caller names its own limit as an
+  exported `MAX_…_BYTES` constant sized to what the file legitimately holds, and the spec's list of limits
+  (§19.1, "Reading repository files") gains its line. A file past it is refused, never read in part.
+
+Map the result's `cause` with an exhaustive `switch` (`satisfies never`). `absent` is the only cause that may
+mean "there is none"; `over-cap` and `unreadable` are refusals the user is told about, or, for a best-effort
+reader, a file it skips. The read never follows a link at the leaf. Where a link at a fixed name is a
+legitimate setup (a repository's `.agent-loop.yaml` kept elsewhere), read it with `readBoundedResolved`,
+which resolves the real path first and reads that, so only the leaf the link names is opened.
+
 ## Errno narrowing and error messages — `src/main/errno.ts`, never inline
 
 A caught value raises two questions — "which errno?" and "what do I tell the user?" — both answered by one
@@ -174,6 +194,28 @@ A tree-walk whose emptiness would be a silent DATA problem uses this module: an 
 how a mispackaged bundle plans zero files and reports a *successful install of nothing* — so the install
 walk uses it. A best-effort *reader* that treats any failure as "nothing to show" (the todo-template
 picker) is a different, correct policy — the rule is not "every readdir routes here."
+
+## Closed lists — one list, `isOneOf` for membership, the compiler for every use
+
+A closed set of values the code branches on (a step kind, a gate option, a side-effect kind) is **one `as
+const` list** with its type derived from it (`ACTED_SIDE_EFFECT_KINDS` / `ActedSideEffectKind`), never a
+union written out beside a list that "obviously agrees". Two halves keep it honest:
+
+- **Membership goes through `isOneOf` (`src/shared/oneOf.ts`).** It narrows an `unknown` read from a file,
+  an IPC payload or YAML to the list's type. A hand-written `(LIST as readonly string[]).includes(v)` or
+  `LIST.includes(v as T)` casts away exactly the check it performs, and its copies drift (one checked
+  `typeof v === 'string'`, the next forgot). Lint enforces this half (`ONE_OF` in `eslint.config.mjs`).
+- **Every place that acts on each member is bound to the list at compile time**: a `switch` ending in
+  `default: { const unhandled: never = x; return unhandled; }`, or a `Readonly<Record<T, …>>` table. Adding a
+  member then fails `pnpm typecheck` at every place that has not decided what to do with it; without the
+  binding, a new member silently falls through an `if` chain or a missing `case`. A case or key that names
+  no member fails too (TS2678, TS2353), so a typo cannot hide.
+
+One definition stops two copies of the list; this stops the code that acts on it from ignoring a member
+added later. A set of plain strings looked up but never branched on per member (`agentKind.ts`'s launcher
+names) is not a closed list in this sense. Live instances: `src/shared/engineCapabilities/` (the lists the
+flow and loop loaders and the engine guide share), `appGateDecision.ts` and `appGateGithub.ts` (exhaustive
+dispatch), `flow.ts`'s input-type refs table.
 
 ## Validating an untrusted value that feeds a safety limit — where, and which way it fails
 
@@ -443,6 +485,13 @@ Close only the exact resources owned by the run, never all Terminal/Electron win
 processes or the operator's sessions. Verify that no owned windows or processes remain before reporting
 completion. If a launch mechanism cannot provide ownership and cleanup, use one that can; do not rely
 on the operator to clean up or change their global Terminal preferences to hide the problem.
+
+**An e2e teardown force-stops a failed test's app.** A test that fails may leave its app wedged, with a
+spinning main process or a crashed renderer. A graceful `close()` on such an app never returns, so the worker
+dies at its teardown timeout: an error that belongs to no test, which `retries` cannot absorb. An `afterEach`
+that owns an Electron app stops it through `tests/e2e/stopApp.ts`. That helper closes a passing test's app
+gracefully, kills a failed test's app and waits until the process has exited, and leaves an app that already
+closed alone.
 
 ## One theme per PR
 

@@ -2,12 +2,13 @@
 // engine assembles from those files derive from the one resolver below, so the writer's prompt and the
 // assembler cannot disagree on where a section lives.
 
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { sliceArtifact } from './appWorkTurn';
 import { readDirEntries } from './dirEntries';
 import { atomicWriteFileSync } from './atomicFile';
+import { readBoundedNoFollow } from './boundedRead';
 import { confinedRealPathResult } from './confinedPath';
 import { isErrno } from './errno';
 
@@ -30,6 +31,7 @@ export interface ReportSection {
 const SECTION_EXT = '.md';
 const SECTION_NAME = /^(.+?)(?:\.slice-([1-9][0-9]*))?\.md$/;
 const EARLIER_FILE = '_earlier.md';
+export const MAX_REPORT_SECTION_BYTES = 1024 * 1024;
 export const ASSEMBLED_MARKER = '<!-- agent-terminal:assembled-report -->';
 
 export function sectionFile(dir: SectionsDir, step: string, slice: number): { path: string; rel: string } | null {
@@ -59,12 +61,18 @@ export function assembleReport(sections: ReportSection[], stepOrder: readonly st
   return `${ASSEMBLED_MARKER}\n\n${parts.join('\n\n')}\n`;
 }
 
-function readIfPresent(file: string): string | null {
-  try {
-    return readFileSync(file, 'utf8');
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return null;
-    throw e;
+function readIfPresent(file: string, name: string): string | null {
+  const read = readBoundedNoFollow(file, MAX_REPORT_SECTION_BYTES);
+  if (read.ok) return read.text;
+  switch (read.cause) {
+    case 'absent':
+      return null;
+    case 'over-cap':
+      throw new Error(`${name} is larger than ${MAX_REPORT_SECTION_BYTES} bytes`);
+    case 'unreadable':
+      throw read.error ?? new Error(`${name} is not a regular file`);
+    default:
+      return read.cause satisfies never;
   }
 }
 
@@ -92,7 +100,8 @@ export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonl
     const rel = `${report.sectionsDir.rel}/${entry.name}`;
     if (!file.ok && file.cause === 'escapes') throw new Error(`the report section ${rel} leads outside ${report.sectionsDir.rel}`);
     if (!file.ok) throw new Error(`the report section ${rel} could not be resolved: it is a broken link or cannot be reached`);
-    const body = readFileSync(file.path, 'utf8');
+    const body = readIfPresent(file.path, `the report section ${rel}`);
+    if (body === null) throw new Error(`the report section ${rel} was removed while it was being read`);
     if (key === null) earlier = body;
     else sections.push({ ...key, body });
   }
@@ -102,7 +111,7 @@ export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonl
   const leaf = folder === null ? ({ ok: false, cause: 'unresolvable' } as const) : confinedRealPathResult(folder, report.path);
   if (!leaf.ok && leaf.cause === 'escapes') throw new Error(`the report ${reportName} leads outside its folder`);
   if (earlier === null && leaf.ok) {
-    const existing = readIfPresent(leaf.path);
+    const existing = readIfPresent(leaf.path, `the report ${reportName}`);
     if (existing !== null && !isAssembledReport(existing)) {
       writeWhole(path.join(dir, EARLIER_FILE), existing);
       earlier = existing;

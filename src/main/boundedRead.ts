@@ -1,6 +1,6 @@
 // CWE-59/367/400 — the one bounded, no-follow file read for untrusted on-disk state.
 
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isErrno } from './errno';
 import { decodeUtf8Strict } from './decodeUtf8Strict';
 
@@ -35,3 +35,15 @@ export function readBoundedNoFollow(file: string, maxBytes: number): BoundedRead
     closeSync(fd);
   }
 }
+
+/** `readBoundedNoFollow` of `file`'s real path, for a file whose own name may legitimately be a link. */
+export function readBoundedResolved(file: string, maxBytes: number): BoundedRead {
+  let real: string;
+  try {
+    real = realpathSync(file);
+  } catch (e) {
+    return isErrno(e, 'ENOENT') ? { ok: false, cause: 'absent' } : { ok: false, cause: 'unreadable', error: e };
+  }
+  return readBoundedNoFollow(real, maxBytes);
+}
+

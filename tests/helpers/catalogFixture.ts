@@ -15,8 +15,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE, type FlowInputDef } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir, type FlowInputDef } from '../../src/main/flow';
 import { todoTemplatesDir } from '../../src/main/todoTemplate';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 export interface CatalogEntryOptions {
   /** Template refs to co-locate under the entry's todo-templates/ (each becomes a parseable one-todo .md).

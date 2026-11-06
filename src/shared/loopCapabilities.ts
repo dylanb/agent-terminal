@@ -14,13 +14,14 @@ export const MAX_CAPABILITIES_BYTES = 512 * 1024;
 const MAX_TEST_GLOBS = 256;
 const MAX_GLOB_LENGTH = 1024;
 
-const ALLOWED_KEYS: ReadonlySet<string> = new Set([
-  'test_globs',
-  'test_command',
-  'build_command',
-  'select_template',
-  'red_check_command',
-]);
+export const LOOP_CAPABILITIES_KEYS = {
+  test_globs: { required: true },
+  test_command: { required: true },
+  build_command: { required: true },
+  select_template: { required: false },
+  red_check_command: { required: false },
+} as const satisfies Readonly<Record<string, { required: boolean }>>;
+export type LoopCapabilitiesKey = keyof typeof LOOP_CAPABILITIES_KEYS;
 
 export interface LoopCapabilities {
   testGlobs: string[];
@@ -83,7 +84,10 @@ function parse(text: string): LoopCapabilities {
   // Closed key set BEFORE reading fields: a `__proto__`/`constructor` key (js-yaml stores it as an own key,
   // no prototype pollution) is rejected here as unknown, exactly like loopDefV2's ALLOWED_TOP_KEYS.
   for (const key of Object.keys(doc)) {
-    if (!ALLOWED_KEYS.has(key)) fail(`unknown key: ${key}`);
+    if (!Object.hasOwn(LOOP_CAPABILITIES_KEYS, key)) fail(`unknown key: ${key}`);
+  }
+  for (const [key, { required }] of Object.entries(LOOP_CAPABILITIES_KEYS)) {
+    if (required && doc[key] === undefined) fail(`missing required key: ${key}`);
   }
   const result: LoopCapabilities = {
     testGlobs: requireTestGlobs(doc.test_globs),

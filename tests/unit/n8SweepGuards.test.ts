@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { resolveEngineGuideFile } from '../../src/main/exampleAssets';
 
 const SELF = 'tests/unit/n8SweepGuards.test.ts';
 
@@ -136,7 +137,9 @@ describe('the packaging manifest ships no deleted path', () => {
   const yml = readText('electron-builder.yml');
 
   it('every concrete extraResources `from:` path exists on disk', () => {
-    const froms = [...yml.matchAll(/^\s*-\s*from:\s*(\S+)\s*$/gm)].map((m) => m[1]).filter((p) => !/[*?]/.test(p));
+    // The built engine guide exists only once the build has written it, and CI runs this before any build.
+    const builtGuide = resolveEngineGuideFile({ packaged: false, appPath: join('out', 'main') });
+    const froms = [...yml.matchAll(/^\s*-\s*from:\s*(\S+)\s*$/gm)].map((m) => m[1]).filter((p) => !/[*?]/.test(p) && p !== builtGuide);
     expect(froms.length).toBeGreaterThan(0);
     const missing = froms.filter((p) => !existsSync(p));
     expect(missing, `electron-builder.yml ships nonexistent path(s):\n${missing.join('\n')}`).toEqual([]);

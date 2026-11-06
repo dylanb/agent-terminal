@@ -11,10 +11,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
 import { ticketPromptLines } from '../shared/currentTicket';
 import { checkerLines } from './artifactCheck';
-
-/** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
- *  The engine runs whatever the def declares under this name, never a hardcoded choice (§27.7). */
-const PRE_CONSOLIDATE_BOUNDARY = 'pre-consolidate';
+import { PRE_CONSOLIDATE_BOUNDARY } from '../shared/engineCapabilities/loop';
 
 /** The context boundary crossed before CONSOLIDATE (§27.3/§27.7): the def's `pre-consolidate` boundary
  *  policy, defaulting to `/clear` when the def declares none (§27.7 prefers a clear pre-consolidate). */

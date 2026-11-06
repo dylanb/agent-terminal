@@ -5,6 +5,10 @@
 import os from 'node:os';
 import path from 'node:path';
 
+export const LOOPS_V2_SUBDIR = 'loops-v2';
+export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
+export const CLAUDE_CONFIG_DEFAULT_SUBDIR = '.claude';
+
 const trimmed = (v: string | undefined): string | undefined => {
   const t = v?.trim();
   return t ? t : undefined;
@@ -21,8 +25,8 @@ export function userConfigRootFrom(
   home: string,
   configDir?: string,
 ): string | null {
-  const override = trimmed(configDir) ?? trimmed(env.CLAUDE_CONFIG_DIR);
-  const root = override ?? path.join(home, '.claude');
+  const override = trimmed(configDir) ?? trimmed(env[CLAUDE_CONFIG_DIR_ENV]);
+  const root = override ?? path.join(home, CLAUDE_CONFIG_DEFAULT_SUBDIR);
   // The absoluteness gate is on the RESULT, not just the override branch: a defined-but-empty `$HOME` makes
   // `os.homedir()` return '', so the unset branch is `.claude` — relative, and the same CWE-829 sink. Only an
   // absolute root can be right; anything else is refused whichever branch produced it.
@@ -48,7 +52,7 @@ export function userConfigLoopsDir(configDir?: string): string | null {
  *  `loops` dir, never nested in it, so the two schemas' operator trees stay disjoint (§27.15). `null` when
  *  the root is refused (the same relative-override / CWE-829 gate as every other branch). */
 export function userConfigLoopsV2Dir(configDir?: string): string | null {
-  return branch('loops-v2', configDir);
+  return branch(LOOPS_V2_SUBDIR, configDir);
 }
 
 /** Where Claude Code — a separate process — discovers a slash command, as `<root>/commands/<name>.md`. */

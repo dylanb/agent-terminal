@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
 import { MAX_ECHOED_LOAD_ERROR_LENGTH } from '../../src/shared/controlChars';
+import { MAX_SLICES } from '../../src/shared/engineCapabilities/flow';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.

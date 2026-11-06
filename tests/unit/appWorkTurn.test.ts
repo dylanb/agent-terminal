@@ -4,13 +4,13 @@ import {
   boundaryCommand,
   completionArtifact,
   sliceArtifact,
-  completionMarker,
   composeAppWorkPrompt,
   REPORT_SECTION_HEADING,
 } from '../../src/main/appWorkTurn';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 import { phaseOutputRel } from '../../src/shared/phaseResult';
+import { completionMarker } from '../../src/shared/loopTurn';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop

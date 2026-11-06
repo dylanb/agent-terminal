@@ -8,6 +8,24 @@
 /** The file a turn writes last as a robust, cross-process done-signal. */
 export const TURN_DONE_FILENAME = 'turn-done';
 
+const WORK_TURN_PREFIX = 'work-';
+export const REVIEW_TURN_PREFIX = 'review-';
+export const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
+export const TURN_KEY_PREFIXES = { work: WORK_TURN_PREFIX, review: REVIEW_TURN_PREFIX, consolidate: CONSOLIDATE_TURN_PREFIX } as const;
+export type TurnKind = keyof typeof TURN_KEY_PREFIXES;
+
+/** The turn key a turn's done-signal file must hold. */
+export function composeTurnKey(kind: TurnKind, stepId: string): string {
+  return `${TURN_KEY_PREFIXES[kind]}${stepId}`;
+}
+
+/** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
+ *  completion check reads back (§27.12) — present-and-marker, never a quality judgment. Anchored on the
+ *  step, so it is stable across retries of the same turn and distinct between steps. */
+export function completionMarker(stepId: string): string {
+  return `<!-- agent-terminal:work-turn-complete:${stepId} -->`;
+}
+
 /** The text the orchestrator appends to an injected turn prompt, instructing the agent to write the
  *  done-signal FILE as its final action once its own work and any spawned subagents have finished. When
  *  `artifact` is given — a reference to the turn's required output(s), either a single path (e.g.

@@ -3,7 +3,7 @@
 // failure mode returns a surfaced reason (AC 6). The declared version and the tier a def resolves from are
 // the two things engine selection keys on.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -14,17 +14,31 @@ import {
 } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
-import { isErrno } from './errno';
-import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
+import { errMsg } from './errno';
+import { readBoundedNoFollow, readBoundedResolved, type BoundedRead } from './boundedRead';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
   AppBootstrapWipePolicy,
 } from '../shared/appBootstrap';
-
-/** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
- *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
- *  bumps it. A def declaring any other version fails to resolve (never partially parsed). */
-export const LOOP_DEF_V2_VERSION = 'v2';
+import {
+  BOUNDARY_MODES,
+  EXEC_SIDE_EFFECT_KIND,
+  FROZEN_CHECK_VALUES,
+  GOAL_CONDITION_MAX_CHARS,
+  LOOP_DEF_V2_VERSION,
+  LOOP_TOP_KEYS,
+  PICKUP_CONFLICT_POLICIES,
+  PICKUP_LABEL_ACTIONS,
+  PICKUP_LABEL_TARGETS,
+  POLISH_POLICIES,
+  REQUEST_CHANGES_OPTION,
+  WORK_COMPLETIONS,
+  type BoundaryMode,
+  type PolishPolicy,
+  type WorkCompletion,
+} from '../shared/engineCapabilities/loop';
+import { isOneOf } from '../shared/oneOf';
 
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
@@ -53,7 +67,7 @@ export interface ReviewerCatalogEntry {
 /** One actor-boundary policy (§27.7): `clear`, or `compact` carrying the message naming what survives it. */
 export interface BoundaryPolicy {
   boundary: string;
-  mode: 'clear' | 'compact';
+  mode: BoundaryMode;
   message?: string;
 }
 
@@ -72,16 +86,8 @@ export interface GateOptionDef {
   sideEffects: GateSideEffect[];
 }
 
-/** The framework-neutral phase-completion mode a loop declares (§28.4/§28.5.5) — which machine completion
- *  predicate its phase gates on: `red`/`green` gate the WORK turn (S3/S4), `refactor` gates each REVIEW-AND-FIX
- *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", so it produces no work-turn result file). A
- *  closed set recognized by exact string, single-sourced so the field type AND the parser's validation both
- *  derive from it (mirroring PHASE_OUTCOMES). */
-export const WORK_COMPLETIONS = ['red', 'green', 'refactor'] as const;
-export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
-const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
 export function isWorkCompletion(value: string): value is WorkCompletion {
-  return WORK_COMPLETION_SET.has(value);
+  return isOneOf(WORK_COMPLETIONS, value);
 }
 
 /** §28.5.5 F1 — the completion modes whose work turn produces NO result file and so are EXEMPT from the
@@ -106,10 +112,6 @@ export interface WorkRecipe {
   /** §28.5.1 */
   frozenCheck?: true;
 }
-
-/** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
- *  engine's framing around the condition must fit beside it. */
-export const GOAL_CONDITION_MAX_CHARS = 2000;
 
 /** §27.3/§27.8 */
 export type ReviewRounds = { kind: 'engine'; consolidator: string } | { kind: 'none' };
@@ -142,13 +144,8 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
-/** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
- *  full-catalog sweep. Closed set, recognized by exact string. */
-export const POLISH_POLICIES = ['fix', 'defer'] as const;
-export type PolishPolicy = (typeof POLISH_POLICIES)[number];
-
 function isPolishPolicy(value: string): value is PolishPolicy {
-  return (POLISH_POLICIES as readonly string[]).includes(value);
+  return isOneOf(POLISH_POLICIES, value);
 }
 
 /** The prescribed round-report structure (§27.5) and the polish policy its dispositions follow (§27.8). */
@@ -186,36 +183,38 @@ export interface LoopDefV2 {
 
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
- *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string } | { ok: false; reason: string };
+ *  label), or a human-readable reason surfaced in the UI (AC 6). `defFile` is the real path of the definition
+ *  file resolution reached; on a failure it is set only when that file was read or its read failed for a reason
+ *  other than absence. */
+export type LoopDefV2Result =
+  | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile: string }
+  | { ok: false; reason: string; defFile?: string };
 
-export interface LoopDefV2Context {
+interface LoopDefV2Scope {
   tiers: LoopDefV2Tiers;
-  repoDir: string;
   /** The running flow's name: its own loop folder in the operator tier is consulted before the shared one. */
   flow?: string;
 }
 
-/** §27.8. */
-function flowLoopsDir(loopsRoot: string, flow: string): string | null {
-  return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
+/** A definition resolved for a run in the repository `repoDir`: its `.agent-loop.yaml` overrides apply, and its
+ *  loop artifacts folder holds the definition's artifact paths. */
+export interface LoopDefV2Context extends LoopDefV2Scope {
+  repoDir: string;
 }
 
-const ALLOWED_TOP_KEYS = new Set([
-  'version',
-  'name',
-  'work',
-  'reviewers',
-  'consolidator',
-  'boundaries',
-  'report',
-  'gate',
-  'pickup',
-  'inputs',
-  'outputs',
-  'exec',
-  'brief',
-]);
+/** A definition resolved for no repository, as when a global or bundled flow is checked on its own: no
+ *  repository's overrides apply. Its artifact paths are confined under the definition's own tier, so they are
+ *  fit for checking only: a run that wrote them would write into that tier. */
+export interface RepolessLoopDefV2Context extends LoopDefV2Scope {
+  repoDir: null;
+}
+
+export type LoopDefV2Lookup = LoopDefV2Context | RepolessLoopDefV2Context;
+
+/** §27.8. */
+export function flowLoopsDir(loopsRoot: string, flow: string): string | null {
+  return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
+}
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
@@ -312,8 +311,8 @@ function toBoundaries(raw: unknown): BoundaryPolicy[] {
     if (!isRecord(b)) fail('each boundary must be a mapping');
     const rec = b as Record<string, unknown>;
     const boundary = requireString(rec.boundary, 'boundary name');
-    if (rec.mode !== 'clear' && rec.mode !== 'compact') fail(`boundary ${boundary} mode must be clear or compact`);
-    const mode = rec.mode as 'clear' | 'compact';
+    const mode = rec.mode;
+    if (!isOneOf(BOUNDARY_MODES, mode)) fail(`boundary ${boundary} mode must be ${BOUNDARY_MODES.join(' or ')}`);
     if (mode === 'compact') return { boundary, mode, message: requireString(rec.message, `boundary ${boundary} compact message`) };
     return { boundary, mode };
   });
@@ -333,7 +332,7 @@ function toGate(raw: unknown): GateOptionDef[] {
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
       // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
       // tiers carry no trust distinction.
-      if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
+      if (kind === EXEC_SIDE_EFFECT_KIND) fail(`gate option ${option} side-effect must not name kind: ${EXEC_SIDE_EFFECT_KIND} (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
     });
@@ -362,9 +361,8 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
 
 function toWipePolicy(raw: unknown): WipePolicy {
   if (raw === undefined) return { mode: 'abort' };
-  if (raw === 'abort') return { mode: 'abort' };
-  if (raw === 'wipe-and-retry') return { mode: 'wipe-and-retry' };
-  fail(`pickup on_conflict must be abort or wipe-and-retry: ${String(raw)}`);
+  if (isOneOf(PICKUP_CONFLICT_POLICIES, raw)) return { mode: raw };
+  fail(`pickup on_conflict must be ${PICKUP_CONFLICT_POLICIES.join(' or ')}: ${String(raw)}`);
 }
 
 function toPickupLabels(raw: unknown): PickupLabelV2[] {
@@ -372,9 +370,10 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   if (!Array.isArray(raw)) fail('pickup initial_labels must be a list');
   return (raw as unknown[]).map((l) => {
     const rec = requireRecord(l, 'pickup initial_labels entry');
-    if (rec.action !== 'add' && rec.action !== 'remove') fail(`pickup label action must be add or remove: ${String(rec.action)}`);
-    if (rec.target !== 'issue' && rec.target !== 'pr') fail(`pickup label target must be issue or pr: ${String(rec.target)}`);
-    return { action: rec.action, target: rec.target, label: requireNonBlankString(rec.label, 'pickup label') };
+    const { action, target } = rec;
+    if (!isOneOf(PICKUP_LABEL_ACTIONS, action)) fail(`pickup label action must be ${PICKUP_LABEL_ACTIONS.join(' or ')}: ${String(action)}`);
+    if (!isOneOf(PICKUP_LABEL_TARGETS, target)) fail(`pickup label target must be ${PICKUP_LABEL_TARGETS.join(' or ')}: ${String(target)}`);
+    return { action, target, label: requireNonBlankString(rec.label, 'pickup label') };
   });
 }
 
@@ -400,7 +399,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   const rec = doc as Record<string, unknown>;
 
   for (const key of Object.keys(rec)) {
-    if (!ALLOWED_TOP_KEYS.has(key)) fail(`unknown key: ${key}`);
+    if (!isOneOf(LOOP_TOP_KEYS, key)) fail(`unknown key: ${key}`);
   }
   if (rec.version !== LOOP_DEF_V2_VERSION) fail(`unknown schema version: ${String(rec.version)} (expected ${LOOP_DEF_V2_VERSION})`);
   // `name` is resolver-assigned from the resolving path — def content cannot forge it. A declared `name` is
@@ -418,7 +417,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     if (!isWorkCompletion(c)) fail(`unknown work completion: ${c}`);
     workCompletion = c;
   }
-  if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
+  if (work.frozen_check !== undefined && !isOneOf(FROZEN_CHECK_VALUES, work.frozen_check)) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
 
   let workGoal: string | undefined;
@@ -457,8 +456,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
 
   const gate = toGate(rec.gate);
-  if (rounds.kind === 'none' && gate.some((g) => g.option === 'request-changes')) {
-    fail('gate option request-changes re-enters a review round, and this loop runs none');
+  if (rounds.kind === 'none' && gate.some((g) => g.option === REQUEST_CHANGES_OPTION)) {
+    fail(`gate option ${REQUEST_CHANGES_OPTION} re-enters a review round, and this loop runs none`);
   }
 
   let exec: ExecSideEffect | null = null;
@@ -513,23 +512,44 @@ interface DefCandidate {
   jail: string;
 }
 
-function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
-  let raw: string;
-  try {
-    raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return null;
-    return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
+export const MAX_LOOP_DEF_BYTES = 256 * 1024;
+export const MAX_LOOP_REGISTRY_BYTES = 64 * 1024;
+export const MAX_LOOP_RECIPE_BYTES = 256 * 1024;
+
+function unreadReason(read: Exclude<BoundedRead, { ok: true }>, limit: number): string {
+  switch (read.cause) {
+    case 'absent':
+      return 'it does not exist';
+    case 'over-cap':
+      return `it is larger than ${limit} bytes`;
+    case 'unreadable':
+      return read.error === undefined ? 'it is not a regular file' : errMsg(read.error);
+    default:
+      return read.cause satisfies never;
   }
+}
+
+/** A link at the registry's own name is followed, so a repository may keep its registry elsewhere. */
+function readRegistry(repoDir: string): { text: string } | { reason: string } | null {
+  const read = readBoundedResolved(path.join(repoDir, LOOP_OVERRIDE_FILE), MAX_LOOP_REGISTRY_BYTES);
+  if (read.ok) return { text: read.text };
+  if (read.cause === 'absent') return null;
+  return { reason: `cannot read repo loop registry ${LOOP_OVERRIDE_FILE}: ${unreadReason(read, MAX_LOOP_REGISTRY_BYTES)}` };
+}
+
+function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
+  const registry = readRegistry(repoDir);
+  if (registry === null || 'reason' in registry) return registry;
   let doc: unknown;
   try {
-    doc = yaml.load(raw);
+    doc = yaml.load(registry.text);
   } catch {
     return null;
   }
-  if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
+  const loops = isRecord(doc) ? doc[LOOP_OVERRIDE_MAP_KEY] : undefined;
+  if (!isRecord(loops) || typeof loops[name] !== 'string') return null;
   const root = path.resolve(repoDir);
-  const target = path.resolve(root, doc.loops[name]);
+  const target = path.resolve(root, loops[name]);
   // The repo tier root is a jail sitting INSIDE untrusted content, where a link can be planted at the jail's
   // own final segment — resolveJail. A null here REFUSES with a reason (unlike a tier candidate, which falls
   // through to the next tier).
@@ -542,10 +562,10 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
 }
 
-export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
+export function resolveLoopDefV2(name: string, ctx: LoopDefV2Lookup): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
   const candidates: DefCandidate[] = [];
-  const repo = repoCandidate(name, ctx.repoDir);
+  const repo = ctx.repoDir === null ? null : repoCandidate(name, ctx.repoDir);
   if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
   if (repo) candidates.push(repo);
   // The operator and app-bundled tier roots are ground the app derives itself and either may be absent (the
@@ -562,8 +582,8 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     return jail === null ? [] : [{ root, tierName, jail }];
   });
   const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
-    const defDir = path.join(dir, name);
-    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+    const defPath = path.join(dir, loopDefRelPath(name));
+    return { tierRoot: tier.root, defDir: path.dirname(defPath), defPath, tierName: tier.tierName, jail: tier.jail };
   };
   for (const tier of tierCandidates) {
     const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);
@@ -582,18 +602,14 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
             : `def ${name} in the ${tierName} tier is unresolvable`,
       };
     }
-    let body: string;
+    const defFile = confinedDefPath.path;
+    const read = readBoundedNoFollow(defFile, MAX_LOOP_DEF_BYTES);
+    if (!read.ok && read.cause === 'absent') continue;
+    if (!read.ok) return { ok: false, reason: `cannot read def ${name}: ${unreadReason(read, MAX_LOOP_DEF_BYTES)}`, defFile };
     try {
-      body = readFileSync(confinedDefPath.path, 'utf8');
+      return { ok: true, def: parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), tierRoot, defDir, defFile };
     } catch (e) {
-      if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
-    }
-    try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir };
-    } catch (e) {
-      if (e instanceof DefError) return { ok: false, reason: e.message };
-      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      return { ok: false, reason: errMsg(e), defFile };
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;

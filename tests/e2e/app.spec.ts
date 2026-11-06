@@ -2,6 +2,7 @@ import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
@@ -12,15 +13,15 @@ import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
-import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
-import { completionMarker } from '../../src/main/appWorkTurn';
+import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { phaseOutputRel } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
+import { ENGINE_GUIDE_FILE, resolveEngineGuideFile } from '../../src/main/exampleAssets';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFixture';
@@ -50,6 +51,11 @@ import {
 import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { LOOP_POSITIONS, SECTIONS, type LoopPositionId } from '../helpers/engineCapabilityOracle';
+import { composedShape, headingTitled, positionHeading, turnContractParts } from '../helpers/guideSections';
+import { codeSpans, guideHeadings, guideTocLinks } from '../helpers/markdownGuide';
+import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -188,10 +194,10 @@ test.beforeEach(async ({}, testInfo) => {
   await openQuickSend('capture');
 });
 
-test.afterEach(async () => {
-  // An @ownapp test that threw before launching leaves `app` as the previous test's, already closed —
-  // close() is then a no-op. Never leave an instance running: a stranded one is what kills a worker.
-  await app?.close(); // stop writes before removing the userData dir
+test.afterEach(async ({}, testInfo) => {
+  // An @ownapp test that threw before launching leaves `app` as the previous test's, already exited.
+  // Never leave an instance running: a stranded one is what kills a worker.
+  await stopApp(app, testInfo);
   rmSync(userDataDir, { recursive: true, force: true });
 });
 
@@ -2367,7 +2373,7 @@ const consentBox = (dest: string) =>
 /** A temp HOME plus a temp Claude config root and Codex home, so a green run can never write into the
  *  developer's own ~/.claude or ~/.codex (§24.2.3; CLAUDE_CONFIG_DIR and CODEX_HOME are the tools' own
  *  redirects). The Codex home defaults to one that does not exist, so Codex counts as not installed. */
-function installEnv(home: string, configDir: string, codexHome: string = join(home, '.codex')): Record<string, string> {
+function installEnv(home: string, configDir: string, codexHome: string = join(home, '.codex'), appHome?: string): Record<string, string> {
   return {
     ...(process.env as Record<string, string>),
     APP_SHELL: 'bash',
@@ -2375,6 +2381,7 @@ function installEnv(home: string, configDir: string, codexHome: string = join(ho
     CLAUDE_CONFIG_DIR: configDir,
     CODEX_HOME: codexHome,
     APP_SUBMIT_DELAY_MS: '100',
+    ...(appHome !== undefined ? { APP_HOME_DIR: appHome } : {}),
   };
 }
 
@@ -2444,6 +2451,168 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   rmSync(home, { recursive: true, force: true });
   rmSync(configDir, { recursive: true, force: true });
   rmSync(codexHome, { recursive: true, force: true });
+});
+
+/** The guide the build placed next to the main bundle — the bytes every install must leave behind. */
+const BUILT_GUIDE = resolveEngineGuideFile({ packaged: false, appPath: join(process.cwd(), 'out', 'main') });
+const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+const installedGuide = (appHome: string): string => join(flowHomeDir(appHome), ENGINE_GUIDE_FILE);
+/** The installed guide beside the built one; a match means something only when the build produced a guide. */
+const guideMatch = (appHome: string) => ({ installed: guideAt(installedGuide(appHome)), built: guideAt(BUILT_GUIDE) });
+const builtGuideInstalled = () => ({ installed: guideAt(BUILT_GUIDE), built: expect.any(String) });
+const STALE_GUIDE = '# An older guide\n\nA line the current build no longer writes.\n';
+
+async function installFromSettings(env: Record<string, string>): Promise<void> {
+  app = await electron.launch({ args: ['out/main/index.js'], env });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+}
+
+test('installing the examples writes the built engine guide into the app-state home and reports it (#276 I1)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    await expect(installReportGroup('engineGuide')).toContainText(ENGINE_GUIDE_FILE);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples replaces a stale engine guide without opening the dialog when nothing else differs (#276 I2a)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-stale-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-stale-cfg-'));
+  try {
+    mkdirSync(flowHomeDir(home), { recursive: true });
+    writeFileSync(installedGuide(home), STALE_GUIDE);
+    await installFromSettings(installEnv(home, configDir));
+    // Whichever comes first — the dialog or the result — so an opened dialog fails at the dialog check, not at a wait.
+    await expect(installExamplesPrompt().or(installExamplesStatus().filter({ hasText: 'created' })).first()).toBeVisible({ timeout: 15_000 });
+    await expect(installExamplesPrompt()).toBeHidden();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect(guideMatch(home)).toEqual(builtGuideInstalled());
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('the dialog lists the engine guide with no consent control, and confirming with nothing ticked still replaces it (#276 I2b/I4)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dialog-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dialog-cfg-'));
+  const myFlow = 'name: my-own-flow\nsteps:\n  - id: only\n    kind: manual\n';
+  try {
+    mkdirSync(flowHomeDir(home), { recursive: true });
+    writeFileSync(installedGuide(home), STALE_GUIDE);
+    writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), myFlow);
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesPrompt()).toBeVisible({ timeout: 15_000 });
+    const guideGroup = installExamplesPrompt().getByRole('group').filter({ hasText: ENGINE_GUIDE_FILE });
+    await expect.soft(guideGroup).toHaveCount(1);
+    await expect.soft(guideGroup).toHaveAccessibleName(/\S/);
+    await expect.soft(guideGroup.getByRole('checkbox')).toHaveCount(0);
+    await expect.soft(installExamplesPrompt().getByRole('group', { name: 'Replace files in' }).getByRole('checkbox')).toHaveCount(1);
+    await installExamplesConfirm().click();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect({ guide: guideMatch(home), myFlow: guideAt(join(flowHomeDir(home), FLOW_DEF_FILE)) }).toEqual({ guide: builtGuideInstalled(), myFlow });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('with APP_HOME_DIR set, the engine guide is installed under that home and none under the default home (#276 I3)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-cfg-'));
+  const appHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-app-'));
+  try {
+    await installFromSettings(installEnv(home, configDir, join(home, '.codex'), appHome));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect({ relocated: guideMatch(appHome), underDefaultHome: existsSync(installedGuide(home)) }).toEqual({
+      relocated: builtGuideInstalled(),
+      underDefaultHome: false,
+    });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+    rmSync(appHome, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples writes an engine guide with a section for every loop-definition position (#276)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    const installed = guideAt(installedGuide(home)) ?? '';
+    const withoutSection = (Object.keys(LOOP_POSITIONS) as LoopPositionId[]).filter((id) => positionHeading(installed, id) === undefined);
+    expect(withoutSection).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples writes an engine guide with the turn contract and its turn-composition part (#276)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    const { sectionTitles } = ENGINE_CAPABILITIES;
+    const parts = turnContractParts(guideAt(installedGuide(home)) ?? '', { contract: sectionTitles['turn-contract'], composition: sectionTitles['turn-composition'] });
+    const marker = composedShape(completionMarker);
+    expect({ composition: parts.composition !== undefined, marker: codeSpans(parts.fixed).some((s) => marker.test(s)) }).toEqual({ composition: true, marker: true });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('launched the way `pnpm run dev` launches it, installing the examples writes the one built guide with every section linked from its contents (#276)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-cfg-'));
+  const devGuide = resolveEngineGuideFile({ packaged: false, appPath: process.cwd() });
+  try {
+    app = await electron.launch({ args: ['.'], env: installEnv(home, configDir) });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await page.locator('[data-viewbtn="4"]').click();
+    await installExamplesBtn().click();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    const installed = guideAt(installedGuide(home)) ?? '';
+    expect.soft({ dev: guideAt(devGuide), built: guideAt(BUILT_GUIDE) }).toEqual({ dev: installed, built: installed });
+    const linked = new Set(guideTocLinks(installed).map((l) => l.anchor));
+    const anchors = new Set(guideHeadings(installed).map((h) => h.anchor));
+    const titles = ENGINE_CAPABILITIES.sectionTitles as Readonly<Record<string, string | undefined>>;
+    const problems = [
+      ...[...linked].filter((a) => !anchors.has(a)).map((a) => `TOC entry #${a} links to no heading`),
+      ...SECTIONS.flatMap((s) => {
+        const heading = s.kind === 'position' ? positionHeading(installed, s.position) : headingTitled(installed, titles[s.kind] ?? '');
+        const what = s.kind === 'position' ? s.position : s.kind;
+        return heading === undefined ? [`${what}: no heading`] : linked.has(heading.anchor) ? [] : [`${what}: not in the contents`];
+      }),
+    ];
+    expect(problems).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
 });
 
 test('with no Codex home, installing the examples creates nothing for Codex and says why (§18.1)', { tag: '@ownapp' }, async () => {

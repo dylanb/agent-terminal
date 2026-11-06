@@ -2,9 +2,12 @@
 // area) as its last action. Read and clear are separate operations; clearing before the signal has been
 // acted on would lose the completion of the turn that wrote it.
 
-import { readFileSync, rmSync, watch, type FSWatcher } from 'node:fs';
+import { rmSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import { readBoundedResolved } from './boundedRead';
+
+export const MAX_TURN_DONE_BYTES = 4 * 1024;
 
 function turnDonePath(repoDir: string, subDir: string): string {
   return path.join(repoDir, subDir, TURN_DONE_FILENAME);
@@ -14,11 +17,8 @@ function turnDonePath(repoDir: string, subDir: string): string {
  *  stays latched until `clearTurnDone` (§27.12), so a re-read returns the same key. `subDir` is the loop
  *  area the caller's engine owns. */
 export function readTurnDone(repoDir: string, subDir: string): string | null {
-  try {
-    return readFileSync(turnDonePath(repoDir, subDir), 'utf8').trim();
-  } catch {
-    return null;
-  }
+  const read = readBoundedResolved(turnDonePath(repoDir, subDir), MAX_TURN_DONE_BYTES);
+  return read.ok ? read.text.trim() : null;
 }
 
 /** Delete the done-signal file (best-effort; absent is fine). The host calls this at the next prompt

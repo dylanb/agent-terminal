@@ -172,3 +172,16 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     expect(rejectReason(`test_globs: ["${long}"]\ntest_command: t\nbuild_command: b\n`)).toContain('test_globs');
   });
 });
+
+describe('parseLoopCapabilities required keys (#276)', () => {
+  it('reports a missing required key differently from a blank one, naming the key in both', () => {
+    const present: Record<string, string> = { test_globs: '[tests/**]', test_command: 't', build_command: 'b' };
+    const file = (fields: Record<string, string>): string => Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join('\n');
+    for (const key of Object.keys(present)) {
+      const { [key]: _omitted, ...rest } = present;
+      const missing = rejectReason(file(rest));
+      const blank = rejectReason(file({ ...present, [key]: key === 'test_globs' ? '[]' : '"  "' }));
+      expect({ missingNames: missing.includes(key), blankNames: blank.includes(key), differ: missing !== blank }).toEqual({ missingNames: true, blankNames: true, differ: true });
+    }
+  });
+});

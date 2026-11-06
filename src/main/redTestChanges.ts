@@ -1,10 +1,10 @@
 // §28.5.1 — the record of every test RED wrote that a later step changed, kept for the branch and read
 // by the implementation approval as its `red-test-changes` input.
 
-import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { APP_LOOP_STATE_SCHEMA, sanitizeChangedTestPaths } from './appLoopState';
+import { readLoopArtifact } from './appLoopPaths';
 import { artifactLocation } from './loopDefV2';
 import { isRecord } from './yamlRecord';
 
@@ -40,7 +40,9 @@ function toChange(raw: unknown): RedTestChange | null {
 export function readRedTestChanges(repoDir: string): RedTestChanges | null {
   let doc: unknown;
   try {
-    doc = yaml.load(readFileSync(redTestChangesArtifact(repoDir), 'utf8'));
+    const text = readLoopArtifact(redTestChangesArtifact(repoDir));
+    if (text === null) return null;
+    doc = yaml.load(text);
   } catch {
     return null;
   }

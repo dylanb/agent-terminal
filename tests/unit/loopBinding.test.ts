@@ -18,7 +18,7 @@ const loopStep = (over: Partial<FlowStepDef> = {}): FlowStepDef => ({
 });
 
 const def = (over: Partial<LoopDefV2> = {}): LoopDefV2 => ({ pickup: null, ...over } as LoopDefV2);
-const resolvedFrom = (tierRoot: string, over: Partial<LoopDefV2> = {}): LoopDefV2Result => ({ ok: true, def: def(over), tierRoot, defDir: `${tierRoot}/loop` });
+const resolvedFrom = (tierRoot: string, over: Partial<LoopDefV2> = {}): LoopDefV2Result => ({ ok: true, def: def(over), tierRoot, defDir: `${tierRoot}/loop`, defFile: `${tierRoot}/loop/loop.yaml` });
 
 function deps(over: Partial<LoopBindingPreparerDeps> = {}): LoopBindingPreparerDeps {
   return {

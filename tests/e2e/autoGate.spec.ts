@@ -1,6 +1,7 @@
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +17,6 @@ import { recordDisposition } from '../../src/main/runDisposition';
 import { createTrustedPickups } from '../../src/main/trustedPickups';
 import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
-import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import {
   b64,
@@ -54,6 +54,7 @@ import {
   type AutoGateStep,
   type GateEntry,
 } from './autoGateHarness';
+import { completionMarker } from '../../src/shared/loopTurn';
 
 // #137 — §27.9.1 per-step gate authority: an `auto` loop step's clean gate is decided by the engine through the
 // same approve a human click runs; anything else waits for the human.
@@ -70,8 +71,8 @@ let page: Page;
 const cleanup: string[] = [];
 const gitFixtures: GitRepoFixture[] = [];
 
-test.afterEach(async () => {
-  await app?.close();
+test.afterEach(async ({}, testInfo) => {
+  await stopApp(app, testInfo);
   app = undefined;
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
   for (const fixture of gitFixtures.splice(0)) fixture.cleanup();

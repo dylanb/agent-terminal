@@ -5,7 +5,7 @@ import {
   type CatalogResolution,
   type RunBinding,
 } from '../../src/main/resolveRunDefinition';
-import { type FlowLoad } from '../../src/main/flow';
+import type { FlowLoad } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
