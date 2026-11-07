@@ -4,9 +4,18 @@ import path from 'node:path';
 import { shellQuote } from '../shared/shellQuote';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 
+/** The AppImage the running app may have been started from: the AppImage file and the mount it runs from. */
+export interface AppImageFacts {
+  appImage: string;
+  mountDir: string;
+}
+
 /** The launch invocation a generated shim execs to start a fresh, independent instance: the app
- *  binary plus the args needed to load this build (none when packaged, the main script in dev). */
-export interface LaunchInvocation {
+ *  binary plus the args needed to load this build (none when packaged, the main script in dev), or
+ *  the AppImage file itself, whose mount disappears when the app exits. */
+export type LaunchInvocation = BinaryInvocation | { appImage: string };
+
+export interface BinaryInvocation {
   execPath: string;
   appArgs: string[];
 }
@@ -19,11 +28,18 @@ export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
 const DEV_CONTROLLER_ENTRY = 'controller.js';
+const TERMINAL_APPIMAGE_PREFIX = 'agent-terminal';
 const MAC_BUNDLE_BINARY = /^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/;
 
 /** Where the controller of the same build as `invocation` may be: installed beside the terminal
  *  (/Applications, /opt), then in the controller package's build output beside the terminal's. */
-export function controllerInvocations(invocation: LaunchInvocation): LaunchInvocation[] {
+export function controllerInvocations(invocation: LaunchInvocation): BinaryInvocation[] {
+  if ('appImage' in invocation) {
+    const name = path.basename(invocation.appImage);
+    if (!name.startsWith(TERMINAL_APPIMAGE_PREFIX)) return [];
+    const sibling = CONTROLLER_PRODUCT_NAME + name.slice(TERMINAL_APPIMAGE_PREFIX.length);
+    return [{ execPath: path.join(path.dirname(invocation.appImage), sibling), appArgs: [] }];
+  }
   const [mainScript] = invocation.appArgs;
   if (mainScript) {
     return [{ execPath: invocation.execPath, appArgs: [path.join(path.dirname(mainScript), DEV_CONTROLLER_ENTRY)] }];
@@ -46,7 +62,10 @@ function controllerBranch(invocation: LaunchInvocation): string[] {
     const cmd = [execPath, ...appArgs].map(shellQuote).join(' ');
     return `  if ${present.join(' && ')}; then nohup ${cmd} >/dev/null 2>&1 & exit 0; fi`;
   });
-  const looked = candidates.map((c) => c.appArgs[0] ?? c.execPath).join(', ');
+  const looked =
+    'appImage' in invocation && candidates.length === 0
+      ? path.dirname(invocation.appImage)
+      : candidates.map((c) => c.appArgs[0] ?? c.execPath).join(', ');
   return [
     `if [ "$#" -ge 1 ] && [ "$1" = ${CONTROLLER_FLAG} ]; then`,
     ...launches,
@@ -64,7 +83,14 @@ export function resolveLaunchInvocation(
   isDevBuild: boolean,
   mainScript: string | undefined,
   cwd: string,
+  appImage?: AppImageFacts,
 ): LaunchInvocation {
+  if (appImage && path.isAbsolute(appImage.appImage) && path.isAbsolute(appImage.mountDir)) {
+    const rel = path.relative(appImage.mountDir, execPath);
+    if (rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
+      return { appImage: appImage.appImage };
+    }
+  }
   const appArgs = isDevBuild && mainScript ? [path.resolve(cwd, mainScript)] : [];
   return { execPath, appArgs };
 }
@@ -76,10 +102,21 @@ export function resolveLaunchInvocation(
  * shell returns immediately.
  */
 export function generateShim(invocation: LaunchInvocation): string {
-  const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
+  const { execPath, appArgs } = 'appImage' in invocation ? { execPath: invocation.appImage, appArgs: [] } : invocation;
+  const cmd = [execPath, ...appArgs].map(shellQuote).join(' ');
+  const appImageGone =
+    'appImage' in invocation
+      ? [
+          `if [ ! -f ${shellQuote(invocation.appImage)} ]; then`,
+          `  printf '%s\\n' ${shellQuote(`${CLI_COMMAND_NAME}: ${invocation.appImage} is gone; reinstall the command from Settings → Command line → Install`)} >&2`,
+          '  exit 1',
+          'fi',
+        ]
+      : [];
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
+    ...appImageGone,
     ...controllerBranch(invocation),
     'CWD=$(pwd)',
     'if [ "$#" -ge 1 ]; then',

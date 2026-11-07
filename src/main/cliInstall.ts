@@ -94,14 +94,34 @@ function isSafeReuseDir(dir: string, home: string): boolean {
   } catch {
     return false;
   }
-  for (let cur = path.dirname(real); cur !== realHome && cur !== path.dirname(cur); cur = path.dirname(cur)) {
+  return ancestorsOwnerOnly(path.dirname(real), realHome);
+}
+
+/** Whether `start` and every ancestor above it, up to but excluding `stopAt` (default: through `/`),
+ *  is free of group/other write. `start` must already be symlink-resolved; a stat failure is a no. */
+function ancestorsOwnerOnly(start: string, stopAt?: string): boolean {
+  for (let cur = start; cur !== stopAt; cur = path.dirname(cur)) {
     try {
       if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
     } catch {
       return false;
     }
+    if (cur === path.dirname(cur)) break;
   }
   return true;
+}
+
+function appImageFolderRefusal(appImage: string): string | undefined {
+  const folder = path.dirname(appImage);
+  let owned = false;
+  try {
+    owned = ancestorsOwnerOnly(fs.realpathSync(folder));
+  } catch {
+    owned = false;
+  }
+  return owned
+    ? undefined
+    : `Not installing the command: ${folder} (or a folder above it) can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
 }
 
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
@@ -172,6 +192,10 @@ export function handleCliInstall(m: unknown, gatherRuntime: () => RuntimeInfo): 
 /** Install the launcher for `runtime` onto PATH, idempotently reconciling to the current build, and
  *  report whether it is now runnable from a new shell (§23.4 / #25). */
 export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
+  if ('appImage' in runtime.invocation) {
+    const refusal = appImageFolderRefusal(runtime.invocation.appImage);
+    if (refusal) return { ok: false, error: refusal };
+  }
   const existingProfiles = PROFILE_CANDIDATES.map((n) => path.join(runtime.home, n)).filter((p) =>
     fs.existsSync(p),
   );
