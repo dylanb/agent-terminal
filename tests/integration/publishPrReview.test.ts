@@ -554,7 +554,7 @@ describe('a reviewed PR that is no longer the one the run recorded writes nothin
   it("a ticket run's pickup", async () => {
     const run = await adoptedRun();
     commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
-    const ticketRun = { pr: run.w.prNumber, branch: run.pickup.fixBranch, issue: 176, initialStatus: 'planning' };
+    const ticketRun = { kind: 'opened' as const, pr: run.w.prNumber, branch: run.pickup.fixBranch, issue: 176, initialStatus: 'planning' };
     expect.soft(await expectHeld(run, { pickup: ticketRun })).toMatch(/adopt/i);
     expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBeNull();
   });
@@ -631,6 +631,56 @@ describe("a retry after the run comment failed gives this run's fix PR the repor
     expect.soft(first.accepted).toBe(0);
     expect.soft(second.accepted).toBe(1);
     expect.soft(fixPrs(run.w, run.pickup.fixBranch).map((p) => p.body)).toEqual(['The report, rewritten before the retry.\n']);
+  });
+});
+
+describe("a later round's approve brings this run's own fix branch up to date without force (operator decision 2026-11-07)", () => {
+  it('fast-forwards the fix branch to the new fixes, keeps one fix PR with the new report and one run comment', async () => {
+    const run = await adoptedRun();
+    commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
+    run.w.gh.set({ failOnce: ['comment-create'] });
+    const first = await approve(run);
+    commitFix(run, 'more.txt', 'a later fix\n', 'Fix what the next round found');
+    writeFileSync(run.report, 'The report after the later round.\n');
+
+    const second = await approve(run);
+
+    expect.soft(first.accepted).toBe(0);
+    expect.soft(second.errors).toEqual([]);
+    expect.soft(second.accepted).toBe(1);
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(fixHead(run));
+    expect.soft(fixPrs(run.w, run.pickup.fixBranch).map((p) => p.body)).toEqual(['The report after the later round.\n']);
+    expect.soft(runComments(run.w)).toHaveLength(1);
+    expect.soft(forcePushes(run.w.calls())).toEqual([]);
+    expect.soft(run.w.contractBreaches()).toEqual([]);
+  });
+
+  it('holds, pushing nothing, when the branch on GitHub is behind but this run has no open fix PR from it', async () => {
+    const run = await adoptedRun();
+    commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
+    run.w.gh.set({ failOnce: ['pr-create'] });
+    await approve(run);
+    const pushed = run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`);
+    commitFix(run, 'more.txt', 'a later fix\n', 'Fix what the next round found');
+
+    const reason = await expectHeld(run);
+
+    expect.soft(reason).toContain(run.pickup.fixBranch);
+    expect.soft(reason).toMatch(/Terminate/);
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(pushed);
+    expect.soft(fixPrs(run.w, run.pickup.fixBranch)).toEqual([]);
+  });
+
+  it('still holds, pushing nothing, when the branch on GitHub has a commit this run does not have', async () => {
+    const run = await adoptedRun();
+    commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
+    run.w.gh.set({ failOnce: ['comment-create'] });
+    await approve(run);
+    const theirs = run.w.pushAs(run.pickup.fixBranch, 'other.txt', 'someone else\n', 'Someone else’s commit', run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)!);
+    commitFix(run, 'more.txt', 'a later fix\n', 'Fix what the next round found');
+
+    expect.soft(await expectHeld(run)).toContain(run.pickup.fixBranch);
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(theirs);
   });
 });
 

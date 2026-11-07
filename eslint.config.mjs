@@ -9,8 +9,90 @@ import tseslint from 'typescript-eslint';
 // explicit `eslint-disable-next-line local/no-todo-comments`.
 const MARKER = /\b(TODO|FIXME)\b/;
 
+// CWE-78, and Linux caps one argument at 131,072 bytes. An array is a gh argv when its first element is a gh
+// command, so wrapper calls (`gh([...])`, `api([...])`) are caught as well as direct ones, and git's `-b` is not.
+const GH_COMMANDS = new Set(['pr', 'issue', 'api', 'release', 'gist', 'repo']);
+const BODY_FLAGS = new Set(['--body', '-b']);
+const BODY_PREFIXES = ['--body=', 'body='];
+/** The fixed leading text of a string literal or template literal element, or null for anything else. */
+function leadingText(node) {
+  if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node?.type === 'TemplateLiteral') return node.quasis[0]?.value.cooked ?? '';
+  return null;
+}
+
+// The functions whose result leads a git argv with gitHardening.ts's overrides; bootstrapProtectedArgs adds the
+// network hardening on top of them.
+const GIT_HARDENING = new Set(['coreExecHardeningArgs', 'bootstrapProtectedArgs']);
+/** The initializer of the const that `node` names, or null when it names anything else (a parameter, say). */
+function constInit(context, node) {
+  const variable = context.sourceCode.getScope(node).set.get(node.name)
+    ?? findVariable(context.sourceCode.getScope(node), node.name);
+  const def = variable?.defs[0];
+  return def?.type === 'Variable' && def.parent.kind === 'const' ? def.node.init : null;
+}
+function findVariable(scope, name) {
+  for (let s = scope; s !== null; s = s.upper) {
+    const found = s.set.get(name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+function isHardening(context, node) {
+  const value = node?.type === 'Identifier' ? constInit(context, node) : node;
+  return value?.type === 'CallExpression' && value.callee.type === 'Identifier' && GIT_HARDENING.has(value.callee.name);
+}
+function leadsWithHardening(context, argv) {
+  const array = argv?.type === 'Identifier' ? constInit(context, argv) : argv;
+  const first = array?.type === 'ArrayExpression' ? array.elements[0] : null;
+  return first?.type === 'SpreadElement' && isHardening(context, first.argument);
+}
+
 const localPlugin = {
   rules: {
+    'git-hardening': {
+      meta: {
+        type: 'problem',
+        docs: { description: "Require a git call to lead its argv with gitHardening.ts's overrides." },
+        messages: {
+          found: "Lead this git argv with coreExecHardeningArgs(freshDisabledHooksDir()) (or bootstrapProtectedArgs), never a second copy (CODE-STANDARDS.md § Git in a checked-out repository).",
+        },
+        schema: [],
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            const [command, argv] = node.arguments;
+            if (command?.type !== 'Literal' || command.value !== 'git') return;
+            if (!leadsWithHardening(context, argv)) context.report({ node, messageId: 'found' });
+          },
+        };
+      },
+    },
+    'no-gh-body-argv': {
+      meta: {
+        type: 'problem',
+        docs: { description: 'Disallow passing a gh PR, issue or comment body as a command-line argument.' },
+        messages: {
+          found: 'Send this gh body on stdin (`--body-file -`, or `--input -` for gh api), never as a command-line argument (CODE-STANDARDS.md, CWE-78).',
+        },
+        schema: [],
+      },
+      create(context) {
+        return {
+          ArrayExpression(node) {
+            if (!GH_COMMANDS.has(leadingText(node.elements[0]) ?? '')) return;
+            for (const element of node.elements) {
+              const text = leadingText(element);
+              if (text === null) continue;
+              if (BODY_FLAGS.has(text) || BODY_PREFIXES.some((prefix) => text.startsWith(prefix))) {
+                context.report({ node: element, messageId: 'found' });
+              }
+            }
+          },
+        };
+      },
+    },
     'no-todo-comments': {
       meta: {
         type: 'problem',
@@ -114,6 +196,14 @@ export default [
     languageOptions: { parser: tseslint.parser, ecmaVersion: 'latest', sourceType: 'module' },
     plugins: { local: localPlugin },
     rules: { 'local/no-todo-comments': 'error' },
+  },
+  {
+    files: ['src/**/*.{ts,tsx,mts,cts,js,mjs,cjs}', 'scripts/**/*.{ts,mts,cts,js,mjs,cjs}'],
+    rules: { 'local/no-gh-body-argv': 'error' },
+  },
+  {
+    files: ['src/**/*.{ts,tsx,mts,cts,js,mjs,cjs}'],
+    rules: { 'local/git-hardening': 'error' },
   },
   {
     files: CONTROLLER_TESTS,

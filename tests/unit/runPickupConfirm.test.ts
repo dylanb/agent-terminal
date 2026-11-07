@@ -55,7 +55,7 @@ describe('the proposal the operator is asked to confirm', () => {
   });
 
   it('falls back to the pickup record’s PR when the branch has no open PR, and says so', async () => {
-    const record = { kind: 'complete' as const, bootstrap: { pr: 233, branch: BRANCH, issue: 218 } };
+    const record = { kind: 'complete' as const, bootstrap: { kind: 'opened' as const, pr: 233, branch: BRANCH, issue: 218 } };
     const proposal = await proposeRunPickup(evidence({ bootstrapRecord: record }), lookup([]));
     expect(proposal).toMatchObject({ pr: 233, ticket: 218 });
     expect(proposal.problems.join('\n')).toContain(`no open pull request for ${BRANCH}`);
@@ -68,7 +68,7 @@ describe('the proposal the operator is asked to confirm', () => {
   });
 
   it('flags a pickup record that disagrees with what GitHub says', async () => {
-    const record = { kind: 'complete' as const, bootstrap: { pr: 100, branch: 'other', issue: 218 } };
+    const record = { kind: 'complete' as const, bootstrap: { kind: 'opened' as const, pr: 100, branch: 'other', issue: 218 } };
     const proposal = await proposeRunPickup(evidence({ bootstrapRecord: record }), lookup([open233]));
     expect(proposal.pr).toBe(233);
     expect(proposal.problems.join('\n')).toContain('#100');
@@ -99,7 +99,7 @@ describe('verifying what the operator confirms', () => {
   });
 
   it.each([
-    ['a closed PR', [{ ...open233, state: 'CLOSED' as const }], { pr: 233, ticket: 218 }, /not open/],
+    ['a closed PR', [{ ...open233, state: 'CLOSED' as const }], { pr: 233, ticket: 218 }, /pull request #233 is closed/],
     ['a PR on another branch', [{ ...open233, branch: 'other' }], { pr: 233, ticket: 218 }, /other/],
     ['a PR that does not close the ticket', [open233], { pr: 233, ticket: 300 }, /#300/],
     ['a PR GitHub does not know', [open233], { pr: 999, ticket: 218 }, /#999/],
@@ -173,7 +173,7 @@ describe('the hold', () => {
     const h = harness();
     const result = await h.confirmations.confirm('/repo', RUN, 233, 218);
     expect(result).toEqual({ ok: true });
-    expect(h.trusted).toEqual([{ pr: 233, branch: BRANCH, issue: 218, initialStatus: 'planning' }]);
+    expect(h.trusted).toEqual([{ kind: 'opened', pr: 233, branch: BRANCH, issue: 218, initialStatus: 'planning' }]);
     expect(h.confirmations.held('/repo')).toBe(false);
     expect(h.confirmations.view('/repo')).toBeUndefined();
   });
@@ -266,7 +266,7 @@ describe('the hold', () => {
 
 describe('which runs wait for a confirm', () => {
   const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
-  const complete = (pr: number, issue: number) => ({ kind: 'complete' as const, bootstrap: { pr, branch: 'plan-loop/issue-176', issue } });
+  const complete = (pr: number, issue: number) => ({ kind: 'complete' as const, bootstrap: { kind: 'opened' as const, pr, branch: 'plan-loop/issue-176', issue } });
   const facts = (over: Partial<Parameters<typeof awaitingPickupConfirm>[0]> = {}): Parameters<typeof awaitingPickupConfirm>[0] => ({
     run: RUN,
     pickupInFlight: false,

@@ -77,6 +77,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         ticket: 78,
         bodyFile: null,
         pickup: {
+          kind: 'opened',
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
@@ -101,6 +102,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         ticket: 78,
         bodyFile: null,
         pickup: {
+          kind: 'opened',
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
@@ -136,6 +138,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       ticket: 78,
       bodyFile,
       pickup: {
+        kind: 'opened',
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -215,6 +218,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       ticket: 78,
       bodyFile: null,
       pickup: {
+        kind: 'opened',
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -232,6 +236,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       ticket: 78,
       bodyFile,
       pickup: {
+        kind: 'opened',
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
@@ -250,7 +255,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        pickup: { pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
+        pickup: { kind: 'opened', pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
       }),
     ).rejects.toThrow(/pull request #42 is from another repository/);
     expect(g.state.ready).toEqual(new Set());
@@ -270,6 +275,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         ticket: 78,
         bodyFile: null,
         pickup: {
+          kind: 'opened',
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',

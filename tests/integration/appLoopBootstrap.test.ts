@@ -292,6 +292,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     expect(result).toMatchObject({
       ok: true,
       identity: {
+        kind: 'opened',
         pr: 42,
         branch: 'plan-loop/issue-78',
         issue: 78,
@@ -311,6 +312,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     expect(h.issueHasLabel(78, 'in-progress')).toBe(true);
     expect(h.prHasLabel(42, 'draft')).toBe(true);
     expect(written).toEqual({
+      kind: 'opened',
       pr: 42,
       branch: 'plan-loop/issue-78',
       issue: 78,
@@ -429,7 +431,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      identity: { pr: 42, branch: 'plan-loop/issue-78', issue: 78 },
+      identity: { kind: 'opened', pr: 42, branch: 'plan-loop/issue-78', issue: 78 },
     });
     expect(conflicts.wiped).toEqual([target()]);
   });
@@ -774,6 +776,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     expect(result).toMatchObject({
       ok: true,
       identity: {
+        kind: 'opened',
         pr: 42,
         branch: 'plan-loop/issue-78',
         issue: 78,
@@ -782,6 +785,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     });
     expect(g.hasBranch('plan-loop/issue-78')).toBe(true);
     expect(written).toEqual({
+      kind: 'opened',
       pr: 42,
       branch: 'plan-loop/issue-78',
       issue: 78,
@@ -957,6 +961,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
 describe('resolveAppGateRefs — live bootstrap identity routing', () => {
   const identity: AppLoopBootstrap = {
+    kind: 'opened',
     pr: 42,
     branch: 'plan-loop/issue-78',
     issue: 78,
@@ -985,28 +990,28 @@ describe('resolveAppGateRefs — live bootstrap identity routing', () => {
 });
 
 describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s identity', () => {
-  const accepted: AppLoopBootstrap = { pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' };
-  const persisted = { kind: 'complete', bootstrap: { pr: 42, branch: 'plan-loop/issue-77', issue: 77 } } as const;
+  const accepted: AppLoopBootstrap = { kind: 'opened', pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' };
+  const persisted = { kind: 'complete', bootstrap: { kind: 'opened', pr: 42, branch: 'plan-loop/issue-77', issue: 77 } } as const;
 
   it('holds the run to the accepted pickup branch even when the flow\'s ticket ref has changed or gone', () => {
-    expect(resolvePickupBranch({ kind: 'none' }, accepted, 79)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
-    expect(resolvePickupBranch(persisted, accepted, null)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
+    expect(resolvePickupBranch({ kind: 'none' }, accepted, { ticket: 79, pr: null, startedAt: null })).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
+    expect(resolvePickupBranch(persisted, accepted, { ticket: null, pr: null, startedAt: null })).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
   });
 
   it('after a relaunch, holds the run to the persisted pickup branch when it is for the flow\'s ticket', () => {
-    expect(resolvePickupBranch(persisted, null, 77)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-77' });
+    expect(resolvePickupBranch(persisted, null, { ticket: 77, pr: null, startedAt: null })).toEqual({ kind: 'branch', branch: 'plan-loop/issue-77' });
   });
 
   it('does not hold a run whose ticket has no completed pickup', () => {
-    expect(resolvePickupBranch(persisted, null, 80)).toEqual({ kind: 'none' });
-    expect(resolvePickupBranch({ kind: 'pending' }, null, 77)).toEqual({ kind: 'none' });
-    expect(resolvePickupBranch({ kind: 'none' }, null, 77)).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch(persisted, null, { ticket: 80, pr: null, startedAt: null })).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch({ kind: 'pending' }, null, { ticket: 77, pr: null, startedAt: null })).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch({ kind: 'none' }, null, { ticket: 77, pr: null, startedAt: null })).toEqual({ kind: 'none' });
   });
 
   it('fails closed on an invalid record, with or without an accepted pickup', () => {
     const invalid = { kind: 'invalid', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' } as const;
-    expect(resolvePickupBranch(invalid, null, 77)).toEqual({ kind: 'unreadable', detail: invalid.detail });
-    expect(resolvePickupBranch(invalid, accepted, 78)).toEqual({ kind: 'unreadable', detail: invalid.detail });
+    expect(resolvePickupBranch(invalid, null, { ticket: 77, pr: null, startedAt: null })).toEqual({ kind: 'unreadable', detail: invalid.detail });
+    expect(resolvePickupBranch(invalid, accepted, { ticket: 78, pr: null, startedAt: null })).toEqual({ kind: 'unreadable', detail: invalid.detail });
   });
 
   it("holds an adopting run to its fix branch, naming the PR and the primary ticket with its repository, before and after a relaunch (#304 AC 5)", () => {
@@ -1028,9 +1033,9 @@ describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s i
     const held = { kind: 'fix-branch', branch: adopted.fixBranch, pr: 41, primary: { repo: 'owner/repo', number: 176 } };
     const record = { kind: 'complete', bootstrap: adopted } as const;
 
-    expect.soft(resolvePickupBranch({ kind: 'none' }, adopted, null, 41)).toEqual(held);
-    expect.soft(resolvePickupBranch(record, null, null, 41, adopted.startedAt)).toEqual(held);
-    expect.soft(resolvePickupBranch(record, null, null, 42, adopted.startedAt)).toEqual({ kind: 'none' });
+    expect.soft(resolvePickupBranch({ kind: 'none' }, adopted, { ticket: null, pr: 41, startedAt: null })).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, { ticket: null, pr: 41, startedAt: adopted.startedAt })).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, { ticket: null, pr: 42, startedAt: adopted.startedAt })).toEqual({ kind: 'none' });
   });
 
   it("after a relaunch, does not hold an adopting run to an earlier run's fix branch on the same PR (#304 AC 13)", () => {
@@ -1050,7 +1055,7 @@ describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s i
       baseOid: 'b'.repeat(40),
     };
 
-    expect(resolvePickupBranch({ kind: 'complete', bootstrap: earlier }, null, null, 41, 1_700_000_099_999)).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch({ kind: 'complete', bootstrap: earlier }, null, { ticket: null, pr: 41, startedAt: 1_700_000_099_999 })).toEqual({ kind: 'none' });
   });
 });
 
@@ -1086,6 +1091,7 @@ function deferDepDefaults() {
 
 describe('createAppLoopBootstrapCoordinator — async step identity + rollback (ST2 AC4/AC7)', () => {
   const successOwnership = {
+    kind: 'opened' as const,
     base: 'main',
     branch: 'plan-loop/issue-78',
     ownedOid: '1111111111111111111111111111111111111111',
@@ -1094,6 +1100,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
   const success: AppLoopBootstrapResult = {
     ok: true,
     identity: {
+      kind: 'opened',
       pr: 42,
       branch: 'plan-loop/issue-78',
       issue: 78,
@@ -1299,6 +1306,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     finishes[1]({
       ok: true,
       identity: {
+        kind: 'opened',
         pr: 43,
         branch: 'plan-loop/issue-79',
         issue: 79,
@@ -1314,6 +1322,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     expect(acceptBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ entryToken: 2, issue: 79 }),
       {
+        kind: 'opened',
         pr: 43,
         branch: 'plan-loop/issue-79',
         issue: 79,
@@ -2002,12 +2011,14 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
   const success: AppLoopBootstrapResult = {
     ok: true,
     identity: {
+      kind: 'opened',
       pr: 42,
       branch: 'plan-loop/issue-78',
       issue: 78,
       initialStatus: 'planning',
     },
     ownership: {
+      kind: 'opened' as const,
       base: 'main',
       branch: 'plan-loop/issue-78',
       ownedOid: '1'.repeat(40),
@@ -2203,6 +2214,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
 
 describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (AC10)', () => {
   const successOwnership = {
+    kind: 'opened' as const,
     base: 'main',
     branch: 'plan-loop/issue-78',
     ownedOid: '2'.repeat(40),
@@ -2210,7 +2222,7 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (AC10)',
   };
   const success: AppLoopBootstrapResult = {
     ok: true,
-    identity: { pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' },
+    identity: { kind: 'opened', pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' },
     ownership: successOwnership,
   };
 

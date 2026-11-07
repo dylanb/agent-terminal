@@ -131,5 +131,5 @@ function readRunPickup(repoDir: string): { run: RunIdentity; pickup: RunPickup }
     return adopted.ok ? { run, pickup: adopted.pickup } : null;
   }
   if (!isPositiveInt(pr) || !isPositiveInt(issue) || !isNonBlank(branch) || !isNonBlank(initial_status)) return null;
-  return { run, pickup: { pr, branch, issue, initialStatus: initial_status } };
+  return { run, pickup: { kind: 'opened', pr, branch, issue, initialStatus: initial_status } };
 }

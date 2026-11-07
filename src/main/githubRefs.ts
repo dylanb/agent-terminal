@@ -5,10 +5,10 @@
 
 import { execFile } from 'node:child_process';
 import type { GithubRef, GithubRefKind } from '../shared/ipc';
-import { originFetchGitHubRepository } from './githubRepository';
+import { displayGitHubRepository } from './githubRepository';
 
 /** The `gh` sub-command + args that emit a ref's title/body/url as JSON, from the repository `selector` names
- *  (`<host>/<owner>/<name>`), so gh's own default repository never decides it. */
+ *  (`<host>/<owner>/<name>`). */
 export function ghArgs(kind: GithubRefKind, number: number, selector: string): string[] {
   return [kind, 'view', String(number), '--repo', selector, '--json', 'title,body,url'];
 }
@@ -33,7 +33,7 @@ const GH_TIMEOUT_MS = 5000;
 async function runGh(repoKey: string, kind: GithubRefKind, number: number): Promise<string | null> {
   let selector: string;
   try {
-    selector = (await originFetchGitHubRepository(repoKey)).selector;
+    selector = (await displayGitHubRepository(repoKey)).selector;
   } catch {
     return null;
   }

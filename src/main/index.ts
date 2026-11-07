@@ -552,9 +552,11 @@ async function createWindow(): Promise<void> {
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),
         trustedAppBootstraps.get(repoDir) ?? null,
-        flow.state(repoDir).refs?.ticket ?? null,
-        flow.state(repoDir).refs?.pr ?? null,
-        inProgressRunIdentity(repoDir)?.startedAt ?? null,
+        {
+          ticket: flow.state(repoDir).refs?.ticket ?? null,
+          pr: flow.state(repoDir).refs?.pr ?? null,
+          startedAt: inProgressRunIdentity(repoDir)?.startedAt ?? null,
+        },
       ),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
@@ -920,8 +922,16 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
       }
     },
-    compensateBootstrap: (job, ownership) =>
-      'kind' in ownership ? compensateAdoption(adoptionDeps(job.repoDir), ownership) : appBootstrapSession(job.repoDir).compensate(ownership),
+    compensateBootstrap: (job, ownership) => {
+      switch (ownership.kind) {
+        case 'adopted':
+          return compensateAdoption(adoptionDeps(job.repoDir), ownership);
+        case 'opened':
+          return appBootstrapSession(job.repoDir).compensate(ownership);
+        default:
+          return ownership satisfies never;
+      }
+    },
     finalizeBootstrap: (job, identity) => {
       if (job.issue === null || job.bootstrap === null || isAdoptPickup(job.bootstrap)) return Promise.resolve();
       return appBootstrapSession(job.repoDir).finalize(

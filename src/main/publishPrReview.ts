@@ -3,14 +3,15 @@ import path from 'node:path';
 import { CommandFailure, run } from './appBootstrapCommand';
 import { parseAppGitObjectId, runAppCommand } from './appCommand';
 import { bootstrapProtectedArgs } from './appBootstrapGit';
-import { createRealAppGateBranchCreate, createRealAppGateBranchTaken } from './appGatePush';
+import { createRealAppGateBranchOnGitHub, createRealAppGatePush, type AppGateBranchOnGitHub } from './appGatePush';
 import { createRealAdoptionGitHub } from './adoptionPorts';
-import { acceptableTickets, type AdoptionGitHub } from './adoptionStart';
+import type { AdoptionGitHub } from './adoptionStart';
+import { acceptableTickets, notOpenReason, type GitHubPullRequest } from './githubPullRequest';
 import { confinedRealPathResult } from './confinedPath';
 import { errMsg, isErrno } from './errno';
 import { freshDisabledHooksDir } from './gitHardening';
 import { matchesGitHubRepositoryUrl, repositoryHost, type GitHubRepositoryIdentity } from './githubRepository';
-import { createMarkedComments, markedCommentBody, type MarkedComments } from './markedComment';
+import { createMarkedComments, markedCommentLength, type MarkedComments } from './markedComment';
 import type { RunPickup } from './trustedPickups';
 import { isRecord } from './yamlRecord';
 import { isAdoptedPickup, sameTicketRef, type AdoptedPickup, type TicketRef } from '../shared/appBootstrap';
@@ -33,13 +34,12 @@ export interface PublishPrReviewPorts {
   isCommittedFile(oid: string, file: string): Promise<boolean>;
   /** Whether the operator can push to `repo` (`<owner>/<name>`). */
   canPush(repo: string): Promise<boolean>;
-  /** The commits on `branch` past `base`: how many, and whether any is a merge. */
-  fixCommits(base: string, branch: string): Promise<{ count: number; merges: boolean }>;
-  /** `git format-patch` output for `base..branch`, stating `base`; one combined commit titled `title` when
-   *  `combine` is set. */
-  patch(base: string, branch: string, combine: boolean, title: string): Promise<string>;
-  /** Why the fix branch cannot be published without overwriting another commit on GitHub, or null. */
-  fixBranchTaken(branch: string): Promise<string | null>;
+  fixCommitCount(base: string, branch: string): Promise<number>;
+  /** `git format-patch` output for `base..branch`, stating `base`, that `git am` applies on `base` to give
+   *  `branch`'s tree; `title` names any commit the patch must make in place of the branch's own. */
+  patch(base: string, branch: string, title: string): Promise<string>;
+  fixBranchOnGitHub(branch: string): Promise<AppGateBranchOnGitHub>;
+  /** Pushes the fix branch to GitHub without force, so git creates or fast-forwards it and never overwrites. */
   pushFixBranch(branch: string): Promise<void>;
   /** The open same-repository PR from `head` into `base`, the only one a run may take as its own. */
   fixPullRequest(head: string, base: string): Promise<FixPullRequest | null>;
@@ -84,11 +84,10 @@ function patchContent(report: string, patch: string, pickup: AdoptedPickup, why:
 }
 
 /** Why `pr` is no longer the PR the run recorded, or null when it still is. */
-function recordedPrMismatch(pickup: AdoptedPickup, pr: Awaited<ReturnType<AdoptionGitHub['pullRequest']>>, origin: GitHubRepositoryIdentity): string | null {
+function recordedPrMismatch(pickup: AdoptedPickup, pr: GitHubPullRequest, origin: GitHubRepositoryIdentity): string | null {
   const n = `pull request #${pickup.pr}`;
-  if (pr.state === 'CLOSED') return `${n} is closed`;
-  if (pr.state === 'MERGED') return `${n} is merged`;
-  if (pr.state !== 'OPEN') return `${n} is not open`;
+  const closed = notOpenReason(n, pr.state);
+  if (closed !== null) return closed;
   if (pr.headRepo === null) return `GitHub reports no head repository for ${n}, as for a deleted fork; the run recorded ${pickup.headRepo}`;
   if (pr.headRepo !== pickup.headRepo) return `${n}'s head repository is now ${pr.headRepo}, not ${pickup.headRepo} as the run recorded`;
   if (pr.crossRepository !== pickup.crossRepository) {
@@ -113,8 +112,27 @@ function adoptedPickupOf(request: PublishPrReviewRequest): AdoptedPickup {
   return pickup;
 }
 
-function oversize(what: string, body: string): string | null {
-  return body.length > GITHUB_BODY_LIMIT ? `the ${what} would be ${count(body.length)} characters, over GitHub's limit of ${count(GITHUB_BODY_LIMIT)}` : null;
+/** Why the fix branch on GitHub stops this publish, or null when it may go ahead. A branch behind the local fix
+ *  branch is this run's own earlier push, brought up to date only while this run's fix PR from it is open. */
+function fixBranchRefusal(pickup: AdoptedPickup, onGitHub: AppGateBranchOnGitHub, fixPr: FixPullRequest | null): string | null {
+  const branch = pickup.fixBranch;
+  switch (onGitHub.kind) {
+    case 'absent':
+    case 'at-head':
+      return null;
+    case 'behind':
+      return fixPr !== null
+        ? null
+        : `this run's fix branch ${branch} is on GitHub at its earlier commit ${onGitHub.remote}, but this run has no open fix pull request from it; nothing was pushed. Terminate the run and start it again to publish on a new fix branch`;
+    case 'diverged':
+      return `the branch ${branch} is already on GitHub at ${onGitHub.remote}, not in this run's ${onGitHub.head}; nothing was pushed or overwritten. Remove that branch from GitHub if it is not this run's, then approve again, or terminate the run`;
+    default:
+      return onGitHub satisfies never;
+  }
+}
+
+function oversize(what: string, length: number): string | null {
+  return length > GITHUB_BODY_LIMIT ? `the ${what} would be ${count(length)} characters, over GitHub's limit of ${count(GITHUB_BODY_LIMIT)}` : null;
 }
 
 /** §27.13 `publish-pr-review`: checks everything and composes every body before it writes, then writes each
@@ -132,12 +150,13 @@ export async function publishPrReview(ports: PublishPrReviewPorts, request: Publ
   const origin = await ports.github.origin();
   const mismatch = recordedPrMismatch(pickup, await ports.github.pullRequest(pickup.pr), origin);
   if (mismatch !== null) throw new Error(`${mismatch}; nothing was written`);
-  const taken = await ports.fixBranchTaken(pickup.fixBranch);
+  const existingFixPr = await ports.fixPullRequest(pickup.fixBranch, pickup.headRef);
+  const taken = fixBranchRefusal(pickup, await ports.fixBranchOnGitHub(pickup.fixBranch), existingFixPr);
   if (taken !== null) throw new Error(taken);
 
-  const fixes = await ports.fixCommits(pickup.headOid, pickup.fixBranch);
-  const pushable = fixes.count > 0 && !pickup.crossRepository && (await ports.canPush(pickup.headRepo));
-  const outcome: PublishOutcome = fixes.count === 0 ? 'report-comment' : pushable ? 'fix-pr' : 'patch-comment';
+  const fixes = await ports.fixCommitCount(pickup.headOid, pickup.fixBranch);
+  const pushable = fixes > 0 && !pickup.crossRepository && (await ports.canPush(pickup.headRepo));
+  const outcome: PublishOutcome = fixes === 0 ? 'report-comment' : pushable ? 'fix-pr' : 'patch-comment';
   const marker = runCommentMarker(pickup.fixBranch);
   const title = `Review fixes for #${pickup.pr}`;
 
@@ -145,25 +164,27 @@ export async function publishPrReview(ports: PublishPrReviewPorts, request: Publ
   if (outcome === 'report-comment') comment = report;
   if (outcome === 'patch-comment') {
     const why = pickup.crossRepository ? `it is in a fork, ${pickup.headRepo}` : `you do not have write permission on ${pickup.headRepo}`;
-    comment = patchContent(report, await ports.patch(pickup.headOid, pickup.fixBranch, fixes.merges, title), pickup, why);
+    comment = patchContent(report, await ports.patch(pickup.headOid, pickup.fixBranch, title), pickup, why);
   }
   const refusal =
     outcome === 'fix-pr'
-      ? (oversize('fix PR body', report) ?? oversize('run comment', markedCommentBody(marker, linkContent(origin, Number.MAX_SAFE_INTEGER))))
-      : oversize('run comment', markedCommentBody(marker, comment ?? ''));
+      ? (oversize('fix PR body', report.length) ?? oversize('run comment', markedCommentLength(marker, linkContent(origin, Number.MAX_SAFE_INTEGER))))
+      : oversize('run comment', markedCommentLength(marker, comment ?? ''));
   if (refusal !== null) throw new Error(`${refusal}; nothing was written`);
 
-  const login = await ports.comments.login();
+  const author = await ports.comments.author();
   if (outcome === 'fix-pr') {
     await ports.pushFixBranch(pickup.fixBranch);
-    let fixPr = await ports.fixPullRequest(pickup.fixBranch, pickup.headRef);
+    let fixPr = existingFixPr;
     if (fixPr === null) fixPr = await ports.createFixPullRequest(pickup.fixBranch, pickup.headRef, title, report);
     else await ports.replaceFixPullRequestBody(fixPr.number, report);
     comment = linkContent(origin, fixPr.number);
   }
-  await ports.comments.upsert(pickup.pr, login, marker, comment ?? '');
+  await author.upsert(pickup.pr, marker, comment ?? '');
   return outcome;
 }
+
+const lines = (s: string): number => s.split('\n').filter((l) => l.trim() !== '').length;
 
 const PUSH_PERMISSIONS = new Set(['ADMIN', 'MAINTAIN', 'WRITE']);
 
@@ -227,17 +248,14 @@ export function createRealPublishPrReviewPorts(repoDir: string): PublishPrReview
       const viewed = parseJson(await runAppCommand('gh', ['repo', 'view', `${host}/${repo}`, '--json', 'viewerPermission'], repoDir), 'a repository');
       return isRecord(viewed) && typeof viewed.viewerPermission === 'string' && PUSH_PERMISSIONS.has(viewed.viewerPermission);
     },
-    async fixCommits(base, branch) {
-      const range = `${base}..refs/heads/${branch}`;
-      const lines = (s: string): number => s.split('\n').filter((l) => l.trim() !== '').length;
-      const all = await git(['rev-list', '--end-of-options', range], `the fix branch ${branch} could not be read`);
-      const merges = await git(['rev-list', '--merges', '--end-of-options', range], `the fix branch ${branch} could not be read`);
-      return { count: lines(all), merges: lines(merges) > 0 };
+    async fixCommitCount(base, branch) {
+      return lines(await git(['rev-list', '--end-of-options', `${base}..refs/heads/${branch}`], `the fix branch ${branch} could not be read`));
     },
-    async patch(base, branch, combine, title) {
+    async patch(base, branch, title) {
       const failure = `the patch of ${branch} could not be made`;
       let tip = `refs/heads/${branch}`;
-      if (combine) {
+      // format-patch drops a merge commit, so a range holding one is sent as a single commit of the whole diff.
+      if (lines(await git(['rev-list', '--merges', '--end-of-options', `${base}..${tip}`], failure)) > 0) {
         const combined = await git(['commit-tree', '-p', base, '-m', title, `${tip}^{tree}`], failure);
         tip = parseAppGitObjectId(combined, 'combined commit');
       }
@@ -251,8 +269,8 @@ export function createRealPublishPrReviewPorts(repoDir: string): PublishPrReview
         throw e;
       }
     },
-    fixBranchTaken: createRealAppGateBranchTaken(repoDir),
-    pushFixBranch: createRealAppGateBranchCreate(repoDir),
+    fixBranchOnGitHub: createRealAppGateBranchOnGitHub(repoDir),
+    pushFixBranch: createRealAppGatePush(repoDir),
     async fixPullRequest(head, base) {
       const origin = await github.origin();
       const listed = parseJson(

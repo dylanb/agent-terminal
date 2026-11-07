@@ -197,6 +197,6 @@ export function isAdoptedPickupIntent(doc: Record<string, unknown>): boolean {
   return doc.kind === 'adopted' && isTicketNumber(doc.pr) && isPickupBranchName(doc.fix_branch);
 }
 
-export function isAdoptedPickup<T extends object>(pickup: T | AdoptedPickup): pickup is AdoptedPickup {
-  return 'kind' in pickup && pickup.kind === 'adopted';
+export function isAdoptedPickup<T extends { kind: string }>(pickup: T | AdoptedPickup): pickup is AdoptedPickup {
+  return pickup.kind === 'adopted';
 }

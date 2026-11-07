@@ -27,7 +27,7 @@ function seedRepoWithGh(listJson: string): { repo: string; argsLog: string } {
     '#!/usr/bin/env bash\n' +
       `if [ "$1" = "repo" ]; then printf '%s\\n' '${REPO_VIEW}'; exit 0; fi\n` +
       `if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf '%s\\n' "$*" > '${argsLog}'; printf '%s\\n' '${listJson}'; exit 0; fi\n` +
-      `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf '%s\\n' "$*" > '${argsLog}.view'; printf '%s\\n' '{"number":233,"url":"https://github.com/owner/repository/pull/233","headRefName":"plan-loop/issue-218","state":"OPEN","closingIssuesReferences":[{"number":218,"url":"https://github.com/owner/repository/issues/218"}],"isCrossRepository":false}'; exit 0; fi\n` +
+      `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf '%s\\n' "$*" > '${argsLog}.view'; printf '%s\\n' '{"number":233,"url":"https://github.com/owner/repository/pull/233","headRefName":"plan-loop/issue-218","baseRefName":"main","state":"OPEN","closingIssuesReferences":[{"number":218,"url":"https://github.com/owner/repository/issues/218"}],"isCrossRepository":false}'; exit 0; fi\n` +
       'exit 1\n',
     { mode: 0o755 },
   );
@@ -75,7 +75,7 @@ describe("a fork's pull request that also closes a ticket outside its base and h
     const view = JSON.stringify({
       number: 41,
       url: 'https://github.com/owner/repository/pull/41',
-      headRefName: 'feature/reviewed-change',
+      headRefName: 'feature/reviewed-change', baseRefName: 'main',
       state: 'OPEN',
       isCrossRepository: true,
       headRepository: { name: 'Fork' },
@@ -109,7 +109,7 @@ describe("a ticket run's pull request that also closes an issue in another repos
     const view = JSON.stringify({
       number: 233,
       url: 'https://github.com/owner/repository/pull/233',
-      headRefName: 'plan-loop/issue-218',
+      headRefName: 'plan-loop/issue-218', baseRefName: 'main',
       state: 'OPEN',
       isCrossRepository: false,
       closingIssuesReferences: [
@@ -125,6 +125,6 @@ describe("a ticket run's pull request that also closes an issue in another repos
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
-    await expect(createRealPullRequestLookup(repo).pullRequest(233)).rejects.toThrow('invalid GitHub closing issue identity');
+    await expect(createRealPullRequestLookup(repo).pullRequest(233)).rejects.toThrow('pull request #233 closes a ticket outside owner/repository');
   });
 });

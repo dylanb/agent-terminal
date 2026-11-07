@@ -152,6 +152,7 @@ describe('real app gate GitHub adapter', () => {
         ticket: 78,
         bodyFile: null,
         pickup: {
+          kind: 'opened',
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',

@@ -1,17 +1,13 @@
 // §28.3
 
-import { run } from './appBootstrapCommand';
+import { CommandFailure, run } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
 import { bootstrapProtectedArgs, isApprovedGitRemote } from './appBootstrapGit';
-import { createOriginConfigReader, soleOriginUrl } from './originUrl';
+import { createOriginConfigReader, soleRemoteUrl } from './originUrl';
 import { freshDisabledHooksDir } from './gitHardening';
 import { isGitObjectId } from '../shared/appBootstrap';
 
 export type RunAppGatePush = (branch: string) => Promise<void>;
-
-/** Publishes a run's own branch to origin without ever overwriting a remote commit: an absent branch is created,
- *  one already at the local head is left as it is, and one at any other commit is refused. */
-export type RunAppGateBranchCreate = (branch: string) => Promise<void>;
 
 interface PushTarget {
   remote: AppGitRemote;
@@ -25,7 +21,7 @@ async function pushTarget(repoDir: string, branch: string): Promise<PushTarget> 
   const protectedArgs = bootstrapProtectedArgs(freshDisabledHooksDir());
   const git = (args: string[], failure: string): Promise<string> =>
     run('git', [...protectedArgs, ...args], repoDir, failure);
-  const url = await soleOriginUrl(
+  const url = await soleRemoteUrl(
     createOriginConfigReader((args) => git(args, 'origin resolution failed')),
     'push',
   );
@@ -51,27 +47,41 @@ export function createRealAppGatePush(repoDir: string): RunAppGatePush {
   };
 }
 
-const takenReason = (branch: string, remote: string, oid: string): string =>
-  `the branch ${branch} is already on GitHub at ${remote}, not at this run's ${oid}; nothing was pushed or overwritten. Remove that branch from GitHub if it is not this run's, then approve again, or terminate the run`;
+/** Where a run's own branch stands on GitHub against its local head: absent, at it, behind it (the remote commit is
+ *  an ancestor of the local head, so a push only adds commits), or diverged from it (any other commit). */
+export type AppGateBranchOnGitHub =
+  | { kind: 'absent' }
+  | { kind: 'at-head' }
+  | { kind: 'behind'; remote: string; head: string }
+  | { kind: 'diverged'; remote: string; head: string };
 
-/** Why publishing `branch` to origin would overwrite a commit that is not the local head, or null when it would
- *  not: the branch is absent there, or already at the local head. */
-export type FindAppGateBranchTaken = (branch: string) => Promise<string | null>;
+export type ReadAppGateBranchOnGitHub = (branch: string) => Promise<AppGateBranchOnGitHub>;
 
-export function createRealAppGateBranchTaken(repoDir: string): FindAppGateBranchTaken {
-  return async (branch) => {
-    const t = await pushTarget(repoDir, branch);
-    const remote = await t.remote.readRef(t.url, t.ref);
-    return remote !== null && remote !== t.oid ? takenReason(branch, remote, t.oid) : null;
-  };
+async function branchOnGitHub(t: PushTarget): Promise<AppGateBranchOnGitHub> {
+  const remote = await t.remote.readRef(t.url, t.ref);
+  if (remote === null) return { kind: 'absent' };
+  if (remote === t.oid) return { kind: 'at-head' };
+  return (await isAncestor(t, remote)) ? { kind: 'behind', remote, head: t.oid } : { kind: 'diverged', remote, head: t.oid };
 }
 
-export function createRealAppGateBranchCreate(repoDir: string): RunAppGateBranchCreate {
-  return async (branch) => {
-    const t = await pushTarget(repoDir, branch);
-    const remote = await t.remote.readRef(t.url, t.ref);
-    if (remote === null) await t.remote.createRef(t.url, t.oid, t.ref);
-    else if (remote !== t.oid) throw new Error(takenReason(branch, remote, t.oid));
-    await trackRemote(t, branch);
-  };
+/** Whether `remote` is in the local head's history. Exit 1 from either probe is the answer no: a commit this
+ *  repository lacks, or one not in that history. */
+async function isAncestor(t: PushTarget, remote: string): Promise<boolean> {
+  const probes = [
+    ['rev-parse', '--verify', '--quiet', '--end-of-options', `${remote}^{commit}`],
+    ['merge-base', '--is-ancestor', '--end-of-options', remote, t.oid],
+  ];
+  for (const probe of probes) {
+    try {
+      await t.git(probe, 'push: ancestry check failed');
+    } catch (e) {
+      if (e instanceof CommandFailure && e.exitCode === 1) return false;
+      throw e;
+    }
+  }
+  return true;
+}
+
+export function createRealAppGateBranchOnGitHub(repoDir: string): ReadAppGateBranchOnGitHub {
+  return async (branch) => branchOnGitHub(await pushTarget(repoDir, branch));
 }

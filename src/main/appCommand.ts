@@ -133,6 +133,7 @@ export function createAppGitRemote(
       objectDirectory: string;
       objectFormat: 'sha1' | 'sha256';
     }> = Promise.all([
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       runAppCommand(
         'git',
         [
@@ -143,6 +144,7 @@ export function createAppGitRemote(
         ],
         repoDir,
       ),
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       runAppCommand('git', ['rev-parse', '--show-object-format'], repoDir),
     ]).then(([objects, objectFormat]) => {
       const rawObjects = objects.trim();
@@ -176,6 +178,7 @@ export function createAppGitRemote(
     );
     try {
       const repository = await layout();
+      // eslint-disable-next-line local/git-hardening -- runs in its own temporary repository under the caller's protected args
       await runAppCommand(
         'git',
         [
@@ -192,6 +195,7 @@ export function createAppGitRemote(
       // sees every object they own as unreachable and collects it.
       const noHousekeeping = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
       const git = (args: string[]): Promise<string> =>
+        // eslint-disable-next-line local/git-hardening -- runs in its own temporary repository under the caller's protected args
         executeAppCommand(
           'git',
           ['--git-dir', temporaryGitDir, ...configArgs, ...noHousekeeping, ...args],

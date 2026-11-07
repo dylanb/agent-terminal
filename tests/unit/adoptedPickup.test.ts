@@ -73,7 +73,7 @@ describe('jobMatchesFlowRefs — a job is current only while the flow still name
 });
 
 describe('trustedPickupServesJob — a job re-enters on the pickup its run trusts only when that pickup is its own', () => {
-  const OPENED = { pr: 9, branch: 'plan-loop/issue-176', issue: 176, initialStatus: 'planning' };
+  const OPENED = { kind: 'opened' as const, pr: 9, branch: 'plan-loop/issue-176', issue: 176, initialStatus: 'planning' };
   it('serves an adopt job from an adopted pickup for the same PR, and no other', () => {
     expect(trustedPickupServesJob(job({ adopt: 'pr', pr: 41 }), ADOPTED)).toBe(true);
     expect(trustedPickupServesJob(job({ adopt: 'pr', pr: 42 }), ADOPTED)).toBe(false);

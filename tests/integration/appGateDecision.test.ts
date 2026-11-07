@@ -1047,7 +1047,7 @@ describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
 
 // §28.3 — every gate commit is pushed to the branch of the pull request the pickup opened (§27.10).
 describe('runAppGateDecision — a gate commit is pushed to the pull request branch (§28.3)', () => {
-  const PICKUP: AppLoopBootstrap = { pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
+  const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
 
   it('pushes the pickup branch after the commit lands', async () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED'), bootstrap: PICKUP });
@@ -1090,7 +1090,7 @@ describe('runAppGateDecision — a gate commit is pushed to the pull request bra
 
 // §27.13 — at a human approval gate every approve failure leaves the gate open, and approving again retries.
 describe('runAppGateDecision — a failed approve at a human gate holds the gate for a retry (§27.13)', () => {
-  const PICKUP: AppLoopBootstrap = { pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
+  const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
   const COMMIT_THEN_PUBLISH: GateOptionDef[] = [
     { option: 'approve', sideEffects: [{ kind: 'commit', args: { label: 'approve' } }, { kind: 'gh', args: { action: 'publish-pr-body' } }] },
   ];

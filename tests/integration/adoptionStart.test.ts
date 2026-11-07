@@ -229,7 +229,7 @@ describe('runAdoptionStart — refusals that touch nothing (#304)', () => {
     ['GitHub reports no head repository (a deleted fork)', (pr) => { pr.headRepo = null; }, /no head repository/],
     ['its head repository is a name the record cannot hold', (pr) => { pr.headRepo = 'owner/..'; }, /head repository owner\/\.\. is not a repository name/],
     ['its base branch is a name the record cannot hold', (pr) => { pr.baseRefName = 'base+name'; }, /base branch base\+name is not a branch name/],
-    ['GitHub reports a state that is not open', (pr) => { (pr as { state: string }).state = 'DRAFTED'; }, /not open/],
+    ['GitHub reports a state that is not open', (pr) => { (pr as { state: string }).state = 'DRAFTED'; }, /state DRAFTED/],
   ])('refuses a PR when %s, creating no branch', async (_case, edit, why) => {
     const w = world();
     w.gh.update((state) => edit(state.pulls[0] as StandInPull));

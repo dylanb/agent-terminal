@@ -230,6 +230,7 @@ function buildWorld(root: string, options: AdoptionWorldOptions): AdoptionWorld 
       }
     },
     pushAs(branch, path, contents, message, startPoint) {
+      git(author, ['fetch', '-q', bareRemote, '+refs/heads/*:refs/remotes/bare/*']);
       const local = git(author, ['branch', '--list', branch]);
       if (local.length > 0) git(author, ['checkout', '-q', branch]);
       else git(author, ['checkout', '-q', '-b', branch, startPoint ?? git(author, ['rev-parse', headBranch])]);

@@ -129,7 +129,7 @@ export function createProofPublisher(root: string): ProofPublisher {
       );
     },
     async summary(pr, body) {
-      await comments.upsert(pr, await comments.login(), TEST_PROOF_COMMENT_MARKER, body);
+      await (await comments.author()).upsert(pr, TEST_PROOF_COMMENT_MARKER, body);
     },
   };
 }
@@ -137,13 +137,16 @@ export function createProofPublisher(root: string): ProofPublisher {
 export function createProofWorkingTree(root: string): ProofWorkingTree {
   return {
     async dirtyPaths() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       const status = await runAppCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], root);
       return porcelainPaths(status);
     },
     async head() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       return parseAppGitObjectId(await runAppCommand('git', ['rev-parse', '--verify', 'HEAD'], root), 'HEAD');
     },
     async branch() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       const current = (await runAppCommand('git', ['branch', '--show-current'], root)).trim();
       return current === '' ? null : current;
     },

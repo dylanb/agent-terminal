@@ -89,7 +89,7 @@ describe('the proposal for an adopting run', () => {
     const proposal = await proposeRunPickup(evidence(), lookup([{ ...REVIEWED, state: 'CLOSED' }]));
     expect.soft(proposal).toMatchObject({ pr: 41 });
     expect.soft(proposal.problems.join('\n')).toMatch(/#41/);
-    expect.soft(proposal.problems.join('\n')).toMatch(/closed|not open/i);
+    expect.soft(proposal.problems.join('\n')).toMatch(/Pull request #41 is closed\./);
   });
 });
 
@@ -119,7 +119,7 @@ describe("the confirm of an adopting run's pickup", () => {
 
   it.each([
     ['a ticket that is not the recorded primary', [REVIEWED], evidence(), 176, /177/],
-    ['a reviewed PR that is closed', [{ ...REVIEWED, state: 'CLOSED' as const }], evidence(), 177, /closed|not open/i],
+    ['a reviewed PR that is closed', [{ ...REVIEWED, state: 'CLOSED' as const }], evidence(), 177, /Pull request #41 is closed\./],
     ['a reviewed PR that no longer closes the primary', [{ ...REVIEWED, closingIssues: [176], closingTickets: [{ repo: 'owner/repo', number: 176 }] }], evidence(), 177, /177/],
     ['a checkout of a branch other than the fix branch', [REVIEWED], evidence({ branch: 'elsewhere' }), 177, new RegExp(FIX_BRANCH)],
     [

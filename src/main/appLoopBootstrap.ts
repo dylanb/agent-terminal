@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AppLoopEnterResult, AppLoopEntry, PickupBranch } from './appLoopEngine';
-import type { AppLoopBootstrap, PickupRecord, RecordedPickup } from './appLoopState';
+import type { AppLoopBootstrap, AppLoopBootstrapIntent, PickupRecord, RecordedPickup } from './appLoopState';
 import type { RunPickup } from './trustedPickups';
 import type { AppGateRefs } from './appGateDecision';
 import {
@@ -31,7 +31,7 @@ export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
   github: AppBootstrapGitHub;
   conflicts: AppBootstrapConflicts;
-  prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
+  prepareBootstrap(identity: AppLoopBootstrapIntent): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
   clearBootstrap(): void;
 }
@@ -62,6 +62,7 @@ export type AppBootstrapPrOwnership =
   | { kind: 'ambiguous'; marker: string; absentChecks?: number };
 
 export interface AppLoopBootstrapOwnership {
+  kind: 'opened';
   base: string;
   branch: string;
   ownedOid: string | null;
@@ -96,19 +97,20 @@ export function resolveAppGateRefs(
   };
 }
 
+/** The run a recorded pickup must belong to: the flow's ticket and PR refs, and the in-progress run's Start. */
+export interface FlowIdentity {
+  ticket: number | null;
+  pr: number | null;
+  startedAt: number | null;
+}
+
 /** §27.10 */
-export function resolvePickupBranch(
-  record: PickupRecord,
-  trustedBootstrap: RunPickup | null,
-  flowTicket: number | null,
-  flowPr: number | null = null,
-  runStartedAt: number | null = null,
-): PickupBranch {
+export function resolvePickupBranch(record: PickupRecord, trustedBootstrap: RunPickup | null, flow: FlowIdentity): PickupBranch {
   if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
   if (trustedBootstrap !== null) return heldTo(trustedBootstrap);
   if (record.kind !== 'complete') return { kind: 'none' };
   const recorded = record.bootstrap;
-  const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flowPr && recorded.startedAt === runStartedAt : recorded.issue === flowTicket;
+  const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flow.pr && recorded.startedAt === flow.startedAt : recorded.issue === flow.ticket;
   return forThisFlow ? heldTo(recorded) : { kind: 'none' };
 }
 
@@ -286,7 +288,8 @@ export async function runAppLoopBootstrap(
       }
       throw createError;
     }
-    const identity = {
+    const identity: AppLoopBootstrap = {
+      kind: 'opened',
       pr: createdPr,
       branch,
       issue: req.issue,
@@ -298,6 +301,7 @@ export async function runAppLoopBootstrap(
       ok: true,
       identity,
       ownership: {
+        kind: 'opened',
         base,
         branch,
         ownedOid,
@@ -308,6 +312,7 @@ export async function runAppLoopBootstrap(
     const error = errMsg(e);
     if (createdBranch === null || createdBase === null) return fail(error);
     const recovery: AppLoopBootstrapOwnership = {
+      kind: 'opened',
       base: createdBase,
       branch: createdBranch,
       ownedOid,

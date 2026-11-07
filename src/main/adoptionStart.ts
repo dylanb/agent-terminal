@@ -1,22 +1,12 @@
 import { errMsg } from './errno';
-import { matchesGitHubRepositoryUrl, repositoryHost, type GitHubRepositoryIdentity } from './githubRepository';
+import { repositoryHost, type GitHubRepositoryIdentity } from './githubRepository';
+import { acceptableTickets, notOpenReason, type GitHubPullRequest } from './githubPullRequest';
 import { adoptedFixBranch, isPickupBranchName, isRepositoryName, sameTicketRef, type AdoptedPickup, type TicketRef } from '../shared/appBootstrap';
-
-/** A pull request as the adoption start reads it from GitHub. */
-export interface AdoptionPullRequest {
-  state: string;
-  headRef: string;
-  baseRef: string;
-  /** `<owner>/<name>` of the head repository, lowercased; null when GitHub reports none (a deleted fork). */
-  headRepo: string | null;
-  crossRepository: boolean;
-  closingIssues: Array<{ url: string; number: number }>;
-}
 
 /** The adoption start's GitHub: reads only. */
 export interface AdoptionGitHub {
   origin(): Promise<GitHubRepositoryIdentity>;
-  pullRequest(pr: number): Promise<AdoptionPullRequest>;
+  pullRequest(pr: number): Promise<GitHubPullRequest>;
 }
 
 /** The adoption start's git. Every fetch reaches origin alone. */
@@ -24,8 +14,8 @@ export interface AdoptionGit {
   isCleanTree(): Promise<boolean>;
   /** Fetches PR `pr`'s head, which origin serves for a fork's PR too; returns its commit. */
   fetchPullRequestHead(pr: number): Promise<string>;
-  fetchBranch(branch: string): Promise<string>;
-  mergeBase(a: string, b: string): Promise<string>;
+  /** The commit PR head `headOid` is reviewed from: where it left base branch `baseRef` as origin has it now. */
+  reviewBase(baseRef: string, headOid: string): Promise<string>;
   /** The paths at which commit `oid` tracks the app's loop area, where the run keeps its own state, or puts
    *  anything but a folder in place of the app's state folder; names match in any case or Unicode form. */
   trackedRunStatePaths(oid: string): Promise<string[]>;
@@ -66,29 +56,11 @@ export type AdoptionStartResult =
   /** The PR closes several acceptable tickets and no pick was made: nothing was touched. */
   | { ok: false; kind: 'choose-ticket'; pr: number; tickets: TicketRef[] };
 
-const OPEN = 'OPEN';
-
-function ownerAndName(repo: string, host: string): GitHubRepositoryIdentity {
-  const [owner = '', name = ''] = repo.split('/');
-  return { selector: `${host}/${owner}/${name}`, owner, name, defaultBranch: '' };
-}
-
-/** The tickets `pr` closes in its base repository (origin) or its head repository, each with its repository. */
-export function acceptableTickets(pr: Pick<AdoptionPullRequest, 'headRepo' | 'closingIssues'>, origin: GitHubRepositoryIdentity): TicketRef[] {
-  const host = repositoryHost(origin);
-  const repositories = [origin, ...(pr.headRepo === null ? [] : [ownerAndName(pr.headRepo, host)])];
-  return pr.closingIssues.flatMap((issue) => {
-    const repository = repositories.find((r) => matchesGitHubRepositoryUrl(issue.url, r, 'issues', issue.number));
-    return repository === undefined ? [] : [{ repo: `${repository.owner}/${repository.name}`, number: issue.number }];
-  });
-}
-
 /** GitHub's `pr` as the adoption records it — its head repository — or why it cannot be adopted. */
-function adoptable(number: number, pr: AdoptionPullRequest): { ok: true; headRepo: string } | { ok: false; reason: string } {
+function adoptable(number: number, pr: GitHubPullRequest): { ok: true; headRepo: string } | { ok: false; reason: string } {
   const refuse = (reason: string) => ({ ok: false as const, reason });
-  if (pr.state === 'CLOSED') return refuse(`pull request #${number} is closed`);
-  if (pr.state === 'MERGED') return refuse(`pull request #${number} is merged`);
-  if (pr.state !== OPEN) return refuse(`pull request #${number} is not open`);
+  const closed = notOpenReason(`pull request #${number}`, pr.state);
+  if (closed !== null) return refuse(closed);
   if (!isPickupBranchName(pr.headRef)) return refuse(`pull request #${number}'s head branch ${pr.headRef} is not a branch name a pickup can record`);
   if (!isPickupBranchName(pr.baseRef)) return refuse(`pull request #${number}'s base branch ${pr.baseRef} is not a branch name a pickup can record`);
   if (pr.headRepo === null) return refuse(`pull request #${number} has no head repository on GitHub`);
@@ -124,8 +96,7 @@ export async function runAdoptionStart(deps: AdoptionStartDeps, req: AdoptionReq
     if (planted.length > 0) {
       return fail(`pull request #${req.pr} tracks the app's own run state at ${planted.join(', ')}, which a run never takes from a pull request`);
     }
-    const baseTip = await deps.git.fetchBranch(pr.baseRef);
-    const baseOid = await deps.git.mergeBase(baseTip, headOid);
+    const baseOid = await deps.git.reviewBase(pr.baseRef, headOid);
     if (await deps.git.branchExists(fixBranch)) {
       return fail(`the run's fix branch ${fixBranch} already exists; Terminate the run and start it again to adopt pull request #${req.pr} on a new fix branch`);
     }

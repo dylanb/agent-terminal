@@ -6,8 +6,8 @@ import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
 import {
   createOriginConfigReader,
-  soleOriginUrl,
-  type OriginDirection,
+  soleRemoteUrl,
+  type RemoteDirection,
 } from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
@@ -114,9 +114,9 @@ export function createRealAppBootstrapGit(
   // One read, graded and used: a check over its own read of config leaves a window in which the value
   // the operation reaches is not the value the allow-list approved.
   const approvedOriginUrl = async (
-    direction: OriginDirection,
+    direction: RemoteDirection,
   ): Promise<string> => {
-    const url = await soleOriginUrl(originConfig, direction);
+    const url = await soleRemoteUrl(originConfig, direction);
     if (url === null || !isApprovedGitRemote(url)) {
       throw new Error('unsafe origin transport configuration');
     }

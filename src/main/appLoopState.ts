@@ -376,7 +376,9 @@ export function refactorResultFile(repoDir: string, round: number): string | nul
 const BOOTSTRAP_FILE = 'bootstrap.yaml';
 
 /** §27.10 */
+/** A ticket run's pickup: the draft PR it opened on its own branch. Its files carry no `kind`; it is read as this. */
 export interface AppLoopBootstrap {
+  kind: 'opened';
   pr: number;
   branch: string;
   issue: number;
@@ -387,7 +389,7 @@ export type ReadAppLoopBootstrap = Omit<AppLoopBootstrap, 'initialStatus'> & {
   initialStatus?: string;
 };
 
-export type AppLoopBootstrapIntent = Omit<AppLoopBootstrap, 'pr'>;
+export type AppLoopBootstrapIntent = Omit<AppLoopBootstrap, 'pr' | 'kind'>;
 
 const bootstrapFileOf = (repoDir: string): string | null => {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
@@ -524,6 +526,7 @@ export function readPickupRecord(repoDir: string): PickupRecord {
   return {
     kind: 'complete',
     bootstrap: {
+      kind: 'opened',
       pr: doc.pr,
       branch: doc.branch,
       issue: doc.issue,

@@ -1,60 +1,20 @@
 import { realpathSync } from 'node:fs';
 import { run, CommandFailure } from './appBootstrapCommand';
-import { createAppGitRemote, parseAppGitObjectId, runAppCommand } from './appCommand';
+import { createAppGitRemote, parseAppGitObjectId } from './appCommand';
 import { bootstrapProtectedArgs, isApprovedGitRemote } from './appBootstrapGit';
 import { freshDisabledHooksDir } from './gitHardening';
 import { treeIsClean } from './gitTreeState';
-import { createOriginConfigReader, soleOriginUrl } from './originUrl';
+import { createOriginConfigReader, soleRemoteUrl } from './originUrl';
 import { createGitHubRepositorySource } from './githubRepository';
-import { isRecord } from './yamlRecord';
 import { namesAppLoopSegment } from './appLoopPaths';
-import type { AdoptionGit, AdoptionGitHub, AdoptionPullRequest } from './adoptionStart';
-
-const PR_FIELDS = 'state,headRefName,baseRefName,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences';
-
-/** `<owner>/<name>` of a PR's head repository, lowercased, from GitHub's `headRepository` and
- *  `headRepositoryOwner`; null when GitHub reports none (a deleted fork). */
-export function headRepositoryName(headRepository: unknown, headRepositoryOwner: unknown): string | null {
-  const name = isRecord(headRepository) && typeof headRepository.name === 'string' ? headRepository.name : null;
-  const owner = isRecord(headRepositoryOwner) && typeof headRepositoryOwner.login === 'string' ? headRepositoryOwner.login : null;
-  return name === null || owner === null ? null : `${owner}/${name}`.toLowerCase();
-}
-
-/** GitHub's answer for a PR, or a thrown reason when it is not the shape the adoption reads. */
-export function parseAdoptionPullRequest(raw: string): AdoptionPullRequest {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(raw);
-  } catch {
-    throw new Error('GitHub returned a pull request that is not JSON');
-  }
-  if (!isRecord(doc)) throw new Error('GitHub returned a pull request that is not an object');
-  const { state, headRefName, baseRefName, headRepository, headRepositoryOwner, isCrossRepository, closingIssuesReferences } = doc;
-  if (typeof state !== 'string' || typeof headRefName !== 'string' || typeof baseRefName !== 'string' || typeof isCrossRepository !== 'boolean') {
-    throw new Error('GitHub returned a pull request without its state, branches and fork flag');
-  }
-  if (!Array.isArray(closingIssuesReferences)) throw new Error('GitHub returned a pull request without its closing tickets');
-  const closingIssues = closingIssuesReferences.flatMap((issue: unknown) =>
-    isRecord(issue) && typeof issue.url === 'string' && typeof issue.number === 'number' ? [{ url: issue.url, number: issue.number }] : [],
-  );
-  return {
-    state,
-    headRef: headRefName,
-    baseRef: baseRefName,
-    headRepo: headRepositoryName(headRepository, headRepositoryOwner),
-    crossRepository: isCrossRepository,
-    closingIssues,
-  };
-}
+import type { AdoptionGit, AdoptionGitHub } from './adoptionStart';
+import { readGitHubPullRequest } from './githubPullRequest';
 
 export function createRealAdoptionGitHub(repoDir: string): AdoptionGitHub {
   const repository = createGitHubRepositorySource(repoDir);
   return {
     origin: () => repository.resolve(),
-    pullRequest: async (pr) => {
-      const { selector } = await repository.resolve();
-      return parseAdoptionPullRequest(await runAppCommand('gh', ['pr', 'view', String(pr), '--repo', selector, '--json', PR_FIELDS], repoDir));
-    },
+    pullRequest: async (pr) => readGitHubPullRequest(repoDir, await repository.resolve(), pr),
   };
 }
 
@@ -68,7 +28,7 @@ export function createRealAdoptionGit(repoDir: string): AdoptionGit {
   const expectedRepoRoot = realpathSync(repoDir);
   let restore: Checkout | null = null;
   const originFetchUrl = async (): Promise<string> => {
-    const url = await soleOriginUrl(originConfig, 'fetch');
+    const url = await soleRemoteUrl(originConfig, 'fetch');
     if (url === null || !isApprovedGitRemote(url)) throw new Error('unsafe origin transport configuration');
     return url;
   };
@@ -123,11 +83,11 @@ export function createRealAdoptionGit(repoDir: string): AdoptionGit {
       }
     },
     fetchPullRequestHead: (pr) => fetchCommit(`refs/pull/${pr}/head`, `could not fetch pull request #${pr}'s head from origin`),
-    fetchBranch: async (branch) => {
-      await git(['check-ref-format', '--branch', branch], 'branch name validation failed');
-      return fetchCommit(`refs/heads/${branch}`, `could not fetch branch ${branch} from origin`);
+    reviewBase: async (baseRef, headOid) => {
+      await git(['check-ref-format', '--branch', baseRef], 'branch name validation failed');
+      const baseTip = await fetchCommit(`refs/heads/${baseRef}`, `could not fetch branch ${baseRef} from origin`);
+      return parseAppGitObjectId(await git(['merge-base', baseTip, headOid], 'merge-base resolution failed'), 'merge-base');
     },
-    mergeBase: async (a, b) => parseAppGitObjectId(await git(['merge-base', a, b], 'merge-base resolution failed'), 'merge-base'),
     trackedRunStatePaths: async (oid) => {
       const planted: string[] = [];
       for (const top of (await treeEntries(oid)).filter((e) => namesAppLoopSegment(e.name, 0))) {

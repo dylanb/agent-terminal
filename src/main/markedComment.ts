@@ -8,20 +8,25 @@ export interface CommentRepository {
   name: string;
 }
 
-/** The comment body sent for `content` under `marker`: the marker on its own first line, hidden when rendered. */
-export function markedCommentBody(marker: string, content: string): string {
-  return `${marker}\n${content}`;
+const markedCommentBody = (marker: string, content: string): string => `${marker}\n${content}`;
+
+/** The length, as GitHub measures a body, of the comment `upsert` sends for `content` under `marker`. */
+export function markedCommentLength(marker: string, content: string): number {
+  return markedCommentBody(marker, content).length;
 }
 
 // Listing whole bodies overflows runAppCommand's 1 MiB output buffer on a PR with long comments.
 const lookupJq = (marker: string): string => `.[] | {id, login: .user.login, marked: (.body | startswith(${JSON.stringify(marker)}))}`;
 
+export interface CommentAuthor {
+  /** Edits this user's comment on issue or PR `issue` that carries `marker`, or creates one, holding `content`
+   *  under the hidden marker. */
+  upsert(issue: number, marker: string, content: string): Promise<void>;
+}
+
 export interface MarkedComments {
-  /** The logged-in user's login. */
-  login(): Promise<string>;
-  /** Edits `login`'s comment on issue or PR `issue` whose body starts with `marker`, or creates one, sending
-   *  exactly `markedCommentBody(marker, content)` on stdin. */
-  upsert(issue: number, login: string, marker: string, content: string): Promise<void>;
+  /** The logged-in user, read before any comment is written. */
+  author(): Promise<CommentAuthor>;
 }
 
 export function createMarkedComments(cwd: string, repository: () => Promise<CommentRepository>): MarkedComments {
@@ -46,16 +51,18 @@ export function createMarkedComments(cwd: string, repository: () => Promise<Comm
     return null;
   };
   return {
-    async login() {
+    async author() {
       const user: unknown = JSON.parse(await api(['user']));
       if (!isRecord(user) || typeof user.login !== 'string') throw new Error('gh api user did not name the logged-in user');
-      return user.login;
-    },
-    async upsert(issue, login, marker, content) {
-      const body = JSON.stringify({ body: markedCommentBody(marker, content) });
-      const found = await earlier(issue, login, marker);
-      if (found === null) await api(['--method', 'POST', await route(`issues/${issue}/comments`), '--input', '-'], body);
-      else await api(['--method', 'PATCH', await route(`issues/comments/${found}`), '--input', '-'], body);
+      const login = user.login;
+      return {
+        async upsert(issue, marker, content) {
+          const body = JSON.stringify({ body: markedCommentBody(marker, content) });
+          const found = await earlier(issue, login, marker);
+          if (found === null) await api(['--method', 'POST', await route(`issues/${issue}/comments`), '--input', '-'], body);
+          else await api(['--method', 'PATCH', await route(`issues/comments/${found}`), '--input', '-'], body);
+        },
+      };
     },
   };
 }

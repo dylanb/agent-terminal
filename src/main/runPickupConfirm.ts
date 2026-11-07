@@ -4,6 +4,7 @@
 import { errMsg } from './errno';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { pickupMismatch, type PullRequestLookup } from './pullRequestLookup';
+import { notOpenReason } from './githubPullRequest';
 import { runPickupRel, type RunPickup } from './trustedPickups';
 import type { PickupRecord, ReadAppLoopBootstrap } from './appLoopState';
 import { isAdoptedPickup, sameTicketRef, type AdoptedPickup } from '../shared/appBootstrap';
@@ -95,7 +96,8 @@ async function adoptedPickupProblem(record: AdoptedPickup, branch: string | null
   const primary = `${record.primary.repo}#${record.primary.number}`;
   try {
     const pr = await lookup.pullRequest(record.pr);
-    if (pr.state !== 'OPEN') return `Pull request #${record.pr} is ${pr.state.toLowerCase()}, not open.`;
+    const closed = notOpenReason(`Pull request #${record.pr}`, pr.state);
+    if (closed !== null) return `${closed}.`;
     if (!(pr.closingTickets ?? []).some((t) => sameTicketRef(t, record.primary))) return `Pull request #${record.pr} no longer closes ${primary}.`;
   } catch (e) {
     return `GitHub could not confirm pull request #${record.pr}: ${errMsg(e)}`;
@@ -269,7 +271,7 @@ export function createRunPickupConfirmations(deps: RunPickupConfirmDeps): RunPic
       if (refusal !== null) return { ok: false, reason: refusal };
       const held = heldAs(repoKey, run);
       if (held === null || held.initialStatus === null || branch === null) return { ok: false, reason: NO_LONGER_WAITING };
-      deps.trust(repoKey, { pr, branch, issue: ticket, initialStatus: held.initialStatus });
+      deps.trust(repoKey, { kind: 'opened', pr, branch, issue: ticket, initialStatus: held.initialStatus });
       proposals.delete(repoKey);
       deps.changed();
       return { ok: true };
