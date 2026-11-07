@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type WebSocket from 'ws';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
@@ -56,6 +60,55 @@ test('the waiting card installs the agent-terminal command before any controller
     await expect(card.getByText('agent-terminal --controller', { exact: false }).first()).toBeVisible();
     expect(starts(h.fixture.root)).toBe('');
   } finally { await h.dispose(); }
+});
+
+function pidsCarrying(marker: string): number[] {
+  if (!existsSync('/proc')) return [];
+  return readdirSync('/proc').filter(name => /^\d+$/.test(name)).filter(pid => {
+    try { return readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(marker); } catch { return false; }
+  }).map(Number);
+}
+
+test('the installed agent-terminal command launches the AppImage the app runs from', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  const owner = `AT_E2E_OWNER=${randomUUID()}`;
+  const fixtureDir = mkdtempSync(join(homedir(), '.agent-terminal-test-'));
+  try {
+    chmodSync(fixtureDir, 0o700);
+    const recorded = join(fixtureDir, 'recorded-launch-dir');
+    const appImage = join(fixtureDir, 'agent-terminal.AppImage');
+    writeFileSync(appImage, `#!/bin/sh\nprintf '%s' "$APP_LAUNCH_DIR" > ${JSON.stringify(recorded)}\n`, { mode: 0o700 });
+    const electronBinary = createRequire(resolve('package.json'))('electron') as string;
+    const home = join(h.fixture.root, 'user-home');
+    const userBin = join(home, '.local', 'bin');
+    mkdirSync(userBin, { recursive: true, mode: 0o755 });
+    const terminal = await h.launch(terminalTarget, h.fixture.nonGit, {
+      env: { HOME: home, PATH: `${userBin}:${h.fixture.env.PATH}`, APPDIR: dirname(electronBinary), APPIMAGE: appImage },
+    });
+    const card = terminal.page.locator('#startup-waiting');
+    await card.getByRole('button', { name: 'Install the agent-terminal command-line launcher' }).click();
+    const launcher = join(userBin, 'agent-terminal');
+    await expect(card.getByRole('status').filter({ hasText: launcher })).toContainText(`Installed agent-terminal at ${launcher}`);
+    const launchDir = join(fixtureDir, 'work-dir');
+    mkdirSync(launchDir);
+    const [name, value] = owner.split('=');
+    spawnSync(launcher, [launchDir], { env: { ...process.env, HOME: home, [name]: value }, stdio: 'ignore' });
+    await expect.poll(() => existsSync(recorded) ? readFileSync(recorded, 'utf8') : '').toBe(launchDir);
+  } finally {
+    const cleanupErrors: unknown[] = [];
+    try {
+      const deadline = Date.now() + 15_000;
+      for (let pids = pidsCarrying(owner); pids.length && Date.now() < deadline; pids = pidsCarrying(owner)) {
+        for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+        await delay(100);
+      }
+      const left = pidsCarrying(owner);
+      if (left.length) cleanupErrors.push(new Error(`processes still carry ${owner}: ${left.join(',')}`));
+    } catch (e) { cleanupErrors.push(e); }
+    rmSync(fixtureDir, { recursive: true, force: true });
+    try { await h.dispose(); } catch (e) { cleanupErrors.push(e); }
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'cleanup failed');
+  }
 });
 
 test('startup automatically registers after controller launch and starts exactly once', { tag: '@ownapp' }, async () => {

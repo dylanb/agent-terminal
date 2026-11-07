@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { generateShim, type LaunchInvocation } from '../../src/main/cliShim';
+import { generateShim, resolveLaunchInvocation, type LaunchInvocation } from '../../src/main/cliShim';
 
 // Process-level behavior of the generated shim (§23.4 / #25): run the REAL generated script through
 // /bin/sh and observe what it forwards across the OS boundary, with a recorder standing in for the app
@@ -220,5 +220,109 @@ describe('shim --controller (§23.5)', () => {
     mkdirSync(join(fixtureCwd, '--controller'));
     recorderShim();
     expect(resolve(await runShim(['./--controller']))).toBe(join(realCwd, '--controller'));
+  });
+});
+
+describe('shim for an AppImage launch (#306)', () => {
+  /** A stand-in binary at `file` that records `<label>|<APP_LAUNCH_DIR>` to recOut, then exits. */
+  function standIn(file: string, label: string): void {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `#!/bin/sh\nprintf '%s' "${label}|$APP_LAUNCH_DIR" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
+    chmodSync(file, 0o755);
+  }
+
+  /** An AppImage stand-in at `appImagePath` plus a differently-labelled "running binary" inside a mount
+   *  dir; the invocation comes from the production resolver, as the running app would obtain it. */
+  function appImageInvocation(appImagePath: string): { invocation: LaunchInvocation; mountDir: string } {
+    const mountDir = join(work, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(appImagePath, 'appimage');
+    standIn(mountBinary, 'mount');
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, work, { appImage: appImagePath, mountDir });
+    return { invocation, mountDir };
+  }
+
+  function writeShim(invocation: LaunchInvocation): void {
+    shimPath = join(work, 'agent-terminal');
+    writeFileSync(shimPath, generateShim(invocation));
+    chmodSync(shimPath, 0o755);
+  }
+
+  async function launchedWithin(args: string[], timeoutMs = 3000): Promise<string | null> {
+    rmSync(recOut, { force: true });
+    execFileSync(shimPath, args, { cwd: fixtureCwd, timeout: 5000 });
+    try {
+      return await readWhenReady(recOut, timeoutMs);
+    } catch {
+      return null;
+    }
+  }
+
+  async function runFailing(args: string[]): Promise<{ status: number | null; stderr: string; launched: boolean }> {
+    rmSync(recOut, { force: true });
+    const run = spawnSync(shimPath, args, { cwd: fixtureCwd, timeout: 5000, encoding: 'utf8' });
+    await new Promise((r) => setTimeout(r, 200));
+    return { status: run.status, stderr: run.stderr, launched: existsSync(recOut) };
+  }
+
+  it('launches the AppImage file, not the mount binary, with the directory argument as the launch target', async () => {
+    const appImage = join(work, 'apps', 'agent-terminal-1.4.0.AppImage');
+    writeShim(appImageInvocation(appImage).invocation);
+    mkdirSync(join(fixtureCwd, 'proj'));
+    expect(await launchedWithin(['proj'])).toBe(`appimage|${join(realCwd, 'proj')}`);
+  });
+
+  it('keeps launching the AppImage after the mount it was installed from is gone', async () => {
+    const appImage = join(work, 'apps', 'agent-terminal-1.4.0.AppImage');
+    const { invocation, mountDir } = appImageInvocation(appImage);
+    writeShim(invocation);
+    rmSync(mountDir, { recursive: true, force: true });
+    expect(await launchedWithin([])).toBe(`appimage|${realCwd}`);
+  });
+
+  it('launches the file now at the AppImage path after it is replaced in place', async () => {
+    const appImage = join(work, 'apps', 'agent-terminal-1.4.0.AppImage');
+    writeShim(appImageInvocation(appImage).invocation);
+    standIn(appImage, 'appimage-replaced');
+    expect(await launchedWithin([])).toBe(`appimage-replaced|${realCwd}`);
+  });
+
+  it.each([
+    ['a release-style name', 'agent-terminal-1.4.0.AppImage', 'agent-terminal-controller-1.4.0.AppImage'],
+    ['a fixed name', 'agent-terminal.AppImage', 'agent-terminal-controller.AppImage'],
+  ])('--controller launches the sibling controller AppImage for %s', async (_what, terminalName, controllerName) => {
+    const apps = join(work, 'apps');
+    writeShim(appImageInvocation(join(apps, terminalName)).invocation);
+    standIn(join(apps, controllerName), 'controller');
+    standIn(join(apps, 'agent-terminal-controller-9.9.9.AppImage'), 'wrong-controller');
+    const run = await runFailing(['--controller']);
+    expect.soft(run.status).toBe(0);
+    expect(await readWhenReady(recOut, 3000).catch(() => '')).toMatch(/^controller\|/);
+  });
+
+  it('--controller finds no candidate for an AppImage not named agent-terminal*, fails naming its folder, and launches nothing', async () => {
+    const apps = join(work, 'apps');
+    writeShim(appImageInvocation(join(apps, 'other.AppImage')).invocation);
+    standIn(join(apps, 'agent-terminal-controller.AppImage'), 'controller');
+    const run = await runFailing(['--controller']);
+    expect.soft(run.status).not.toBe(0);
+    expect.soft(run.stderr).toMatch(/no controller app found/i);
+    expect.soft(run.stderr).toContain(apps);
+    expect.soft(run.launched).toBe(false);
+  });
+
+  it.each([
+    ['a plain launch', [] as string[]],
+    ['--controller', ['--controller']],
+  ])('fails naming the AppImage path, launching nothing, when the file is gone (%s)', async (_what, args) => {
+    const apps = join(work, 'apps');
+    const appImage = join(apps, 'agent-terminal-1.4.0.AppImage');
+    writeShim(appImageInvocation(appImage).invocation);
+    standIn(join(apps, 'agent-terminal-controller-1.4.0.AppImage'), 'controller');
+    rmSync(appImage);
+    const run = await runFailing(args);
+    expect.soft(run.status).not.toBe(0);
+    expect.soft(run.stderr).toContain(appImage);
+    expect.soft(run.launched).toBe(false);
   });
 });
