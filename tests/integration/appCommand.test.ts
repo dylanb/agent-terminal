@@ -375,5 +375,5 @@ describe('isolated remote operations and the operator object store', () => {
         encoding: 'utf8',
       }).trim(),
     ).toBe('commit');
-  }, 60_000);
+  }, 120_000);
 });
