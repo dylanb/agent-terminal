@@ -84,13 +84,14 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
     ).toEqual({ execPath: '/tmp/.mount_AbC/agent-terminal-app', appArgs: [] });
   });
 
-  it('keeps the packaged result when the mount path is relative', () => {
+  it('keeps the packaged result when the mount path is relative, even one that resolves around the binary', () => {
+    const insideRelativeMount = path.resolve('.mount_AbC', 'agent-terminal-app');
     expect(
-      resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', {
+      resolveLaunchInvocation(insideRelativeMount, false, undefined, '/work', {
         appImage,
         mountDir: '.mount_AbC',
       }),
-    ).toEqual({ execPath: '/tmp/.mount_AbC/agent-terminal-app', appArgs: [] });
+    ).toEqual({ execPath: insideRelativeMount, appArgs: [] });
   });
 });
 
