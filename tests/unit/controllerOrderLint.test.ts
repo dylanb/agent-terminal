@@ -119,6 +119,7 @@ const ORDER_TESTS = [
   'tests/e2e/controllerRecency.spec.ts',
   'tests/e2e/controllerHold.spec.ts',
   'tests/browser/controllerRecency.test.ts',
+  'tests/browser/controllerAttentionReading.test.ts',
 ];
 
 describe('the card order tests wait on observed state and read no wall clock', () => {
