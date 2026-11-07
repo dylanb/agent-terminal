@@ -6,7 +6,7 @@
 
 import type { SliceBriefDelivery } from './sliceBriefReader';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
+import type { BoundaryPolicy, LoopDefV2, SelfCheck } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
@@ -16,6 +16,7 @@ import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
 import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
+import { exampleLoopCapabilities, LOOP_CAPABILITIES_FILENAME } from '../shared/loopCapabilities';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -111,6 +112,8 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  /** §29 */
+  selfCheck?: { kind: SelfCheck; checkCommand: string };
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
@@ -254,6 +257,29 @@ export function designCheckLines(): string[] {
   ];
 }
 
+/** §29 — the app's own capabilities reader, run over a `loop-capabilities.yaml` this run creates. The loop does
+ *  not gate on it: a file the repository already had is left untouched even when the reader rejects it. */
+function capabilitiesSelfCheckLines(checkCommand: string): string[] {
+  return [
+    '',
+    `SELF-CHECK — if this run creates \`${LOOP_CAPABILITIES_FILENAME}\` (including one an earlier attempt of this run`,
+    `created), check it with the app's own reader from the repo root and fix the file until the check prints`,
+    `\`${ARTIFACT_CHECK_PASSED}\`, before you write the done-signal:`,
+    '',
+    `    ${checkCommand}`,
+    '',
+    `The check applies only to a \`${LOOP_CAPABILITIES_FILENAME}\` this run creates. Never edit one the repository`,
+    'already had before this run, even when the check rejects it. A well-formed file, for shape only (describe the',
+    'real repository):',
+    '',
+    exampleLoopCapabilities().trimEnd(),
+  ];
+}
+
+const SELF_CHECK_LINES: Record<SelfCheck, (checkCommand: string) => string[]> = {
+  'loop-capabilities': capabilitiesSelfCheckLines,
+};
+
 /** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
 const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
 
@@ -296,6 +322,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   if (req.sliceBrief !== undefined) parts.push(...sliceBriefLines(req.sliceBrief, 'work'));
   if (req.goalReview !== undefined) parts.push(...req.goalReview);
   if (req.goalProgress !== undefined) parts.push(...req.goalProgress);
+  if (req.selfCheck !== undefined) parts.push(...SELF_CHECK_LINES[req.selfCheck.kind](req.selfCheck.checkCommand));
   if (req.completion?.kind === 'file') {
     parts.push(
       '',

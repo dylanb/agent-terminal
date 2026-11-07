@@ -22,6 +22,30 @@ describe('composeGateQuestion — an `auto` gate halt', () => {
 
 });
 
+describe('composeGateQuestion — a halt on a stall the turn can still resume', () => {
+  const resume = { turnKey: 'work-green#7', doneRelPath: '.agent-terminal/loop/turn-done' };
+  const stalled = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }], resume });
+  const failed = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }] });
+
+  it('tells a still-working agent which done-file and key resume its turn', () => {
+    const line = stalled.split('\n').find((l) => l.includes(resume.doneRelPath));
+    expect(line).toContain(resume.turnKey);
+  });
+
+  it('names no done-file for a halt the turn cannot resume', () => {
+    expect(failed).not.toContain(resume.doneRelPath);
+    expect(failed).not.toContain(resume.turnKey);
+  });
+
+  it('cannot break the resume line or carry control characters from the turn key', () => {
+    const q = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }], resume: { ...resume, turnKey: `alpha\n${String.fromCharCode(0x1b)}beta` } });
+    expect(q).not.toContain(String.fromCharCode(0x1b));
+    const line = q.split('\n').find((l) => l.includes(resume.doneRelPath));
+    expect(line).toContain('alpha');
+    expect(line).toContain('beta');
+  });
+});
+
 describe('composeGateQuestion — a human-authority gate', () => {
   const q = composeGateQuestion({ kind: 'human-gate', step: 'plan-approve' });
 

@@ -51,6 +51,8 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **`feature-dev-v3`.** The full chain: `preparation` (manual), `groom-intent`, `groom`, `groom-approve`, `plan`, `plan-approve`, `infra`, `red`, `green`, `refactor` (repeating back to `red` for each slice), `integration-slice`, `impl-approve`, `finalize`. See [Bundled flows](#bundled-flows).
 - **`simple-dev-v1`.** The light path for a ticket that would be one `feature-dev-v3` slice: `preparation` (manual), `plan` (picks up the ticket and writes its intent), `plan-approve` (warns when the ticket is better suited to `feature-dev-v3` and flags new complexity that would go under-reviewed), `dev` (one test-driven loop with a `RED:` and a `GREEN:` commit per increment, written by Sonnet sub-agents), `integration-slice`, `impl-approve` and `finalize`. Back to dev on the `dev`, `integration-slice` and `impl-approve` gates returns the run to `dev`.
 - **`plan-only`.** Groom a ticket and produce a reviewed plan, then stop.
+- **`repo-setup`.** Gets a repository ready for agent loops with no ticket: the agent ignores `.agent-terminal/` in `.gitignore` and writes a `loop-capabilities.yaml`, you approve, then it opens a draft PR following the repository's own contribution rules.
+- **Setup check.** At startup, and the first time a terminal enters a git repository, the app checks that the installed examples are current, that git ignores the whole `.agent-terminal/` folder, and that the repository has a valid `loop-capabilities.yaml`. A popup lists what fails and offers **Install/update examples**, **Run setup loop** (starts `repo-setup`), or a dismissal per repository or until the app updates. See [spec §29](docs/spec/29-repository-setup-check.md).
 - **Epics.** An epic-capable plan is parsed into ordered sub-tickets. At the approve gate, a confirm-first **promote** action creates them on GitHub, and the preview and the promotion read the same parse.
 - **Goal-mode work turns.** A loop step can run as an agent `/goal` session that reports progress through a validated progress file.
 - **Context hygiene.** `/clear` is sent at loop boundaries (`boundary: pre-work`), and goal loops send `/compact` as a checkpoint every `checkpoint.passes` review passes (set per loop), with an optional boundary `/compact`.
@@ -76,7 +78,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **Gate options.** approve, request-changes, impasse, redo, polish, and **Back to RED** (with an optional slice brief).
 - **Hand back to me.** Returns an iterating loop to you at the next consolidation.
 - **Decision boundaries.** Briefs state what the agent may decide; anything outside it surfaces under **Needs your call** at the gate.
-- **Todo checklists per stage** (ticket grooming, plan review, implementation review, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
+- **Todo checklists per stage** (plan review, implementation review, polish, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
 - **Needs-you signals.** The terminal shows a red **Loop needs you** status bar, and the controller highlights the card and tray icon. These are in-app signals, not OS notifications.
 
 ### Controller
@@ -235,6 +237,7 @@ Merging is always left to a person. The definitions live in [`example/flows/`](e
 | A bug fix or small feature that fits one slice of work | `simple-dev-v1` (build from source until a release ships it) |
 | A multi-slice feature, or an epic to split into sub-tickets | `feature-dev-v3` |
 | "Plan this, don't build it" | `plan-only` |
+| Get a repository ready for agent loops (no ticket) | `repo-setup` (build from source until a release ships it) |
 
 `simple-dev-v1` runs fewer reviews. Its plan approval warns you when the ticket looks too big for it, and the way out is to terminate that run and start the ticket again under `feature-dev-v3`.
 
@@ -347,6 +350,28 @@ Legend: `manual` means a person completes the step.
 - `finalize`: you complete it and mark it done.
 
 **When:** you want a reviewed plan to hand to someone else, or to build later.
+
+### `repo-setup`
+
+Not yet in a published release; available when built from source.
+
+**What:** Gets a repository ready for agent loops. It takes no GitHub issue. The agent adds a whole-folder `.agent-terminal/` rule to `.gitignore` if git doesn't already ignore it, and writes a `loop-capabilities.yaml` from the repository's real test files and commands if there is none, checking it with the app's own reader. Nothing is committed or pushed until you approve.
+
+**How:** start it from the picker, or with **Run setup loop** in the setup-check popup. It refuses to start while the repository already has a flow run in progress.
+
+```mermaid
+flowchart TD
+  setup["setup<br/>human"] --> publish["publish<br/>human"]
+```
+
+Legend: neither step has reviewers.
+
+**Your decisions:**
+
+- `setup` (approve or redo): review the `.gitignore` and `loop-capabilities.yaml` changes. Approve lets the agent commit them and open a draft PR, following the repository's `CLAUDE.md`, `CONTRIBUTING` and PR template; it files an issue only if those rules require one.
+- `publish` (approve or redo): approve completes the run. Merging the PR is yours.
+
+**When:** a new repository, or one the setup-check popup says is missing its ignore rule or capabilities file.
 
 ### Your own flows
 
