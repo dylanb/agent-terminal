@@ -56,17 +56,25 @@ function observationOf(card: ControllerDirectoryCard, observations: CardObservat
 /** Each used launch directory's latest recency interaction, a higher number for a later one. */
 export type CardRecency = ReadonlyMap<string, number>;
 
-export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, _recency: CardRecency): CardListEntry[] {
+export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
   const observed = cards.map(card => ({ card, observation: observationOf(card, observations) }));
   const groups = SUMMARY_LABELS.map(group => ({
     group,
     members: observed
       .filter(({ observation }) => observation.group === group)
       .sort((a, b) => a.observation.enteredAt - b.observation.enteredAt || a.observation.seen - b.observation.seen)
-      .map(({ card }): CardListEntry => ({ kind: 'card', card })),
+      .map(({ card }) => card),
   })).filter(({ members }) => members.length);
-  if (sortMode === 'recently-used') return !groups.length ? [] : [{ kind: 'heading', name: RECENTLY_USED_HEADING }, ...groups.flatMap(({ members }) => members)];
-  return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'heading', name: GROUP_HEADINGS[group], count: members.length }, ...members]);
+  const entry = (card: ControllerDirectoryCard): CardListEntry => ({ kind: 'card', card });
+  if (sortMode === 'recently-used') {
+    if (!groups.length) return [];
+    const attention = groups.flatMap(({ members }) => members);
+    const used = attention.filter(card => recency.has(card.launchDirectory))
+      .sort((a, b) => recency.get(b.launchDirectory)! - recency.get(a.launchDirectory)!);
+    const untouched = attention.filter(card => !recency.has(card.launchDirectory));
+    return [{ kind: 'heading', name: RECENTLY_USED_HEADING }, ...[...used, ...untouched].map(entry)];
+  }
+  return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'heading', name: GROUP_HEADINGS[group], count: members.length }, ...members.map(entry)]);
 }
 
 const MINUTE = 60_000;

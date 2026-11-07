@@ -13,6 +13,8 @@ export interface ControllerCardDeps {
   onAction(): void | Promise<unknown>;
   onClearHistory?(): void | Promise<unknown>;
   onDismissLoopMessage(id: string): void | Promise<unknown>;
+  /** The operator pressed one of the card's own controls and the control accepted the press. */
+  onUse?(): void;
   from?: CardState;
 }
 
@@ -55,6 +57,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const actions = carried?.actions ?? createPressGroup();
   const reasons: { text: string; reason: ClampedReason }[] = [];
   const fullReasons = new Set<string>();
+  const use = (): void => deps.onUse?.();
+  const used = (pressed: () => unknown) => (): unknown => {
+    use();
+    return pressed();
+  };
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
     const created = doc.createElement(tag);
     created.className = className;
@@ -119,11 +126,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   let loopMessageDismiss: HTMLButtonElement | undefined;
   const actionKind: Action = model.kind === 'disconnected' ? 'dismiss' : 'bring-forward';
-  const action = (label: string, name: string, use: () => unknown) => {
+  const action = (label: string, name: string, pressed: () => unknown) => {
     const button = element('button', 'controller-card-action', label);
     button.type = 'button';
     button.setAttribute('aria-label', `${name} ${model.launchDirectory}`);
-    actions.bind(button, use, { key: name });
+    actions.bind(button, used(pressed), { key: name });
     return button;
   };
 
@@ -140,7 +147,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     actionButton.title = count > 1 ? 'Bring all of these terminals forward' : 'Bring this terminal forward';
     actionButton.setAttribute('aria-label', `${label} ${repositoryName} ${model.launchDirectory}`);
     actionButton.append(icon('M7 17L17 7M9 7h8v8'));
-    actions.bind(actionButton, deps.onAction, { key: actionKind });
+    actions.bind(actionButton, used(deps.onAction), { key: actionKind });
     header.append(actionButton);
   }
   if (actionKind === 'dismiss') body.append(' ', actionButton);
@@ -198,6 +205,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
         onToggle(full) {
           if (full) fullReasons.add(text);
           else fullReasons.delete(text);
+          use();
         },
       }) });
     }
@@ -220,6 +228,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   onPress(toggle, () => {
     chosenExpanded = !expanded;
     setExpanded(chosenExpanded);
+    use();
   });
 
   function focused(): Focus | undefined {

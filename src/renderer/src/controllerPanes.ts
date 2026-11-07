@@ -80,6 +80,9 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   let observations: CardObservations | undefined;
   let directories: ControllerDirectoryCard[] = [];
   let sortMode = CONTROLLER_DEFAULT_SORT_MODE;
+  const recency = new Map<string, number>();
+  let uses = 0;
+  let resortQueued = false;
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
     const slot = doc.createElement('span');
@@ -210,7 +213,22 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
         if (directory.kind !== 'single') return;
         return deps.controller.dismissLoopMessage(directory.activationTargets[0], id).catch(announce);
       },
+      onUse() {
+        recency.set(directory.launchDirectory, ++uses);
+        if (resortQueued) return;
+        resortQueued = true;
+        queueMicrotask(() => {
+          resortQueued = false;
+          if (!disposed && observations && !sameCardOrder(observations)) renderList();
+        });
+      },
     });
+  }
+
+  /** Whether the list rule would place the cards where they are shown, so a rebuild would only replace the pressed control. */
+  function sameCardOrder(observed: CardObservations): boolean {
+    const order = cardList(directories, observed, sortMode, recency).flatMap(entry => (entry.kind === 'card' ? [entry.card] : []));
+    return order.length === cards.length && order.every((card, index) => card === cards[index].directory);
   }
 
   function renderList(): void {
@@ -222,7 +240,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     cards.forEach(({ card }) => card.dispose());
     list.replaceChildren();
     cards = [];
-    for (const entry of cardList(directories, observed, sortMode, new Map())) {
+    for (const entry of cardList(directories, observed, sortMode, recency)) {
       if (entry.kind === 'heading') list.append(groupHeading(entry));
       else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
     }
@@ -237,6 +255,8 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
 
   const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
     directories = directoryCards(snapshot);
+    const present = new Set(directories.map(({ launchDirectory }) => launchDirectory));
+    for (const directory of recency.keys()) if (!present.has(directory)) recency.delete(directory);
     observations = observeCards(observations, directories, deps.clock.now());
     announceAttention(directories);
     header.render(directories);
