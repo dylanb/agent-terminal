@@ -163,7 +163,7 @@ export function statusService(
     },
     async setSortMode(next) {
       savedSortModes.push(next);
-      if (options.sortModeSave === 'rejected') throw new Error('sort mode not saved');
+      if (options.sortModeSave === 'rejected') throw new Error('sort store full');
       sortMode = next;
     },
     async getAlwaysOnTop() {

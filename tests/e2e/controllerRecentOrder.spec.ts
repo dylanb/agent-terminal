@@ -48,10 +48,12 @@ test('real terminals re-sort to one Recently used heading in Attention order and
     await sortOptionLocator(page, 'Recently used').click();
     await expect.soft.poll(() => orderShown(page, [x, y])).toEqual(recent);
 
+    await expect(sortOptionLocator(page, 'Recently used')).not.toHaveAttribute('aria-busy', 'true');
     await sortOptionLocator(page, 'Recently used').focus();
     await page.keyboard.press('ArrowLeft');
     await expect.soft.poll(() => orderShown(page, [x, y])).toEqual(attention);
 
+    await expect(sortOptionLocator(page, 'Attention')).not.toHaveAttribute('aria-busy', 'true');
     await sortOptionLocator(page, 'Attention').focus();
     await page.keyboard.press('ArrowRight');
     await expect.soft.poll(() => orderShown(page, [x, y])).toEqual(recent);

@@ -249,6 +249,7 @@ describe('recency from a card\'s own controls', () => {
       press(cardHeaderIn(card(host, 'i2'), d('i2')));
       const used = await listSettled(host, USE_DIRECTORIES, recentlyUsed(d('i2')));
       (await sortOption(host, 'Attention')).click();
+      await vi.waitFor(() => expect(sortOptionIn(host, 'Attention')?.getAttribute('aria-busy')).toBeNull());
       (await sortOption(host, 'Recently used')).click();
       clock.advance(MINUTE);
       const reported = USE_TERMINALS.map(terminal =>
@@ -356,6 +357,19 @@ describe('the saved sort choice', () => {
     } finally { dispose(); }
   });
 
+  it('logs the reason when the saved choice cannot be read', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { host, dispose } = mountControllerPanes({ terminals: TERMINALS, sortMode: 'unreadable' });
+    try {
+      const start = await settled(host, TERMINALS, { list: ATTENTION, selected: 'Attention', sentence: 'attention' });
+      expect({ start, reasonLogged: logged.mock.calls.some(call => call.map(String).join(' ').includes('sort mode unreadable')) })
+        .toEqual({ start: { list: ATTENTION, selected: ['Attention'], sentences: ['attention'] }, reasonLogged: true });
+    } finally {
+      dispose();
+      logged.mockRestore();
+    }
+  });
+
   it('saves each order the operator selects, in order', async () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: TERMINALS });
     try {
@@ -394,7 +408,7 @@ describe('the saved sort choice', () => {
       expect.soft(service.savedSortModes, 'the choice is sent to main to save').toEqual(['recently-used']);
       expect({
         screen: await settled(host, TERMINALS, { list: RECENTLY_USED, selected: 'Recently used', sentence: 'recently-used' }),
-        reasonLogged: logged.mock.calls.some(call => call.map(String).join(' ').includes('sort mode not saved')),
+        reasonLogged: logged.mock.calls.some(call => call.map(String).join(' ').includes('sort store full')),
       }).toEqual({ screen: { list: RECENTLY_USED, selected: ['Recently used'], sentences: ['recently-used'] }, reasonLogged: true });
     } finally {
       dispose();

@@ -97,13 +97,25 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   sentence.textContent = SORT_SENTENCES[sortMode];
   header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot, ' ', sortSlot, sentence);
   const alwaysOnTopControl = createAlwaysOnTopControl(alwaysOnTopSlot, { controller: deps.controller });
-  const sortControl = createSortModeControl(sortSlot, {
-    mode: sortMode,
-    onChange(next) {
-      sortMode = next;
-      sentence.textContent = SORT_SENTENCES[next];
-      renderList();
-    },
+  const showSortMode = (next: ControllerSortMode) => {
+    sortMode = next;
+    sentence.textContent = SORT_SENTENCES[next];
+    renderList();
+  };
+  let sortControl: { dispose(): void } | undefined;
+  void deps.controller.getSortMode().catch((error: unknown): ControllerSortMode => {
+    console.error(`Controller sort mode not read: ${error instanceof Error ? error.message : String(error)}`);
+    return CONTROLLER_DEFAULT_SORT_MODE;
+  }).then(saved => {
+    if (disposed) return;
+    if (saved !== sortMode) showSortMode(saved);
+    sortControl = createSortModeControl(sortSlot, {
+      mode: saved,
+      onChange(next) {
+        showSortMode(next);
+        return deps.controller.setSortMode(next).catch(error => console.error(`Controller sort mode not saved: ${error instanceof Error ? error.message : String(error)}`));
+      },
+    });
   });
   let themeToggle: { dispose(): void } | undefined;
   void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
@@ -270,7 +282,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       unsubscribeClock();
       alwaysOnTopControl.dispose();
       themeToggle?.dispose();
-      sortControl.dispose();
+      sortControl?.dispose();
       cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();
       host.classList.remove('controller-panes');
