@@ -1,10 +1,12 @@
 import { _electron, type ElectronApplication } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAppHome } from '../../src/main/launchRoot';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import type { ControllerLoopMessage } from '../../src/shared/ipc';
+import { busyExecutableReport } from './busyExecutable';
 import { withSetupCheckOff } from './setupCheckEnv';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
@@ -71,6 +73,11 @@ export const electron = {
       return app;
     } catch (error) {
       await release();
+      if (error instanceof Error && error.message.includes('ETXTBSY')) {
+        const report = busyExecutableReport(options.executablePath ?? (createRequire(__filename)('electron') as string));
+        console.error(report);
+        error.message = `${error.message}\n${report}`;
+      }
       throw error;
     }
   },

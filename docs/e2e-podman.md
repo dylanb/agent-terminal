@@ -58,9 +58,9 @@ podman machine start
   into `out/main/example/`, from the VM rather than through the macOS file share. Parallel install-examples tests
   listing them through the share intermittently failed with `ENOMEM` (`scandir`). The container's build never
   reaches the checkout's `out/`.
-- The entrypoint fetches the Electron binary once (`node -e "require('electron')"`) before the tests. Electron
-  downloads a missing binary on first `require`, so on a fresh `node_modules` volume every worker downloaded it at
-  once and launches failed with `ETXTBSY`.
+- The entrypoint fetches the Electron binary once (`node node_modules/electron/install.js`) before the tests.
+  Electron downloads a missing binary on first `require`, so on a fresh `node_modules` volume every worker downloaded
+  it at once and launches failed with `ETXTBSY`.
 - The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
   `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
   exits and mask the result (see `e2e/entrypoint.sh`).
