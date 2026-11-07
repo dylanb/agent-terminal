@@ -1,13 +1,22 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
+import type {
+  InstallDestinationId,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+  InstallPreviewId,
+  SetupDismissReply,
+  SetupStatusReply,
+} from '../../shared/ipc';
 import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
+import { asksBeforeInstall, createInstallConsent, type InstallChoice, type InstallPreview } from './installConsent';
 import { createModalShell } from './modalShell';
+import type { PressGroup } from './pressable';
 import type { SetupFlowRun } from './setupFlowRun';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
   dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
-  /** Opens the Settings view's install-examples flow. */
-  openInstallExamples(): void;
+  previewExamples(): Promise<InstallExamplesPreview>;
+  installExamples(previewId: InstallPreviewId, replace: InstallDestinationId[], removeRetired: boolean): Promise<InstallExamplesResult>;
   /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
   runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
   /** Shows a message that must outlive the closed dialog. */
@@ -51,6 +60,20 @@ const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
 const SETUP_REFUSED_TITLE = 'The setup loop could not run';
 const DISMISSAL_NOT_SAVED = 'The dismissal could not be saved:';
 
+type StatusOk = Extract<SetupStatusReply, { ok: true }>;
+
+const reasonOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+function footButton(doc: Document, foot: HTMLElement, presses: PressGroup, label: string, action: () => unknown): HTMLButtonElement {
+  const control = doc.createElement('button');
+  control.type = 'button';
+  control.className = 'pill';
+  control.textContent = label;
+  presses.bind(control, action);
+  foot.append(control);
+  return control;
+}
+
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
     case 'examples':
@@ -90,10 +113,65 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
   }
 
-  function show(reply: Extract<SetupStatusReply, { ok: true }>): Promise<void> {
-    const { repoKey, isRepository, appVersion } = reply;
+  function show(first: StatusOk): Promise<void> {
+    const { repoKey, isRepository, appVersion } = first;
     const shown = new Promise<void>((resolve) => (closed = resolve));
-    const render = (entries: SetupConditionEntry[], focusFirstAction: boolean): void =>
+    let alertLine: HTMLElement;
+
+    async function installAndReread(reply: StatusOk, confirm: () => void, previewId: InstallPreviewId, choice: InstallChoice): Promise<void> {
+      const installFailure = await deps
+        .installExamples(previewId, choice.replace, choice.removeRetired)
+        .then((result) => (result.ok ? null : result.error), reasonOf);
+      const reread = await deps.status(repoKey).catch((e: unknown): SetupStatusReply => ({ ok: false, reason: reasonOf(e) }));
+      if (disposed) return;
+      if (!reread.ok) {
+        renderList(reply, true);
+        alertLine.textContent = installFailure ?? reread.reason;
+        return;
+      }
+      if (reread.entries.length === 0) {
+        confirm();
+        settle();
+        return;
+      }
+      renderList(reread, true);
+      if (installFailure !== null) alertLine.textContent = installFailure;
+    }
+
+    async function previewAndInstall(reply: StatusOk, confirm: () => void): Promise<void> {
+      const preview = await deps.previewExamples().catch((e: unknown): InstallExamplesPreview => ({ ok: false, error: reasonOf(e) }));
+      if (disposed) return;
+      if (!preview.ok) {
+        alertLine.textContent = preview.error;
+        return;
+      }
+      if (asksBeforeInstall(preview)) return renderQuestion(reply, preview);
+      return installAndReread(reply, confirm, preview.previewId, { replace: [], removeRetired: false });
+    }
+
+    function renderQuestion(reply: StatusOk, preview: InstallPreview): void {
+      shell.render(({ doc, titleId, close, confirm, presses }) => {
+        const consent = createInstallConsent(doc, titleId, preview);
+        const card = doc.createElement('div');
+        card.className = 'card';
+        const title = doc.createElement('h3');
+        title.className = 'serif';
+        title.id = titleId;
+        title.textContent = consent.title;
+        const foot = doc.createElement('div');
+        foot.className = 'mfoot';
+        const install = footButton(doc, foot, presses, 'Install', () =>
+          installAndReread(reply, confirm, preview.previewId, consent.choice()),
+        );
+        footButton(doc, foot, presses, 'Back to the list', () => renderList(reply, true));
+        footButton(doc, foot, presses, 'Close', close);
+        card.append(title, consent.explanation, consent.body, foot);
+        return { card, initialFocus: consent.initialFocus ?? install, describedById: consent.explanation.id, grow: consent.body, scroll: consent.body };
+      });
+    }
+
+    const renderList = (reply: StatusOk, focusFirstAction: boolean): void => {
+      const entries = reply.entries;
       shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
         const card = doc.createElement('div');
         card.className = 'card';
@@ -117,18 +195,11 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         const error = doc.createElement('p');
         error.className = 'ph';
         error.setAttribute('role', 'alert');
+        alertLine = error;
         body.append(intro, list, error);
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
-        const button = (label: string, action: () => unknown): HTMLButtonElement => {
-          const control = doc.createElement('button');
-          control.type = 'button';
-          control.className = 'pill';
-          control.textContent = label;
-          presses.bind(control, action);
-          foot.append(control);
-          return control;
-        };
+        const button = (label: string, action: () => unknown): HTMLButtonElement => footButton(doc, foot, presses, label, action);
         const lists = (dismissal: SetupDismissal): boolean =>
           entries.some((entry) => silencedBy(dismissal).includes(entry.condition));
         const dismissWith = (dismissal: SetupDismissal) => (): Promise<void> =>
@@ -140,7 +211,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
                 return;
               }
               const remaining = entries.filter((entry) => !silencedBy(dismissal).includes(entry.condition));
-              if (remaining.length > 0) return render(remaining, true);
+              if (remaining.length > 0) return renderList({ ...reply, entries: remaining }, true);
               confirm();
               settle();
             },
@@ -150,13 +221,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
           );
         const actions: HTMLButtonElement[] = [];
         if (entries.some((entry) => entry.condition === 'examples')) {
-          actions.push(
-            button('Install/update examples', () => {
-              confirm();
-              settle();
-              deps.openInstallExamples();
-            }),
-          );
+          actions.push(button('Install/update examples', () => previewAndInstall(reply, confirm)));
         }
         const forRepo: SetupDismissal = { kind: 'repo', repoKey };
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
@@ -178,7 +243,8 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
         return { card, initialFocus, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
       });
-    render(reply.entries, false);
+    };
+    renderList(first, false);
     return shown;
   }
 

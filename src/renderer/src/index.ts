@@ -89,7 +89,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
-const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
+createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>
     window.examples.apply(previewId, replace, removeRetired),
@@ -357,10 +357,8 @@ if (setupCheckHost) {
   const setupCheck = createSetupCheckDialog(setupCheckHost, {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
-    openInstallExamples: () => {
-      shell.setView('4');
-      installExamples.open();
-    },
+    previewExamples: () => window.examples.preview(),
+    installExamples: (previewId, replace, removeRetired) => window.examples.apply(previewId, replace, removeRetired),
     runSetupFlow: createSetupFlowRun({
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),

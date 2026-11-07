@@ -366,12 +366,13 @@ test('when an installed example differs, Install/update examples asks the replac
   const soft = expect.configure({ soft: true });
 
   await popup.getByRole('button', { name: INSTALL }).click();
-  await soft(popup.getByRole('checkbox').first()).toBeVisible();
-  await soft(popup.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
-  await soft(popup.getByRole('button', { name: 'Back to the list' })).toBeVisible();
+  const question = page.getByRole('dialog');
+  await soft(question.getByRole('checkbox').first()).toBeVisible();
+  await soft(question.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
+  await soft(question.getByRole('button', { name: 'Back to the list' })).toBeVisible();
   await soft(installView(page)).toBeHidden();
   await soft(page.locator('[aria-modal="true"]')).toHaveCount(1);
-  await popup.getByRole('button', { name: 'Install', exact: true }).click({ timeout: 2_000 }).catch(() => undefined);
+  await question.getByRole('button', { name: 'Install', exact: true }).click();
 
   await soft(popupFor(page, repo)).toBeVisible();
   await soft(entriesOf(popupFor(page, repo))).toHaveCount(3);

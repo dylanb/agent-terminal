@@ -127,10 +127,7 @@ export function fakeSetupDeps() {
   const setupRuns: string[] = [];
   const setupRunReplies: SetupFlowRun[] = [];
   const announcements: Array<{ title: string; message: string }> = [];
-  const deps: SetupCheckDialogDeps & {
-    previewExamples(): Promise<InstallExamplesPreview>;
-    installExamples(previewId: InstallPreviewId, replace: InstallDestinationId[], removeRetired: boolean): Promise<InstallExamplesResult>;
-  } = {
+  const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       statusRequests.push(repoKey);
       const held = holds.get(repoKey);
@@ -150,7 +147,6 @@ export function fakeSetupDeps() {
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
-    openInstallExamples: () => {},
     previewExamples: async () => {
       previewCount += 1;
       const next = previewReplies.shift() ?? { ok: false as const, error: 'no preview scripted' };
