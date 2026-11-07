@@ -78,7 +78,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **Gate options.** approve, request-changes, impasse, redo, polish, and **Back to RED** (with an optional slice brief).
 - **Hand back to me.** Returns an iterating loop to you at the next consolidation.
 - **Decision boundaries.** Briefs state what the agent may decide; anything outside it surfaces under **Needs your call** at the gate.
-- **Todo checklists per stage** (ticket grooming, plan review, implementation review, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
+- **Todo checklists per stage** (plan review, implementation review, polish, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
 - **Needs-you signals.** The terminal shows a red **Loop needs you** status bar, and the controller highlights the card and tray icon. These are in-app signals, not OS notifications.
 
 ### Controller
