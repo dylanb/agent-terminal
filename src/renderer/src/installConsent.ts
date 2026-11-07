@@ -6,6 +6,7 @@ import {
   type RetiredExample,
 } from '../../shared/ipc';
 import { RETIRED_FLOW_IDS } from '../../shared/retiredFlows';
+import type { ModalCard } from './modalShell';
 
 export type InstallPreview = Extract<InstallExamplesPreview, { ok: true }>;
 
@@ -40,29 +41,22 @@ function retiredList(retired: RetiredExample[]): string {
 const conflictsOf = (preview: InstallPreview): Conflict[] =>
   preview.destinations.flatMap((d) => (d.conflict ? [d] : []));
 
-/** Whether installing this preview asks the operator a question first (differing files or retired examples). */
 export function asksBeforeInstall(preview: InstallPreview): boolean {
   return conflictsOf(preview).length > 0 || preview.retired.length > 0;
 }
 
 export interface InstallConsent {
-  title: string;
-  /** The explanatory paragraph, id `${idPrefix}-msg`; the caller names it as the dialog's description. */
-  explanation: HTMLElement;
-  /** The groups of choices; the caller passes it as the modal shell's grow and scroll slots. */
-  body: HTMLElement;
-  /** The first checkbox, else the retired checkbox, or null when the question has neither. */
-  initialFocus: HTMLElement | null;
+  card(foot: HTMLElement, fallbackFocus: HTMLElement): ModalCard;
   choice(): InstallChoice;
 }
 
-export function createInstallConsent(doc: Document, idPrefix: string, preview: InstallPreview): InstallConsent {
+export function createInstallConsent(doc: Document, titleId: string, preview: InstallPreview): InstallConsent {
   const conflicts = conflictsOf(preview);
   const { retired, retiredFallback } = preview;
 
   const p = doc.createElement('p');
   p.className = 'ph';
-  p.id = `${idPrefix}-msg`;
+  p.id = `${titleId}-msg`;
   p.textContent = [
     ...(conflicts.length > 0
       ? ['Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.']
@@ -81,7 +75,7 @@ export function createInstallConsent(doc: Document, idPrefix: string, preview: I
     const group = doc.createElement('div');
     group.className = 'install-consent';
     group.setAttribute('role', 'group');
-    const groupLabelId = `${idPrefix}-${key}-group-label`;
+    const groupLabelId = `${titleId}-${key}-group-label`;
     group.setAttribute('aria-labelledby', groupLabelId);
     const groupLabel = doc.createElement('span');
     groupLabel.className = 'ic-group-label';
@@ -103,7 +97,7 @@ export function createInstallConsent(doc: Document, idPrefix: string, preview: I
     label.className = 'ic-label';
     const box = doc.createElement('input');
     box.type = 'checkbox';
-    const filesId = `${idPrefix}-${key}-files`;
+    const filesId = `${titleId}-${key}-files`;
     box.setAttribute('aria-describedby', filesId);
     const name = doc.createElement('span');
     name.className = 'ic-name';
@@ -148,11 +142,19 @@ export function createInstallConsent(doc: Document, idPrefix: string, preview: I
     retiredBox.setAttribute('data-retired', '');
   }
 
+  const title = doc.createElement('h3');
+  title.className = 'serif';
+  title.id = titleId;
+  title.textContent = conflicts.length > 0 ? 'Replace existing files?' : 'Install examples?';
+  const firstChoice: HTMLElement | null = boxes.values().next().value ?? retiredBox;
+
   return {
-    title: conflicts.length > 0 ? 'Replace existing files?' : 'Install examples?',
-    explanation: p,
-    body,
-    initialFocus: boxes.values().next().value ?? retiredBox,
+    card: (foot, fallbackFocus) => {
+      const card = doc.createElement('div');
+      card.className = 'card';
+      card.append(title, p, body, foot);
+      return { card, initialFocus: firstChoice ?? fallbackFocus, describedById: p.id, grow: body, scroll: body };
+    },
     choice: () => ({
       replace: [...boxes].filter(([, box]) => box.checked).map(([id]) => id),
       removeRetired: retiredBox?.checked ?? false,

@@ -45,7 +45,6 @@ export function setupCheckScreen(host: ParentNode) {
       return found[0];
     },
     hasControl: (name: string): boolean => exposed(open(), 'button').some((el) => accessibleName(el) === name),
-    /** Every checkbox in the dialog, in order. */
     checkboxes: (): HTMLInputElement[] => exposed(open(), 'checkbox') as HTMLInputElement[],
     /** The text of the dialog's alert region, or null when it shows none. */
     alert(): string | null {

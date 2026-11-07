@@ -311,7 +311,6 @@ test('on a fresh machine, a repository passing its own conditions lists the exam
   await expect.soft(popup.getByRole('button', { name: INSTALL })).toBeVisible();
 });
 
-/** From now on, the most `aria-modal` dialogs the page has had open at once. */
 async function recordMaxModals(page: Page): Promise<() => Promise<number>> {
   await page.evaluate(() => {
     const state = { max: document.querySelectorAll('[aria-modal="true"]').length };
@@ -323,7 +322,6 @@ async function recordMaxModals(page: Page): Promise<() => Promise<number>> {
   return () => page.evaluate(() => (window as unknown as { maxModals: { max: number } }).maxModals.max);
 }
 
-/** Resolves once the app's own status for `repoKey` lists no examples entry, whichever view or dialog is showing. */
 async function waitForExamplesInstalled(page: Page, repoKey: string): Promise<void> {
   await expect
     .poll(() => page.evaluate((key) => window.setup.status(key).then((r) => r.ok && !r.entries.some((e) => e.condition === 'examples')), repoKey))

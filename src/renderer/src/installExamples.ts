@@ -168,14 +168,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   function promptReplace(preview: InstallPreview, returnFocus: () => void): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
       const consent = createInstallConsent(d, titleId, preview);
-      const cardEl = d.createElement('div');
-      cardEl.className = 'card';
-      const h3 = d.createElement('h3');
-      h3.className = 'serif';
-      h3.id = titleId;
-      h3.textContent = consent.title;
-      cardEl.append(h3, consent.explanation, consent.body);
-
       const foot = d.createElement('div');
       foot.className = 'mfoot';
       const cancel = d.createElement('button');
@@ -193,10 +185,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         installGroup.run(btn, () => install(preview.previewId, replace, removeRetired, returnFocus));
       });
       foot.append(cancel, confirm);
-      cardEl.append(foot);
-
-      // The body slots are declared on the contract (UI §5.7); the shell applies them.
-      return { card: cardEl, initialFocus: consent.initialFocus ?? confirm, describedById: consent.explanation.id, grow: consent.body, scroll: consent.body };
+      return consent.card(foot, confirm);
     });
   }
 

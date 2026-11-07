@@ -7,6 +7,11 @@
 - Run setup loop removes the entries the setup flow fixes and brings the popup back with whatever else is listed; a refusal shows its reason in the popup, which keeps every entry, and no separate alert opens;
 - the popup closes only through Close, Escape or the scrim, or when nothing is left listed.
 
+`UI-STANDARDS.md` §5 gains two rules from this work (operator decision 2026-11-07), each with a definition-of-done item:
+
+- item 10: a reason a dialog is rebuilt with is written as the card is built and named in its description, not filled into a fresh alert line in the same task;
+- item 11: content shown in more than one dialog builds its whole `ModalCard` from the dialog's title id and footer, and each dialog supplies only its own controls.
+
 ## Stalled loop turns resume from the gate question
 
 §27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:

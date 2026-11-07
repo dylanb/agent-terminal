@@ -1,5 +1,4 @@
 import type {
-  InstallDestinationId,
   InstallExamplesPreview,
   InstallExamplesResult,
   InstallPreviewId,
@@ -16,7 +15,7 @@ export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
   dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
   previewExamples(): Promise<InstallExamplesPreview>;
-  installExamples(previewId: InstallPreviewId, replace: InstallDestinationId[], removeRetired: boolean): Promise<InstallExamplesResult>;
+  installExamples(previewId: InstallPreviewId, choice: InstallChoice): Promise<InstallExamplesResult>;
   /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
   runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
@@ -120,7 +119,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
 
     async function installAndReread(reply: StatusOk, confirm: () => void, previewId: InstallPreviewId, choice: InstallChoice): Promise<void> {
       const installFailure = await deps
-        .installExamples(previewId, choice.replace, choice.removeRetired)
+        .installExamples(previewId, choice)
         .then((result) => (result.ok ? null : result.error), reasonOf);
       const reread = await deps.status(repoKey).catch((e: unknown): SetupStatusReply => ({ ok: false, reason: reasonOf(e) }));
       if (disposed) return;
@@ -147,12 +146,6 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     function renderQuestion(reply: StatusOk, preview: InstallPreview): void {
       shell.render(({ doc, titleId, close, confirm, presses }) => {
         const consent = createInstallConsent(doc, titleId, preview);
-        const card = doc.createElement('div');
-        card.className = 'card';
-        const title = doc.createElement('h3');
-        title.className = 'serif';
-        title.id = titleId;
-        title.textContent = consent.title;
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
         const install = footButton(doc, foot, presses, 'Install', () =>
@@ -160,8 +153,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         );
         footButton(doc, foot, presses, 'Back to the list', () => renderList(reply, true));
         footButton(doc, foot, presses, 'Close', close);
-        card.append(title, consent.explanation, consent.body, foot);
-        return { card, initialFocus: consent.initialFocus ?? install, describedById: consent.explanation.id, grow: consent.body, scroll: consent.body };
+        return consent.card(foot, install);
       });
     }
 

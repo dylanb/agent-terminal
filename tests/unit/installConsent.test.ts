@@ -9,7 +9,6 @@ import {
 } from '../../src/renderer/src/installConsent';
 import type { DestRelativePath, InstallDestinationId, RetiredExample } from '../../src/shared/ipc';
 
-// Install-consent molecule (UI-STANDARDS §1.2/§3.1): the choice it yields matches what the operator ticked.
 describe('install consent molecule', () => {
   const rels = (...p: string[]): DestRelativePath[] => p as DestRelativePath[];
 
@@ -25,11 +24,16 @@ describe('install consent molecule', () => {
   });
   const RETIRED: RetiredExample[] = [{ destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath }];
 
-  const build = (p: InstallPreview): InstallConsent => {
-    const consent = createInstallConsent(document, 'ic', p);
-    document.body.replaceChildren(consent.explanation, consent.body);
-    return consent;
+  const TITLE_ID = 'ic-title';
+  const mount = (p: InstallPreview) => {
+    const consent = createInstallConsent(document, TITLE_ID, p);
+    const foot = document.createElement('div');
+    const fallback = foot.appendChild(document.createElement('button'));
+    const card = consent.card(foot, fallback);
+    document.body.replaceChildren(card.card);
+    return { consent, card, foot, fallback };
   };
+  const build = (p: InstallPreview): InstallConsent => mount(p).consent;
 
   const checkboxes = (): HTMLInputElement[] => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
   const labelOf = (box: HTMLInputElement): string => box.labels?.[0]?.textContent ?? '';
@@ -91,6 +95,32 @@ describe('install consent molecule', () => {
       if (!retiredBox) throw new Error('no retired checkbox');
       tick(retiredBox);
       expect(consent.choice()).toEqual({ replace: ['agents'], removeRetired: true });
+    });
+  });
+
+  describe('the card it builds for a modal dialog', () => {
+    it('is titled by the element the title id names, described by its explanation, and holds the caller footer', () => {
+      const { card, foot } = mount(preview(DIFFERING));
+      const title = document.getElementById(TITLE_ID);
+      const description = card.describedById === undefined ? null : document.getElementById(card.describedById);
+      expect.soft(title !== null && card.card.contains(title), 'the title is in the card').toBe(true);
+      expect.soft(title?.textContent, 'the title').toBeTruthy();
+      expect.soft(description !== null && card.card.contains(description), 'the description is in the card').toBe(true);
+      expect.soft(description?.textContent, 'the description').toBeTruthy();
+      expect.soft(card.card.contains(foot), 'the caller footer is in the card').toBe(true);
+    });
+
+    it('scrolls the choices, and its grow chain holds the scroll box', () => {
+      const { card } = mount(preview(DIFFERING, RETIRED));
+      expect.soft(card.scroll !== undefined && checkboxes().every((box) => card.scroll?.contains(box)), 'every choice is in the scroll box').toBe(true);
+      expect.soft(card.scroll !== undefined && card.grow?.contains(card.scroll), 'the grow chain holds the scroll box').toBe(true);
+    });
+
+    it('focuses the first choice, the retired choice when it is the only one, and the fallback when there is none', () => {
+      expect.soft(mount(preview(DIFFERING)).card.initialFocus, 'the first destination').toBe(checkboxes()[0]);
+      expect.soft(mount(preview([], RETIRED)).card.initialFocus, 'the retired choice').toBe(checkboxes()[0]);
+      const none = mount(preview([]));
+      expect.soft(none.card.initialFocus, 'the fallback').toBe(none.fallback);
     });
   });
 

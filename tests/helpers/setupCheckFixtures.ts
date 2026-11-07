@@ -56,7 +56,6 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
 
 const EMPTY_REPORT = { created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] };
 
-/** A preview that asks no question: nothing differs and nothing retired is left behind. */
 export const cleanPreview = (id: string): InstallExamplesPreview => ({
   ok: true,
   previewId: id as InstallPreviewId,
@@ -65,7 +64,6 @@ export const cleanPreview = (id: string): InstallExamplesPreview => ({
   retiredFallback: null,
 });
 
-/** A preview whose `differing` destinations each hold a file that differs from the bundled one. */
 export const differingPreview = (id: string, differing: InstallDestinationId[]): InstallExamplesPreview => ({
   ok: true,
   previewId: id as InstallPreviewId,
@@ -78,7 +76,6 @@ export const differingPreview = (id: string, differing: InstallDestinationId[]):
   retiredFallback: null,
 });
 
-/** A preview with no differing file but a retired example left behind. */
 export const retiredPreview = (id: string): InstallExamplesPreview => ({
   ok: true,
   previewId: id as InstallPreviewId,
@@ -101,13 +98,14 @@ type ScriptedInstall = InstallExamplesResult | { reject: string };
 
 type Scripted = SetupStatusReply | { reject: string };
 type ScriptedDismiss = SetupDismissReply | { reject: string };
+type ScriptedSetupRun = SetupFlowRun | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
  *  whatever `landFocusOn` names, as the composition root's fallback does. Every status request is
  *  recorded by repository; `examples` scripts the preview and install replies and records each install request. Each `dismiss` call is recorded, and answers the
  *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
- *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued. */
+ *  by repository, and answers (or rejects with) the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -125,7 +123,7 @@ export function fakeSetupDeps() {
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
   const setupRuns: string[] = [];
-  const setupRunReplies: SetupFlowRun[] = [];
+  const setupRunReplies: ScriptedSetupRun[] = [];
   let setupRunHold: Promise<void> | null = null;
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
@@ -156,8 +154,8 @@ export function fakeSetupDeps() {
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
-    installExamples: async (previewId, replace, removeRetired) => {
-      installRequests.push({ previewId, replace: [...replace], removeRetired });
+    installExamples: async (previewId, choice) => {
+      installRequests.push({ previewId, replace: [...choice.replace], removeRetired: choice.removeRetired });
       const held = installHold;
       installHold = null;
       if (held !== null) await held;
@@ -170,7 +168,9 @@ export function fakeSetupDeps() {
       const held = setupRunHold;
       setupRunHold = null;
       if (held !== null) await held;
-      return setupRunReplies.shift() ?? { ok: true };
+      const next = setupRunReplies.shift() ?? { ok: true };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -203,40 +203,32 @@ export function fakeSetupDeps() {
     },
     /** Every dismissal the dialog asked to record, in order. */
     dismissals: (): SetupDismissal[] => [...dismissals],
-    /** Every repository a status request named, in order. */
     statusRequests: (): string[] => [...statusRequests],
     examples: {
-      /** Queue the replies the next preview requests get, in order. */
       preview(...replies: ScriptedPreview[]): void {
         previewReplies.push(...replies);
       },
-      /** Queue the replies the next install requests get, in order. */
       install(...replies: ScriptedInstall[]): void {
         installReplies.push(...replies);
       },
-      /** Keeps the next preview reply pending until the returned release runs. */
       holdPreview(): () => void {
         let release!: () => void;
         previewHold = new Promise<void>((resolve) => (release = resolve));
         return release;
       },
-      /** Keeps the next install reply pending until the returned release runs. */
       holdInstall(): () => void {
         let release!: () => void;
         installHold = new Promise<void>((resolve) => (release = resolve));
         return release;
       },
-      /** Every install request, in order. */
       requests: (): InstallRequest[] => installRequests.map((r) => ({ ...r, replace: [...r.replace] })),
-      /** How many previews were requested. */
       previews: (): number => previewCount,
     },
     setupFlow: {
       /** Queue the results the next `runSetupFlow` calls get, in order. */
-      answer(...results: SetupFlowRun[]): void {
+      answer(...results: ScriptedSetupRun[]): void {
         setupRunReplies.push(...results);
       },
-      /** Keeps the next `runSetupFlow` pending until the returned release runs. */
       hold(): () => void {
         let release!: () => void;
         setupRunHold = new Promise<void>((resolve) => (release = resolve));

@@ -358,7 +358,7 @@ if (setupCheckHost) {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
     previewExamples: () => window.examples.preview(),
-    installExamples: (previewId, replace, removeRetired) => window.examples.apply(previewId, replace, removeRetired),
+    installExamples: (previewId, { replace, removeRetired }) => window.examples.apply(previewId, replace, removeRetired),
     runSetupFlow: createSetupFlowRun({
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
