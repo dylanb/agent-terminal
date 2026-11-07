@@ -1,5 +1,6 @@
 // agent-terminal launch shim generation (§23.4 / #25).
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { shellQuote } from '../shared/shellQuote';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
@@ -75,6 +76,14 @@ function controllerBranch(invocation: LaunchInvocation): string[] {
   ];
 }
 
+function realOrRaw(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 /** How to launch a fresh instance of this build: a packaged build execs its app binary with no extra
  *  args; a dev build (Electron loading a main script) execs Electron with that script, absolutized
  *  against `cwd` so the generated shim launches the same build from anywhere. */
@@ -86,7 +95,8 @@ export function resolveLaunchInvocation(
   appImage?: AppImageFacts,
 ): LaunchInvocation {
   if (appImage && path.isAbsolute(appImage.appImage) && path.isAbsolute(appImage.mountDir)) {
-    const rel = path.relative(appImage.mountDir, execPath);
+    // On Linux process.execPath is symlink-resolved while the AppImage runtime's APPDIR is not.
+    const rel = path.relative(realOrRaw(appImage.mountDir), realOrRaw(execPath));
     if (rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
       return { appImage: appImage.appImage };
     }
