@@ -228,7 +228,7 @@ describe('a flow\'s loops resolve in the tier its folder sits in', () => {
   });
 });
 
-// #278 — a malformed `count_from` repeat fails `--validate-flow` with a flow.yaml line naming the repeat step; each
+// A malformed `count_from` repeat fails `--validate-flow` with a flow.yaml line naming the repeat step; each
 // breaking declaration is paired with its mended one, which passes. The source loop outputs the declared artifact,
 // so the mended flow passes the artifact check too.
 describe('a count_from repeat declaration the flow loader refuses', () => {
@@ -274,7 +274,7 @@ describe('a count_from repeat declaration the flow loader refuses', () => {
   });
 });
 
-// #278 — a list-form repeat whose `count_from.artifact` no step's loop outputs loads, but fails `--validate-flow`
+// A list-form repeat whose `count_from.artifact` no step's loop outputs loads, but fails `--validate-flow`
 // with one flow.yaml line naming the repeat step and the artifact; once a loop outputs it, the flow passes.
 describe('a count_from artifact that no step\'s loop outputs', () => {
   const REPEAT_STEP = 'repeat-here';
@@ -304,7 +304,7 @@ describe('a count_from artifact that no step\'s loop outputs', () => {
     expect({ ...outcome, problem: facts }).toEqual({ status: 1, oneLine: true, prefixed: true, problem: { namesStep: true, namesArtifact: true }, output: expect.any(String) });
   });
 
-  it('exits 0 once a step before or after the group outputs the artifact (R10)', () => {
+  it('exits 0 once a step before or after the group outputs the artifact', () => {
     const repo = dir('repo');
     expect.soft(passOutcome(validateIn(repeatFlow(repo, 'steps').folder, repo))).toEqual(PASSED);
     expect.soft(passOutcome(validateIn(repeatFlow(repo, 'steps', true).folder, repo))).toEqual(PASSED);

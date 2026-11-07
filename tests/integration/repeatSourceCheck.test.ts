@@ -13,7 +13,7 @@ import { countSourceRefusal } from '../../src/main/repeatSourceCheck';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { flowLocations, writeFlow, writeLoopDef, type FlowSpec, type FlowStepSpec, type RepeatSpec } from '../helpers/flowFixtures';
 
-// #278 / §28.4.1 — a list-form repeat whose `count_from.artifact` no resolved loop outputs: the shared check, and
+// §28.4.1 — a list-form repeat whose `count_from.artifact` no resolved loop outputs: the shared check, and
 // the Start it refuses through the production loop lookup.
 
 const dirs: string[] = [];
@@ -70,7 +70,7 @@ describe('the shared check of a list-form repeat count source', () => {
     expect(countSourceRefusal(def, outputsBy(LOOPS))).toBeNull();
   });
 
-  it('passes a flow whose only source step sits inside or after the group (R10)', () => {
+  it('passes a flow whose only source step sits inside or after the group', () => {
     const inside = definitionOf({
       name: 'f',
       steps: [
@@ -89,12 +89,12 @@ describe('the shared check of a list-form repeat count source', () => {
     expect(verdict(countSourceRefusal(def, outputsBy(LOOPS)), 'nowhere')).toEqual(REFUSED);
   });
 
-  it('refuses when the only loop that would output the artifact does not resolve (R15)', () => {
+  it('refuses when the only loop that would output the artifact does not resolve', () => {
     const def = definitionOf(flowSpec('f', listForm('steps'), [['design', 'source-loop']]));
     expect(verdict(countSourceRefusal(def, outputsBy({ 'work-loop': ['result'] })), 'steps')).toEqual(REFUSED);
   });
 
-  it('matches the artifact id exactly: a whitespace-only or padded id is refused unless a loop outputs that same id (R16)', () => {
+  it('matches the artifact id exactly: a whitespace-only or padded id is refused unless a loop outputs that same id', () => {
     const blank = definitionOf(flowSpec('f', listForm(' '), [['design', 'source-loop']]));
     const padded = definitionOf(flowSpec('f', listForm(' steps'), [['design', 'source-loop']]));
     expect.soft(verdict(countSourceRefusal(blank, outputsBy(LOOPS)), ' ')).toEqual(REFUSED);
@@ -197,7 +197,7 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     expect.soft(startOutcome(missing, 'steps')).toEqual(REFUSED);
   });
 
-  it('refuses when the source step\'s loop does not resolve, and goes ahead when it resolves from the shared folder (R15)', () => {
+  it('refuses when the source step\'s loop does not resolve, and goes ahead when it resolves from the shared folder', () => {
     const spec = flowSpec(FLOW_NAME, listForm('steps'), [['design', 'source-loop']]);
     const unresolved = rig(spec);
     expect.soft(startOutcome(unresolved, 'steps')).toEqual(REFUSED);

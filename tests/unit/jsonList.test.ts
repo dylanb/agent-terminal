@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { checkJsonList, exampleJsonList } from '../../src/shared/jsonList';
 import { JSON_LIST_CASES, type JsonListVerdict } from '../helpers/jsonListCases';
 
-// #278 — the `json-list` predicate against the independent table of verdicts the ticket's rules give.
+// The `json-list` predicate against the independent table of verdicts the ticket's rules give.
 
 const verdictOf = (text: string, list: string): JsonListVerdict => {
   const r = checkJsonList(text, list);

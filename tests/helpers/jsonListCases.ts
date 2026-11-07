@@ -1,10 +1,10 @@
-// The expected verdict on `json-list` file texts, written from the ticket's definition of a well-formed file
-// and the plan's rulings on it (R3 trim whitespace, R5 duplicate keys, R6 the first rule broken), never from
-// the predicate it grades. One table serves the predicate's unit test, the engine's sourcing test, the
+// The expected verdict on `json-list` file texts, written from the definition of a well-formed file (a title
+// blank after trimming is blank, the last of a repeated key wins, the first rule broken is the one reported), never
+// from the predicate it grades. One table serves the predicate's unit test, the engine's sourcing test, the
 // `--check-repeat-list` test and the test that the two agree. Every case is valid UTF-8 with no byte-order
 // mark, so a file holding the text is judged the same as the text: cases about bytes belong to the read.
 
-/** The rules a file can break, in the order R6 checks them. An entry rule is reported with its position. */
+/** The rules a file can break, in the order they are checked. An entry rule is reported with its position. */
 export type JsonListRule =
   | 'parses'
   | 'top-level-object'

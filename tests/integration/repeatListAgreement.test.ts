@@ -1,4 +1,4 @@
-// #278 — `--check-repeat-list` and the engine judge a file alike: for every file of the self-check's fixtures, the
+// `--check-repeat-list` and the engine judge a file alike: for every file of the self-check's fixtures, the
 // command passes exactly when a source approve of that same file, through the real approve path, the real sourcer
 // and a real flow manager, sources a count. A count is sourced when the first group step then names entry 1 of N:
 // the step sequence alone cannot tell a sourced count of 1 from the floor of 1.

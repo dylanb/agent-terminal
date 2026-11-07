@@ -469,7 +469,7 @@ describe('the engine guide — the turn contract’s slot places (#276)', () => 
   });
 });
 
-describe('the engine guide — a repeat’s two count sources (#278)', () => {
+describe('the engine guide — a repeat’s two count sources', () => {
   it('makes count_input and count_from each required only when the other is absent, under each key in the guide', () => {
     const conditionUnder = (key: string, other: string): { conditional: boolean; namesOther: boolean; inGuide: boolean } => {
       const doc = descriptorKey(ENGINE_CAPABILITIES, 'flow.steps[].repeat', key);

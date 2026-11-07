@@ -53,7 +53,7 @@ const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const overBound = (): string => `${WELL_FORMED.slice(0, -1)}, "pad": "${'x'.repeat(MAX_LOOP_ARTIFACT_BYTES)}"}`;
 const runningAsRoot = process.getuid?.() === 0;
 
-/** A bad file the read refuses: its name, the read's cause (R7), and how to lay it at `file`. */
+/** A bad file the read refuses: its name, the read's cause, and how to lay it at `file`. */
 interface ReadCase {
   name: string;
   cause: 'absent' | 'over-cap' | 'unreadable';

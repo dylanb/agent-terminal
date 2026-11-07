@@ -13,7 +13,7 @@ import { auditGateEntries, auditStepSequence, seedAutoGateRepo, seedTrustedFlow 
 import { gateDecisionDecider, gateDecisionKind } from '../../src/shared/audit';
 import { NO_STEPS_JSON, STEPS_JSON, injectedLog, repeatListAgent, repeatListFlowYaml, repeatListTitles, seedRepeatListConfig } from './repeatListFixture';
 
-// #278 — a repeat whose count comes from a named list in an artifact (`count_from`), run in the app on the fixture
+// A repeat whose count comes from a named list in an artifact (`count_from`), run in the app on the fixture
 // flow under tests/fixtures/repeat-list-flow/.
 
 const FIRST_PAINT_MS = 15_000;

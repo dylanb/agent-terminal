@@ -378,10 +378,10 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
   });
 });
 
-// #278 — a repeat may take its count from a list in an artifact: `count_from: { artifact, format, list }` in place
+// A repeat may take its count from a list in an artifact: `count_from: { artifact, format, list }` in place
 // of `count_input`. Every rule `flow.yaml` alone decides fails when the flow loads, naming the repeat step; each
 // breaking declaration is paired with a mended one that must load.
-describe('a count_from repeat (#278)', () => {
+describe('a count_from repeat', () => {
   const REPEAT_STEP = 'repeat-here';
   let dir: string;
   beforeEach(() => {

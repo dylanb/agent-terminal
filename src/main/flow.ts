@@ -10,7 +10,7 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore, type RepeatListRecord } from './flowState';
-import { repeatEntryTitle, type RepeatEntry } from '../shared/repeatList';
+import { repeatEntryTitle, type RepeatEntry, type RepeatListSpec } from '../shared/repeatList';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
@@ -74,8 +74,7 @@ export interface FlowStepDef {
 /** Where a repeat's count comes from: a flow input (`count_input`), or a list in an artifact (`count_from`). */
 export type RepeatCountSource =
   | { kind: 'input'; countInput: string }
-  | { kind: 'list'; artifact: string; format: 'json-list'; list: string }
-  | { kind: 'list'; artifact: string; format: Exclude<RepeatListFormat, 'json-list'> };
+  | ({ kind: 'list'; artifact: string } & RepeatListSpec);
 
 export function stepTemplateRef(step: FlowStepDef): string | null {
   return step.todoTemplate ? step.todoTemplate : null;

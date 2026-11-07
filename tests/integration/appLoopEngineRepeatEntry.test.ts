@@ -5,7 +5,7 @@ import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { RepeatEntry } from '../../src/shared/repeatList';
 import { createAppLoopEngineHarness, STEP } from '../helpers/appLoopEngineHarness';
 
-// #278 / §28.4.1 R17 — which of a repeated step's turns name the list entry the run is on: every work turn, a goal
+// §28.4.1 — which of a repeated step's turns name the list entry the run is on: every work turn, a goal
 // session's included, and never a review-and-fix or consolidate turn.
 
 const h = createAppLoopEngineHarness();

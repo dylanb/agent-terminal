@@ -12,7 +12,7 @@ import { createApproveDriver, type ApproveDriver } from '../helpers/repeatApprov
 import { flowLocations, writeFlow, writeLoopDef, type FlowSpec, type FlowStepSpec, type RepeatSpec } from '../helpers/flowFixtures';
 import { JSON_LIST_CASES, distinctTitles, jsonListText } from '../helpers/jsonListCases';
 
-// #278 / §28.4.1 — a repeat's count re-sourced at each source approve, through the real approve path, the real
+// §28.4.1 — a repeat's count re-sourced at each source approve, through the real approve path, the real
 // sourcer and a real flow manager over a temp repository. Each test observes the steps the flow goes through.
 
 const dirs: string[] = [];
@@ -535,7 +535,7 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
   });
 });
 
-// #278 slice 3 — the entry a repeated step's work turn names: the flow manager's entry read for each step the run
+// The entry a repeated step's work turn names: the flow manager's entry read for each step the run
 // reaches, before that step is approved.
 
 type Named = readonly [step: string, entry: RepeatEntry | null];
