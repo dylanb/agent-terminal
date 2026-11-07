@@ -196,6 +196,25 @@ it('ends a pointer hold when the pointer leaves the controller without passing o
   } finally { dispose(); }
 });
 
+it('keeps a card held by keyboard focus alone through a group change, focus still on it, and re-sorts once focus leaves', async () => {
+  const { host, service, clock, dispose } = mount();
+  try {
+    await pointerAway(host);
+    toggle(host, 'w').focus();
+    await settled();
+    const before = heldCardsIn(host, DIRECTORIES);
+    await publishLater(service, clock, B_IN_ERRORS);
+    const frozen = { ...read(host), focusOnW: document.activeElement === toggle(host, 'w') };
+    (document.activeElement as HTMLElement | null)?.blur();
+    await settled();
+    expect({ before, frozen, after: read(host) }).toEqual({
+      before: [d('w')],
+      frozen: { list: FROZEN_B_IN_ERRORS, held: [d('w')], focusOnW: true },
+      after: { list: SORTED_B_IN_ERRORS, held: [] },
+    });
+  } finally { dispose(); }
+});
+
 it('re-sorts at once when the card held by the pointer is removed while it is the only hold', async () => {
   const { host, service, clock, dispose } = mount();
   try {
