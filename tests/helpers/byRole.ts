@@ -1,11 +1,15 @@
 import { expect } from 'vitest';
 
-type Role = 'button' | 'checkbox' | 'textbox';
+type Role = 'button' | 'checkbox' | 'textbox' | 'dialog' | 'alertdialog' | 'alert' | 'listitem';
 
 const SELECTOR: Record<Role, string> = {
   button: 'button:not([role]), [role="button"]',
   checkbox: 'input[type="checkbox"]:not([role]), [role="checkbox"]',
   textbox: 'textarea:not([role]), input:not([type]):not([role]), input[type="text"]:not([role]), [role="textbox"]',
+  dialog: 'dialog:not([role]), [role="dialog"]',
+  alertdialog: '[role="alertdialog"]',
+  alert: '[role="alert"]',
+  listitem: 'li:not([role]), [role="listitem"]',
 };
 
 function visibleText(node: Node): string {
@@ -28,9 +32,14 @@ export function accessibleName(el: Element): string {
   return visibleText(el).replace(/\s+/g, ' ').trim();
 }
 
+/** Every element with `role`, whatever its name, in document order. */
+export function everyByRole(host: ParentNode, role: Role): HTMLElement[] {
+  return [...host.querySelectorAll<HTMLElement>(SELECTOR[role])];
+}
+
 /** All elements with `role` whose accessible name is `name`, in document order. */
 export function allByRole(host: ParentNode, role: Role, name: string): HTMLElement[] {
-  return [...host.querySelectorAll<HTMLElement>(SELECTOR[role])].filter((el) => accessibleName(el) === name);
+  return everyByRole(host, role).filter((el) => accessibleName(el) === name);
 }
 
 /** The one element with `role` whose accessible name is `name`; fails when there is not exactly one. */

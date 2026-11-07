@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { resolveAppHome } from '../../src/main/launchRoot';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import type { ControllerLoopMessage } from '../../src/shared/ipc';
+import { withSetupCheckOff } from './setupCheckEnv';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 const controllers = new Map<string, { ready: Promise<Transport>; users: number }>();
@@ -38,7 +39,7 @@ export function controllerOf(app: ElectronApplication) {
 export const electron = {
   async launch(options: NonNullable<Parameters<typeof _electron.launch>[0]>) {
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries({ ...process.env, ...options.env })) {
+    for (const [key, value] of Object.entries({ ...process.env, ...withSetupCheckOff(options.env) })) {
       if (value !== undefined) env[key] = value;
     }
     const isolatedHome = !env.APP_HOME_DIR && env.HOME === process.env.HOME

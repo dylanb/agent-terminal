@@ -43,6 +43,8 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupDismiss,
+  isValidSetupStatus,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
   isValidFlowConfirmRunPickup,
@@ -79,7 +81,12 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo, resolveRepoKey } from './repoKey';
+import { currentRepoInfo, findRepoRoot, resolveRepoKey } from './repoKey';
+import { agentTerminalIgnored } from './gitIgnoreCheck';
+import { createSetupCheck, setupCheckEnabled } from './setupCheck';
+import { repoSetupFlowInstalled } from './setupFlowInstalled';
+import { createSetupDismissals } from './setupDismissals';
+import { loadLoopCapabilities } from './loopCapabilities';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, type FlowLoad, type FlowStepDef } from './flow';
@@ -119,6 +126,7 @@ import type { BundleLocation } from './bundleLocation';
 import {
   createInstallExamplesCoordinator,
   exampleInstallDirs,
+  inspectExamplesCurrency,
   type InstallDestination,
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
@@ -164,7 +172,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from './autoGateComposition';
-import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
+import type { CliInstallResult, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
@@ -337,6 +345,26 @@ async function createWindow(): Promise<void> {
   // — §12 gap tracked in #153.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
+  const isGitRepository = (dir: string): boolean => findRepoRoot(dir) === dir;
+  const setupCheck = createSetupCheck({
+    examplesCurrent: () => inspectExamplesCurrency(resolveExampleInstallDestinations()),
+    isGitRepository,
+    agentTerminalIgnored,
+    loadCapabilities: loadLoopCapabilities,
+    setupFlowInstalled: (repoKey) => repoSetupFlowInstalled({ worktreeDir: repoKey, globalRoot: flowGlobalDir }),
+    appVersion: app.getVersion(),
+    dismissals: createSetupDismissals(flowGlobalDir),
+  });
+  const setupStatus: (repoKey: string) => Promise<SetupStatusReply> = setupCheckEnabled(process.env)
+    ? (repoKey) => setupCheck.status(repoKey)
+    : async (repoKey) => ({
+        ok: true,
+        repoKey,
+        isRepository: isGitRepository(repoKey),
+        appVersion: app.getVersion(),
+        setupFlowInstalled: false,
+        entries: [],
+      });
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -1600,6 +1628,14 @@ async function createWindow(): Promise<void> {
       // Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
       [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),
+      [CH.setupStatus]: (_e, m): Promise<SetupStatusReply> =>
+        isValidSetupStatus(m) && knownRepoKeys.has(m.repoKey)
+          ? setupStatus(m.repoKey)
+          : Promise.resolve({ ok: false, reason: 'invalid setup:status request' }),
+      [CH.setupDismiss]: (_e, m): SetupDismissReply =>
+        isValidSetupDismiss(m) && (m.dismissal.kind !== 'repo' || knownRepoKeys.has(m.dismissal.repoKey))
+          ? setupCheck.dismiss(m.dismissal)
+          : { ok: false, reason: 'invalid setup:dismiss request' },
     },
   );
 
