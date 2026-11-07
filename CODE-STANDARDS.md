@@ -92,6 +92,18 @@ discriminated union, never a flat record with fields dead in some modes — a fl
 dummy the mode ignores. `BundleLocation` (`packaged: true` carries `resourcesPath`; `packaged: false`
 carries `appPath`) is the shape to copy.
 
+## Code that acts on a kind handles every kind
+
+When a value names its kind (a discriminated union's tag, a string-literal union, a `kind` field), every place
+that turns that kind into behaviour handles every member explicitly: an exhaustive lookup table
+(`const X: Record<Kind, …> = { … }`) or a `switch` whose `default` ends in `value satisfies never`. Adding a
+member then fails the build at each such site until it is handled. Never write the behaviour of the only member
+that exists today and leave the kind unread: that code compiles and passes every test, and the day a second member
+lands it silently gets the first one's behaviour. A kind field that nothing reads is the tell.
+`SELF_CHECK_ARTIFACT_CHECK` (`src/main/appLoopEngine.ts`) and `SELF_CHECK_LINES` (`src/main/appWorkTurn.ts`) are
+the table shape to copy; `writePointer`'s `write satisfies never` (`src/main/activeFlowGate.ts`) is the
+`switch` shape.
+
 ## Platform branches take the platform as a parameter
 
 CI and the Podman e2e run only on Linux, so a branch decided by reading `process.platform` inline runs its
@@ -126,6 +138,16 @@ structured value — env var, `argv` element, quoted literal — **never concate
 side parses** (CWE-78). Instances: paste-breakout sanitization at the injection seam (§7.5/§9.3), and the
 §23.5 launch target crossing the OS boundary as a distinct env value rather than spliced into a command
 line. When the boundary is a POSIX shell, the enforcement is the shell-quoting rule below.
+
+## Git in a checked-out repository — `src/main/gitHardening.ts`, never a second copy
+
+A repository's own config can make git run code during an ordinary local command: a planted `core.fsmonitor`
+runs when git refreshes the index, and `core.hooksPath` points git at the repository's hooks. A command-line `-c`
+outranks any repository value. So a new `git` call that runs in a checked-out repository leads its argv with
+`coreExecHardeningArgs(freshDisabledHooksDir())`, the one source of those overrides, and never writes its own
+copy. This is a floor, not complete hardening. Each caller still neutralizes its own command's execution
+surfaces (textconv and external diff, filter and merge drivers, and so on), and a call that reaches the network
+adds protocol and credential hardening on top. Existing callers stay as they are; this rule governs new work.
 
 ## Shell quoting — `src/shared/shellQuote.ts`, never hand-rolled
 

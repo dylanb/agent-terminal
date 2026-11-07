@@ -2058,3 +2058,94 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
     expect(pill.tone).not.toBe('await');
   });
 });
+
+describe('start(repoKey) runs what a press of Start runs', () => {
+  const started = (extra: Partial<FlowStateView> = {}): FlowStateView => ({
+    stepName: '/repo-step',
+    runStarted: 'started',
+    steps: ['/repo-step'],
+    position: 1,
+    total: 1,
+    status: 'in_progress',
+    ...extra,
+  });
+
+  it("shows the start view's notice inline once it settles", async () => {
+    const deps = { ...fakeFlow(), start: vi.fn(async () => started({ notice: 'scripted start notice' })) };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo');
+
+    expect(host.textContent).toContain('scripted start notice');
+  });
+
+  it('hands a start view carrying a step-entry prompt to the input modal once it settles', async () => {
+    const prompt = { inputs: [{ name: 'note', type: 'text' }], bootstrap: '' };
+    const prompts: Array<FlowStateView['prompt'] | null> = [];
+    const deps = {
+      ...fakeFlow(),
+      start: vi.fn(async () => started({ prompt })),
+      onPrompt: (p: FlowStateView['prompt'] | null) => void prompts.push(p),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo');
+
+    expect(prompts).toEqual([prompt]);
+  });
+
+  it('signals FLOW_CHANGED_EVENT once it settles, so the todo overlay re-pulls', async () => {
+    const strip = createFlowStrip(host, fakeFlow());
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+    let fired = 0;
+    const onChanged = (): void => void (fired += 1);
+    window.addEventListener(FLOW_CHANGED_EVENT, onChanged);
+
+    try {
+      await strip.start('/repo');
+    } finally {
+      window.removeEventListener(FLOW_CHANGED_EVENT, onChanged);
+    }
+
+    expect(fired).toBe(1);
+  });
+
+  it('starts the repository it is given, not the one the strip shows, and leaves the shown one unstarted', async () => {
+    const strip = createFlowStrip(host, fakeFlow());
+    strip.onRepoChanged('/repo-b');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo-a');
+    const shownAfterStart = control()?.textContent;
+    strip.onRepoChanged('/repo-a');
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-a-step'));
+
+    expect({ shownAfterStart, repoA: control()?.textContent }).toEqual({ shownAfterStart: 'Start', repoA: 'Advance' });
+  });
+
+  it('reports a failed start as a failed Start press does, and settles without rejecting', async () => {
+    const errors: string[] = [];
+    const deps = {
+      ...fakeFlow(),
+      start: vi.fn(async (): Promise<FlowStateView> => {
+        throw new Error('scripted start failure');
+      }),
+      onError: (reason: string) => void errors.push(reason),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    const outcome = await strip.start('/repo').then(
+      () => 'settled',
+      () => 'rejected',
+    );
+
+    expect({ outcome, errors }).toEqual({ outcome: 'settled', errors: ['scripted start failure'] });
+  });
+});

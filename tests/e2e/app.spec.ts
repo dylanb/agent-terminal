@@ -1612,9 +1612,13 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted — survives a renderer reload (§20.2).
+  // Persisted — survives a renderer reload (§20.2). A chord pressed before the reloaded renderer installs its
+  // key handler is dropped, so the press repeats until the view it selects is showing.
   await page.reload();
-  await page.keyboard.press('Control+2');
+  await expect(async () => {
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect.poll(() => treeW()).toBe('318px');
 
   // Reset to default so the persisted width doesn't leak into later runs.
@@ -2458,7 +2462,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'groom-goal-loop', 'groom-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'plan-goal-loop', 'plan-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
@@ -2599,7 +2603,7 @@ test('the shipped-flow migration is confirm-first and a decline preserves the ex
   expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
   const installedFlow = readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8');
   expect(installedFlow).not.toBe(customFlow);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2726,22 +2730,23 @@ test('after install, the active step offers its bundled todo template as the pic
 
   writeFileSync(
     join(home, '.agent-terminal', 'flow.yaml'),
-    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: ticket-grooming\n',
+    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: polish\n',
   );
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom-ticket active (todo_template: ticket-grooming)
+  await flowControl().click(); // Start → groom-ticket active (todo_template: polish)
 
   await openQuickSend('todo');
   const toggle = page.locator('#todo-list .tmpl-toggle');
   await expect(toggle).toBeVisible({ timeout: 10_000 });
   await toggle.click();
-  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('ticket-grooming'); // the step's bundled default
+  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('polish'); // the step's bundled default
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0);
   await page.locator('#todo-list .tmpl-add').click();
   // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
-  await expect(page.locator('.todo').filter({ hasText: 'run grooming skill' })).not.toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('#todo-list .todo')).not.toHaveCount(0, { timeout: 10_000 });
 
   await app.close();
   rmSync(home, { recursive: true, force: true });

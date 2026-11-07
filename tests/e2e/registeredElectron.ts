@@ -1,10 +1,13 @@
 import { _electron, type ElectronApplication } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAppHome } from '../../src/main/launchRoot';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import type { ControllerLoopMessage } from '../../src/shared/ipc';
+import { busyExecutableReport } from './busyExecutable';
+import { withSetupCheckOff } from './setupCheckEnv';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 const controllers = new Map<string, { ready: Promise<Transport>; users: number }>();
@@ -38,7 +41,7 @@ export function controllerOf(app: ElectronApplication) {
 export const electron = {
   async launch(options: NonNullable<Parameters<typeof _electron.launch>[0]>) {
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries({ ...process.env, ...options.env })) {
+    for (const [key, value] of Object.entries({ ...process.env, ...withSetupCheckOff(options.env) })) {
       if (value !== undefined) env[key] = value;
     }
     const isolatedHome = !env.APP_HOME_DIR && env.HOME === process.env.HOME
@@ -70,6 +73,11 @@ export const electron = {
       return app;
     } catch (error) {
       await release();
+      if (error instanceof Error && error.message.includes('ETXTBSY')) {
+        const report = busyExecutableReport(options.executablePath ?? (createRequire(__filename)('electron') as string));
+        console.error(report);
+        error.message = `${error.message}\n${report}`;
+      }
       throw error;
     }
   },
