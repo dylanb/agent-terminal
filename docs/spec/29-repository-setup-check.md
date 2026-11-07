@@ -19,6 +19,8 @@ its first gate.
   condition fails. The startup check, outside a repository, shows the examples condition alone.
 - Checks run one at a time, in the order the terminal entered the repositories. A popup due while another app
   dialog is open waits until that dialog closes, so two modal dialogs are never open together (UI-STANDARDS.md §5).
+  A popup that steps aside while Run setup loop starts (§29.5) keeps its place: no queued check runs until it has
+  come back and closed. Showing it again is not a new check.
 - A check that could not run (the status request fails or is rejected) shows nothing and does not count as done:
   the next entry into that repository in the session checks it again. A check that could not run never passes.
 - `APP_SETUP_CHECK=off` turns the check off: the status reply then lists nothing. It is a test seam with no UI,
@@ -62,14 +64,21 @@ controls that apply:
 
 | Control | Shown when | What it does |
 |---|---|---|
-| **Install/update examples** | an `examples` entry is listed | Closes the popup and opens the Settings view's existing install-examples flow, unchanged |
+| **Install/update examples** | an `examples` entry is listed | Installs the bundled examples from inside the popup (below) |
 | **Run setup loop** | the shipped `repo-setup` flow is installed (below) and an `ignore`/`not-ignored` or a `capabilities`/`absent` entry is listed | §29.5 |
 | **Don't show again for this repo** | an `ignore` or `capabilities` entry is listed | §29.4 |
 | **Don't show again until the app updates** | an `examples` entry is listed | §29.4 |
 | **Close** | always | Closes the popup and records nothing; Escape and the scrim do the same |
 
-- Closing the popup through Install/update examples also closes its repository entries for the session; they return
-  at the next start unless fixed or dismissed.
+- The popup is dismissed only when the operator dismisses it (Close, Escape, the scrim), or when nothing is left
+  listed. Escape and the scrim do nothing while one of its presses is being answered.
+- **Install/update examples** runs the Settings view's install (§18.1) without leaving the popup. When installed
+  files differ from the bundled ones, or retired examples are present, the popup asks the Settings view's replace
+  question in its own card, from the same shared definition (`src/renderer/src/installConsent.ts`). Its Install
+  installs with the ticked choices; Back to the list returns to the list with nothing installed; Close ends the
+  popup with nothing installed. After an install, even a failed one, the popup re-reads its repository's status and
+  lists what it reports, with the controls that apply; it closes when nothing is left. A failed preview, install or
+  re-read shows its reason in the popup, which stays open.
 - Run setup loop is not offered for `malformed`, `confinement` or `unchecked` entries alone: the flow leaves an
   existing `loop-capabilities.yaml` untouched and cannot fix git.
 - **Installed** means the `repo-setup` catalog entry resolves to the global tier, so the repository has no
@@ -102,10 +111,16 @@ and the flow strip already make, `flow:setActiveFlow` then `flow:start` (§18.7)
 the renderer: the start runs through the flow strip's own Start handling, so what follows is exactly what a Start
 press does. The flow declares no inputs, so no ticket prompt opens.
 
+- The popup steps aside while the start runs, so a dialog the start raises never opens under it, and comes back
+  once no other app dialog is open (§29.1).
 - When the repository's run has begun (in progress, or done and not reset, §18.7), the selection gate refuses it.
-  The popup closes and an alert says the run must be ended (Terminate) first. The progression, the selected flow and
-  the run's files are unchanged.
-- Otherwise the popup closes and the flow starts. A start that then fails shows as any failed Start press does.
+  The popup comes back with every entry it listed and the reason in its error line: the run must be ended
+  (Terminate) first. No other dialog opens. The progression, the selected flow and the run's files are unchanged.
+- Otherwise the flow starts, and the entries it fixes (`ignore`/`not-ignored`, `capabilities`/`absent`) leave the
+  popup's list for the rest of its check, as a dismissal removes entries (§29.4); Run setup loop is no longer
+  offered in it. The popup comes back with focus on a remaining control while anything is listed, and closes when
+  nothing is left. Those entries return at the next check if the flow did not fix them. A start that then fails
+  shows as any failed Start press does.
 - The selection stays on `repo-setup` after the run finishes; the operator returns to their own flow through the
   §18.7 rules.
 

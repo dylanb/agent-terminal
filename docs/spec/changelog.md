@@ -1,3 +1,12 @@
+## #317 — The setup popup keeps its buttons inside the dialog and stays open until the operator dismisses it
+
+§29.1/§29.3/§29.5/§18.1 (operator decision 2026-11-07): the popup's controls sat on one line wider than its card, so some were painted outside it and could not be pressed, and the popup closed after Install/update examples or Run setup loop although other entries still needed an action. Now:
+
+- every dialog's footer wraps its controls inside the card at any window size (the shared `.flow-modal` rules);
+- Install/update examples installs from inside the popup, asking the Settings view's replace question in its own card when installed files differ, then lists what still fails for its repository;
+- Run setup loop removes the entries the setup flow fixes and brings the popup back with whatever else is listed; a refusal shows its reason in the popup, which keeps every entry, and no separate alert opens;
+- the popup closes only through Close, Escape or the scrim, or when nothing is left listed.
+
 ## Stalled loop turns resume from the gate question
 
 §27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:
