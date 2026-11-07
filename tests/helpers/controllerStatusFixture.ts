@@ -82,6 +82,32 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
   Object.entries(CASES).map(([key, [terminal, text, statusClass, summary]]) => [key, { terminal, text, statusClass, summary }]),
 ) as Record<StatusCaseKey, StatusCase>;
 
+export interface WaitingStatusCase extends StatusCase {
+  /** The card's activity line. */
+  activity: string;
+}
+
+const node = { program: 'node', others: 0 } as const;
+const waitingOn = (overrides: Partial<WorkStatus> = {}): WorkStatus => workStatus({ activity: 'waiting', waiting: node, ...overrides });
+
+const WAITING_CASES = {
+  waiting: [caseTerminal('waiting', waitingOn()), 'Waiting · node', 'working', 'working', 'Waiting · node'],
+  'waiting-with-others': [caseTerminal('waiting-with-others', waitingOn({ waiting: { program: 'pnpm', others: 1 } })), 'Waiting · pnpm +1', 'working', 'working', 'Waiting · pnpm +1'],
+  'waiting-needs-human': [caseTerminal('waiting-needs-human', waitingOn({ attention: human })), 'Needs a human · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-flow-error': [caseTerminal('waiting-flow-error', waitingOn({ error: failure })), 'Flow error · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-loop-error': [caseTerminal('waiting-loop-error', waitingOn({ loopMessage: loopError })), 'Loop error · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-unassigned': [caseTerminal('waiting-unassigned', waitingOn({ flow: { ...running, assignment: 'unassigned' }, ticket: { availability: 'none' } })), 'Unassigned', 'idle', 'idle', 'Waiting · node'],
+  'waiting-completed': [caseTerminal('waiting-completed', waitingOn({ flow: { ...running, assignment: 'completed' } })), 'Completed', 'completed', 'idle', 'Waiting · node'],
+  'waiting-flow-loading': [caseTerminal('waiting-flow-loading', waitingOn({ flow: { availability: 'loading' } })), 'Status unknown', 'idle', 'idle', 'Waiting · node'],
+} as const satisfies Record<string, readonly [ControllerTerminal, string, Status, SummaryLabel, string]>;
+
+export type WaitingStatusCaseKey = keyof typeof WAITING_CASES;
+
+/** Waiting cards, written independently of the production classifier like STATUS_CASES. */
+export const WAITING_STATUS_CASES: Readonly<Record<WaitingStatusCaseKey, WaitingStatusCase>> = Object.fromEntries(
+  Object.entries(WAITING_CASES).map(([key, [terminal, text, statusClass, summary, activity]]) => [key, { terminal, text, statusClass, summary, activity }]),
+) as Record<WaitingStatusCaseKey, WaitingStatusCase>;
+
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
   options: {

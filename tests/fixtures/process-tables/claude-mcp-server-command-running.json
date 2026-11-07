@@ -1,0 +1,24 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 37102,
+  "note": "Claude Code 2.1.319 (claude -p, in a pty shell on macOS) with one stdio MCP server configured (node, which keeps a child fake-browser alive) running sleep 20 as its Bash tool command; captured from outside the shell's tree once sleep was 3 s old",
+  "rows": [
+    "37382 37154 37382    0       00:03 zsh             ",
+    "37383 37382 37382    0       00:03 sleep           ",
+    "37102 37099 37102 37154       00:10 zsh             ",
+    "37154 37102 37154 37154       00:08 2.1.319         ",
+    "37196 37154 37154 37154       00:07 node            ",
+    "37201 37196 37154 37154       00:07 fake-browser    "
+  ],
+  "expected": {
+    "waiting": {
+      "program": "sleep",
+      "others": 0
+    }
+  }
+}

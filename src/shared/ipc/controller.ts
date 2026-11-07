@@ -1,5 +1,6 @@
 import type { ChannelSpecs, SessionId } from './session';
 import type { Theme } from './settings';
+import type { WaitingValue } from '../waiting';
 
 export const CONTROLLER_CHANNELS = {
   subscribe: {
@@ -58,7 +59,8 @@ export type ControllerWorkStatus = {
     availability: 'known'; number: number;
     title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
   };
-  activity: 'active' | 'quiet' | 'unavailable';
+  activity: 'active' | 'quiet' | 'unavailable' | 'waiting';
+  waiting?: WaitingValue;
   attention: null | { status: string; reasons: string[] };
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */

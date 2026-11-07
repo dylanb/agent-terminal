@@ -22,6 +22,7 @@ const DEFAULTS = {
   startupExitGraceMs: 1000,
   shellQuitGraceMs: 2000,
   branchRefreshMs: 300_000,
+  waitingLookupTimeoutMs: 1000,
 } as const;
 
 export interface RuntimeConfig {
@@ -40,6 +41,7 @@ export interface RuntimeConfig {
   shellQuitGraceMs: number;
   branchRefreshMs: number;
   autoGateDecisionMs: number;
+  waitingLookupTimeoutMs: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -73,5 +75,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     shellQuitGraceMs: timerMs(env.APP_SHELL_QUIT_GRACE_MS, DEFAULTS.shellQuitGraceMs),
     branchRefreshMs: timerMs(env.APP_BRANCH_REFRESH_MS, DEFAULTS.branchRefreshMs),
     autoGateDecisionMs: timerMs(env.APP_AUTO_GATE_DECISION_MS, AUTO_GATE_DECISION_DEFAULT_MS),
+    waitingLookupTimeoutMs: DEFAULTS.waitingLookupTimeoutMs,
   };
 }

@@ -1,8 +1,10 @@
 // Long-running processes a seeded fake agent starts on request, shaped like a harness's commands and helpers: a
 // line `fake-spawn <group> <name>` typed to the agent starts a copy of `sleep` named `<name>`, so the OS reports
-// `<name>` (cut to its executable-name limit) as its program name. `own` puts it in a new process group of its
-// own, as Claude Code and Codex run a command (and as Codex runs `codex-code-mode-host`); `agent` leaves it in
-// the agent's own group, as Claude Code runs `caffeinate`.
+// `<name>` (cut to its executable-name limit) as its program name. `session` starts it in a new session, so a new
+// process group of its own with no controlling terminal, as Claude Code and Codex run a command; `own` puts it in a
+// new process group of its own that keeps the terminal, as Codex runs `codex-code-mode-host` and its stdio MCP
+// servers; `agent` leaves it in the agent's own group, as Claude Code runs `caffeinate`. `session` needs `setsid`,
+// which the Linux e2e image has.
 
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,7 +13,7 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import { isErrno } from '../../src/main/errno';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 
-export type FakeProcessGroup = 'own' | 'agent';
+export type FakeProcessGroup = 'session' | 'own' | 'agent';
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 // A last resort for a process every cleanup path missed; the agent's exit and `stopAllFakeProcesses` end it first.
@@ -33,17 +35,18 @@ export function fakeSpawnShell(binDir: string): string {
   const dir = shellQuote(processDir(binDir));
   return (
     `fake_spawn() { d=${dir}; mkdir -p "$d/bin"; [ -x "$d/bin/$2" ] || cp "$(command -v sleep)" "$d/bin/$2"; ` +
-    `if [ "$1" = own ]; then set -m; "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; set +m; ` +
+    `if [ "$1" = session ]; then setsid "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; ` +
+    `elif [ "$1" = own ]; then set -m; "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; set +m; ` +
     `else "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; fi; ` +
     `printf '%s %s\\n' "$p" "$1" > "$d/$2.pid.tmp" && mv "$d/$2.pid.tmp" "$d/$2.pid"; }\n` +
     `fake_reap() { for f in ${dir}/*.pid; do [ -e "$f" ] || continue; r=$(cat "$f"); p=\${r%% *}; g=\${r#* }; ` +
-    `if [ "$g" = own ]; then kill -KILL -- "-$p" 2>/dev/null; else kill -KILL "$p" 2>/dev/null; fi; rm -f "$f"; done; }\n` +
+    `if [ "$g" = agent ]; then kill -KILL "$p" 2>/dev/null; else kill -KILL -- "-$p" 2>/dev/null; fi; rm -f "$f"; done; }\n` +
     'trap fake_reap EXIT\n'
   );
 }
 
 /** The `case` arm that answers a `fake-spawn` line; `fakeSpawnShell` must be in the same script. */
-export const FAKE_SPAWN_ARM = '    "fake-spawn own "*|"fake-spawn agent "*) fake_spawn ${line#fake-spawn } ;;';
+export const FAKE_SPAWN_ARM = '    "fake-spawn session "*|"fake-spawn own "*|"fake-spawn agent "*) fake_spawn ${line#fake-spawn } ;;';
 
 /** The line to type to a running fake agent to start `name` in `group`. */
 export function fakeSpawnLine(name: string, group: FakeProcessGroup): string {
@@ -65,7 +68,7 @@ function recorded(binDir: string, name: string): Recorded | null {
     throw e;
   }
   const [pid, group] = text.trim().split(' ');
-  if (!/^\d+$/.test(pid) || (group !== 'own' && group !== 'agent')) throw new Error(`malformed fake process record ${file}`);
+  if (!/^\d+$/.test(pid) || (group !== 'session' && group !== 'own' && group !== 'agent')) throw new Error(`malformed fake process record ${file}`);
   return { pid: Number(pid), group };
 }
 
@@ -102,7 +105,7 @@ export function fakeProcessRunning(binDir: string, name: string): boolean {
 
 function kill(r: Recorded): void {
   try {
-    process.kill(r.group === 'own' ? -r.pid : r.pid, 'SIGKILL');
+    process.kill(r.group === 'agent' ? r.pid : -r.pid, 'SIGKILL');
   } catch (e) {
     if (!isErrno(e, 'ESRCH')) throw e;
   }

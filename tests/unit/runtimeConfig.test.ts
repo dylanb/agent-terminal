@@ -53,6 +53,15 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '2147483648' }).autoGateDecisionMs).toBe(2_147_483_647);
   });
 
+  it('reads the Waiting lookup bound from APP_WAITING_LOOKUP_TIMEOUT_MS, with a positive default it falls back to on garbage', () => {
+    const fallback = resolveRuntimeConfig({}).waitingLookupTimeoutMs;
+    expect({
+      defaultIsPositive: Number.isInteger(fallback) && fallback > 0,
+      override: resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: '2500' }).waitingLookupTimeoutMs,
+      garbage: ['nope', '0', '-5', ''].map((raw) => resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: raw }).waitingLookupTimeoutMs),
+    }).toEqual({ defaultIsPositive: true, override: 2500, garbage: [fallback, fallback, fallback, fallback] });
+  });
+
   it('enables shell integration by default and opts out only on exactly "0"', () => {
     expect(resolveRuntimeConfig({}).shellIntegration).toBe(true);
     expect(resolveRuntimeConfig({ APP_SHELL_INTEGRATION: '0' }).shellIntegration).toBe(false);

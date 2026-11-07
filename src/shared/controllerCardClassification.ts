@@ -5,7 +5,7 @@ export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' 
 export type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
 
 export const ACTIVITY_WORDS: Readonly<Record<ControllerWorkStatus['activity'], string>> = {
-  active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable',
+  active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable', waiting: 'Idle',
 };
 
 const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];

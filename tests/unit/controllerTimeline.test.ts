@@ -115,3 +115,17 @@ it('two dimensions changing in one report give one entry each', async () => {
   expect(result).toHaveLength(2);
   expect(result?.some(text => text.includes('Idle'))).toBe(true);
 });
+
+const waitingOn = (program: string) => base({ activity: 'waiting', waiting: { program, others: 0 } });
+
+it.each([
+  ['Idle to Waiting adds Working', base({ activity: 'quiet' }), waitingOn('node'), ['Working']],
+  ['Activity unavailable to Waiting adds Working', base({ activity: 'unavailable' }), waitingOn('node'), ['Working']],
+  ['Working to Waiting adds nothing', base({ activity: 'active' }), waitingOn('node'), []],
+  ['Waiting to Working adds nothing', waitingOn('node'), base({ activity: 'active' }), []],
+  ['a change of program label while Waiting adds nothing', waitingOn('node'), waitingOn('pytest'), []],
+  ['Waiting to Idle adds Idle', waitingOn('node'), base({ activity: 'quiet' }), ['Idle']],
+  ['Waiting to Activity unavailable adds Activity unavailable', waitingOn('node'), base({ activity: 'unavailable' }), ['Activity unavailable']],
+] as const)('%s', async (_, previous, next, entries) => {
+  expect(await changes(previous, next)).toEqual(entries);
+});
