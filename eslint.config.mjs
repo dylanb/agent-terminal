@@ -180,7 +180,7 @@ export default [
     },
   },
   {
-    files: ['tests/e2e/validateFlow*.spec.ts', 'tests/e2e/finalizeInstalledAccess.spec.ts'],
+    files: ['tests/e2e/validateFlow*.spec.ts', 'tests/e2e/finalizeInstalledAccess.spec.ts', 'tests/e2e/checkRepeatList.spec.ts'],
     rules: INSTALLED_RUNTIME_SPEC_RULES,
   },
   {

@@ -206,3 +206,11 @@ describe('Operands are taken verbatim', () => {
     expect(problemOutcome(check([file, 'steps']), join(root, 'line break.json'))).toEqual(PROBLEM);
   });
 });
+
+describe('A working directory that is gone', () => {
+  it('a relative file named from a working directory that cannot be read prints one problem line and exits 1', () => {
+    const run = runCheckRepeatList(['list.json', 'steps'], { cwd: () => { throw new Error('ENOENT: no such file or directory, uv_cwd'); } });
+    const result: RunResult = { status: run.exitCode, signal: null, stdout: run.stdout, stderr: run.stderr };
+    expect(problemOutcome(result, 'list.json')).toEqual(PROBLEM);
+  });
+});

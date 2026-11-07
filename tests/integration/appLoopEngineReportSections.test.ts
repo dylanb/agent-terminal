@@ -15,6 +15,7 @@ const report = (): ArtifactBinding => ({
   id: 'impl-report',
   path: join(artDir(), 'impl-report.md'),
   rel: `${ART_REL}/impl-report.md`,
+  leafPath: join(artDir(), 'impl-report.md'),
   sectionsDir: { path: join(artDir(), 'impl-report'), rel: `${ART_REL}/impl-report` },
 });
 const sectionedDef = (): LoopDefV2 => ({ ...h.commitDef(), rounds: { kind: 'none' }, inputs: [report()], outputs: [report()] });

@@ -704,7 +704,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     // fixed by canonicalizing the left operand instead of removing the arithmetic.
     const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
     const sentinelRel = 'sentinel/loop-area/groomed-ticket.md';
-    h.defResult = resolved({ ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath, rel: sentinelRel }] });
+    h.defResult = resolved({ ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath, rel: sentinelRel, leafPath: iPath }] });
     const engine = makeEngine();
     engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -713,7 +713,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
 
   it('embeds the completion binding rel the def parser composed for the work turn\'s own artifact', () => {
     const sentinelRel = 'sentinel/loop-area/plan.md';
-    h.defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: h.artifactPath, rel: sentinelRel }] });
+    h.defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: h.artifactPath, rel: sentinelRel, leafPath: h.artifactPath }] });
     const engine = makeEngine();
     engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -1277,7 +1277,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     const engine = makeEngine();
     engine.resume(h.repo);
     const edited = 'sentinel/edited-def/plan.md'; // the operator's edit moves the completion artifact
-    h.defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: h.artifactPath, rel: edited }] });
+    h.defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: h.artifactPath, rel: edited, leafPath: h.artifactPath }] });
     const before = h.injected.length;
     engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
     engine.onInjectable();

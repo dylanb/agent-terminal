@@ -62,7 +62,7 @@ export const flushRedGate = (): Promise<void> => new Promise((r) => setTimeout(r
 /** An artifact binding as the def parser composes it — the confined absolute path plus the repo-relative
  *  form of that same location, both derived from the one loop-area segment list. */
 export function binding(id: string, absPath: string): ArtifactBinding {
-  return { id, path: absPath, rel: [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, basename(absPath)].join('/') };
+  return { id, path: absPath, rel: [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, basename(absPath)].join('/'), leafPath: absPath };
 }
 
 type Engine = ReturnType<typeof createAppLoopEngine>;

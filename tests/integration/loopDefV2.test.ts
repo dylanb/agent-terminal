@@ -380,6 +380,26 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
     }
   });
 
+  it('names the artifacts folder itself, not an escape, as the reason a path naming that folder is rejected', () => {
+    for (const area of ['"."', 'sub/..']) {
+      plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: plan.md', `path: ${area}`));
+      const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+      expect(r.ok ? 'loaded' : r.reason, area).toContain('must name a file inside the artifacts subtree');
+    }
+  });
+
+  it('loads an output path whose folder links out of the artifacts subtree when its file links back in, as before', () => {
+    const artifacts = join(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
+    const outside = join(appDir, 'outside');
+    mkdirSync(artifacts, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(artifacts, 'inside.md'), 'inside\n');
+    symlinkSync(outside, join(artifacts, 'out'));
+    symlinkSync(join(artifacts, 'inside.md'), join(outside, 'plan.md'));
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: plan.md', 'path: out/plan.md'));
+    expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }).ok).toBe(true);
+  });
+
   it('rejects an output path that still carries an unexpanded template slot', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: plan.md', 'path: artifacts/{iter}.md'));
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });

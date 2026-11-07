@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createFlowManager, loadFlowDefinition, type FlowManager } from '../../src/main/flow';
@@ -65,12 +65,13 @@ function rig(
   alsoOutputs: readonly string[] = [],
   sourcerFlow: (flow: FlowManager) => FlowManager = (flow) => flow,
   resources = true,
+  sourceOut = 'source-out',
 ): Rig {
   const repo = tmp('repeat-sourcing-repo-');
   const loopsRoot = tmp('repeat-sourcing-loops-');
   const gate = [{ option: 'approve' }];
   const also = Object.fromEntries(alsoOutputs.map((id) => [id, `${id}-out`]));
-  writeLoopDef(loopsRoot, SOURCE_LOOP, { artifact: outputId, outputs: { [outputId]: 'source-out', ...also }, gate });
+  writeLoopDef(loopsRoot, SOURCE_LOOP, { artifact: outputId, outputs: { [outputId]: sourceOut, ...also }, gate });
   writeLoopDef(loopsRoot, GROUP_SOURCE_LOOP, { artifact: outputId, outputs: { [outputId]: 'group-source-out' }, gate });
   writeLoopDef(loopsRoot, WORK_LOOP, { outputs: { result: 'work-result.md' }, gate });
   writeFlow(flowLocations.repoLocal(repo), spec);
@@ -292,6 +293,85 @@ describe('A failed re-source never blocks the advance', () => {
   });
 });
 
+describe('A link at the count_from artifact sources nothing', () => {
+  it('a list-form repeat whose count_from artifact is plan, with plan a link to a 3-slice plan, sources neither the count nor the slices input', async () => {
+    const fromPlan: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'plan', format: 'impl-slices' } };
+    const r = rig(flowSpec(fromPlan, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    const file = r.driver.outputPath('plan', 'plan');
+    mkdirSync(dirname(file), { recursive: true });
+    const target = join(dirname(file), 'plan-target.md');
+    writeFileSync(target, exampleSlicePlan(3));
+    symlinkSync(target, file);
+    await r.driver.approve('plan');
+    const sourced = createFlowStateStore(r.repo).read()?.inputs?.slices;
+    expect({ slices: sourced, seen: ['plan', ...(await play(r, 'plan', {}))] }).toEqual({ slices: undefined, seen: sequence(['plan'], 1) });
+  });
+
+  it("a list-form repeat counting from another artifact still writes the slices input from a plan output that is a link, as today", async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps', readLoopArtifact, ['plan']);
+    r.flow.start(r.repo);
+    const file = r.driver.outputPath('design', 'plan');
+    mkdirSync(dirname(file), { recursive: true });
+    const target = join(dirname(file), 'plan-target.md');
+    writeFileSync(target, exampleSlicePlan(3));
+    symlinkSync(target, file);
+    await r.driver.approve('design');
+    expect(createFlowStateStore(r.repo).read()?.inputs?.slices).toBe('3');
+  });
+});
+
+describe('A count_from artifact under a folder that links out of the artifacts folder sources nothing', () => {
+  /** A list-form rig whose `steps` output is `out/list.json`, with `out` a link to a folder outside the artifacts
+   *  folder and `list.json` there a link back to the artifacts folder's own 3-entry `list.json`. */
+  function linkedOut(readArtifact: (path: string) => string | null = readLoopArtifact): { r: Rig; outsideFile: string } {
+    const outside = tmp('repeat-sourcing-outside-');
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps', readArtifact, [], (flow) => flow, true, 'out/list.json');
+    const artifacts = dirname(dirname(r.driver.outputPath('design', 'steps')));
+    mkdirSync(artifacts, { recursive: true });
+    writeFileSync(join(artifacts, 'list.json'), list(3));
+    symlinkSync(outside, join(artifacts, 'out'));
+    const outsideFile = join(outside, 'list.json');
+    symlinkSync(join(artifacts, 'list.json'), outsideFile);
+    return { r, outsideFile };
+  }
+
+  it('when its file links back into the artifacts folder', async () => {
+    const { r } = linkedOut();
+    expect(await runFromStart(r, 'steps', {})).toEqual(sequence(['design'], 1));
+  });
+
+  it('when its file is swapped for a regular file outside the artifacts folder before the read', async () => {
+    let outsideFile = '';
+    const { r, outsideFile: at } = linkedOut((file) => {
+      rmSync(outsideFile, { force: true });
+      writeFileSync(outsideFile, list(3));
+      return readLoopArtifact(file);
+    });
+    outsideFile = at;
+    expect(await runFromStart(r, 'steps', {})).toEqual(sequence(['design'], 1));
+  });
+});
+
+describe('A source inside the group whose output is a link', () => {
+  it("is re-sourced on iteration 2 from the .slice-2 file its work turn is told to write", async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design'], true), 'steps');
+    r.flow.start(r.repo);
+    leave(r.driver.outputPath('design', 'steps'), list(3));
+    await r.driver.approve('design');
+    const base = r.driver.outputPath('build', 'steps');
+    mkdirSync(dirname(base), { recursive: true });
+    const target = join(dirname(base), 'group-target');
+    writeFileSync(target, list(3));
+    symlinkSync(target, base);
+    await r.driver.approve('build');
+    await r.driver.approve('check');
+    leave(r.driver.outputPath('build', 'steps'), list(2));
+    await r.driver.approve('build');
+    expect(['design', 'build', 'check', 'build', ...(await play(r, 'steps', {}))]).toEqual(sequence(['design'], 2));
+  });
+});
+
 describe('impl-slices works from any artifact', () => {
   const DESIGN_SLICES: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'design', format: 'impl-slices' } };
 
@@ -331,6 +411,17 @@ describe("Today's form is unchanged: count_input sourced from the plan output", 
     const r = rig(flowSpec(SLICES_INPUT, ['plan'], true), 'plan');
     const plans = (n: number): Leave => exampleSlicePlan(n === 1 ? 3 : secondSlices);
     expect(await runFromStart(r, 'plan', { plan: always('no block'), build: plans })).toEqual(sequence(['plan'], times));
+  });
+
+  it('a plan output that is a link to a plan inside the artifacts folder still sets the count, as before', async () => {
+    const r = rig(flowSpec(SLICES_INPUT, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    const file = r.driver.outputPath('plan', 'plan');
+    mkdirSync(dirname(file), { recursive: true });
+    const target = join(dirname(file), 'plan-target.md');
+    writeFileSync(target, exampleSlicePlan(3));
+    symlinkSync(target, file);
+    expect(await play(r, 'plan', {})).toEqual(sequence(['plan'], 3));
   });
 });
 
