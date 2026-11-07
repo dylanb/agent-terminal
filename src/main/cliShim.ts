@@ -16,6 +16,7 @@ export const CLI_COMMAND_NAME = 'agent-terminal';
 
 export const CONTROLLER_FLAG = '--controller';
 export const VALIDATE_FLOW_FLAG = '--validate-flow';
+export const CHECK_REPEAT_LIST_FLAG = '--check-repeat-list';
 export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 

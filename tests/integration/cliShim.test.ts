@@ -255,3 +255,31 @@ describe('shim --validate-flow (§23.5)', () => {
     expect(await runShim(['sub', '--validate-flow'])).toBe(join(realCwd, 'sub'));
   });
 });
+
+describe('shim --check-repeat-list (§23.5)', () => {
+  const builds: [string, (binary: string) => LaunchInvocation][] = [
+    ['packaged', (binary) => ({ execPath: binary, appArgs: [] })],
+    ['dev', (binary) => ({ execPath: binary, appArgs: [join(work, 'out', 'main', 'index.js')] })],
+  ];
+
+  it.each(builds)('%s build: runs the checker runtime in the foreground, in plain-Node mode, with every operand verbatim', (_, invocationOf) => {
+    const recorder = writeForegroundRecorder(join(work, 'binary'), { stdout: 'checked\n', stderr: 'a diagnostic\n', exitCode: 3 });
+    shimPath = join(work, 'agent-terminal');
+    writeFileSync(shimPath, generateShim(invocationOf(recorder.binary), CHECKER_SCRIPT));
+    chmodSync(shimPath, 0o755);
+    const operands = ['my list; touch evil-marker.json', 'the "steps" $(touch pwned)', `it's \`touch ticked\``];
+
+    const run = spawnSync(shimPath, ['--check-repeat-list', ...operands], { cwd: fixtureCwd, encoding: 'utf8' });
+
+    expect.soft({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 3, stdout: 'checked\n', stderr: 'a diagnostic\n' });
+    expect.soft(recorder.read()).toEqual({ argv: [CHECKER_SCRIPT, '--check-repeat-list', ...operands], cwd: realCwd, runAsNode: '1' });
+    expect.soft(['evil-marker.json', 'pwned', 'ticked'].filter((f) => existsSync(join(fixtureCwd, f)) || existsSync(join(work, f)))).toEqual([]);
+  });
+
+  it('still launches a directory named --check-repeat-list when it is spelled as a path or follows another operand', async () => {
+    mkdirSync(join(fixtureCwd, '--check-repeat-list'));
+    recorderShim();
+    expect(resolve(await runShim(['./--check-repeat-list']))).toBe(join(realCwd, '--check-repeat-list'));
+    expect(await runShim(['sub', '--check-repeat-list'])).toBe(join(realCwd, 'sub'));
+  });
+});

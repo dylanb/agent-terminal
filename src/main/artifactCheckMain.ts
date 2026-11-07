@@ -4,7 +4,8 @@ import { readNamedLoopArtifact } from './appLoopPaths';
 import { runArtifactCheck } from './artifactCheck';
 import { runFinalizeAccess } from './finalizeAccess';
 import { errMsg } from './errno';
-import { VALIDATE_FLOW_FLAG } from './cliShim';
+import { CHECK_REPEAT_LIST_FLAG, VALIDATE_FLOW_FLAG } from './cliShim';
+import { runCheckRepeatList } from './checkRepeatList';
 import { resolveAppHome } from './launchRoot';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { runValidateFlow } from './validateFlow';
@@ -23,6 +24,11 @@ if (args[0] === 'audit-evidence' || args[0] === 'publish-flow-audit') {
     appHome: resolveAppHome(process.env, os.homedir()),
     loopTiers: resolveAppLoopDefTiers({ packaged: false, appPath: __dirname }),
   });
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
+  process.exitCode = exitCode;
+} else if (args[0] === CHECK_REPEAT_LIST_FLAG) {
+  const { exitCode, stdout, stderr } = runCheckRepeatList(args.slice(1), { cwd: () => process.cwd() });
   process.stdout.write(stdout);
   process.stderr.write(stderr);
   process.exitCode = exitCode;
