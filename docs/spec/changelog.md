@@ -4,7 +4,7 @@
 
 - the question on a halt over a resumable stall names the turn's key and done-file and tells a still-working agent to answer, then finish the turn and write its done-file, which resumes the loop;
 - every turn prompt tells the agent to run long commands in the foreground, splitting one that exceeds its tool's time limit;
-- the stall watchdog defaults to thirty minutes (`APP_TURN_TIMEOUT_MS` still overrides it).
+- the stall watchdog defaults to forty-five minutes (`APP_TURN_TIMEOUT_MS` still overrides it).
 
 ## #301 — The controller's branch re-read is configurable and defaults to five minutes
 

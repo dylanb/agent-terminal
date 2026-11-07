@@ -16,7 +16,7 @@ const DEFAULTS = {
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
   // §27.12/D48 — env keeps the historical APP_TURN_TIMEOUT_MS name.
-  stallTimeoutMs: 1_800_000,
+  stallTimeoutMs: 2_700_000,
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
