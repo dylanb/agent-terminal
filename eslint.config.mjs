@@ -96,7 +96,9 @@ const CARD_ORDER_TESTS = [
   'tests/e2e/controllerRecentOrder.spec.ts',
   'tests/e2e/controllerRecency.spec.ts',
   'tests/e2e/controllerHold.spec.ts',
+  'tests/browser/controllerRecency.test.ts',
 ];
+const ZERO_DELAY_FLUSH_CARD_TESTS = ['tests/unit/controllerCard.test.ts', 'tests/unit/controllerFrozenList.test.ts', 'tests/unit/controllerRecencyInPlace.test.ts'];
 const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts', 'tests/**/sortModeControl.test.ts'];
 const CARD_HELPER = [
   'tests/helpers/controllerCards.ts',
@@ -181,7 +183,7 @@ export default [
     },
   },
   {
-    files: [...CARD_ORDER_TESTS, 'tests/unit/controllerCard.test.ts'],
+    files: [...CARD_ORDER_TESTS, ...ZERO_DELAY_FLUSH_CARD_TESTS],
     rules: { 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
   },
   {
@@ -191,7 +193,7 @@ export default [
     },
   },
   {
-    files: ['tests/unit/controllerCard.test.ts'],
+    files: ZERO_DELAY_FLUSH_CARD_TESTS,
     rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, TEST_NEW_DATE] },
   },
   {

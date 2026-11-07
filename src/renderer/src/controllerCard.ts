@@ -223,11 +223,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   let chosenExpanded = carried?.disconnected && model.kind !== 'disconnected' ? undefined : carried?.chosenExpanded;
   let expanded = chosenExpanded ?? deps.expandedByDefault;
   function setExpanded(next: boolean): void {
-    const held = body.contains(doc.activeElement);
+    const focusInBody = body.contains(doc.activeElement);
     expanded = next;
     toggle.setAttribute('aria-expanded', String(expanded));
     body.hidden = !expanded;
-    if (held && !expanded) toggle.focus();
+    if (focusInBody && !expanded) toggle.focus();
   }
   setExpanded(expanded);
   onPress(toggle, () => {

@@ -118,6 +118,7 @@ const ORDER_TESTS = [
   'tests/e2e/controllerRecentOrder.spec.ts',
   'tests/e2e/controllerRecency.spec.ts',
   'tests/e2e/controllerHold.spec.ts',
+  'tests/browser/controllerRecency.test.ts',
 ];
 
 describe('the card order tests wait on observed state and read no wall clock', () => {
@@ -135,14 +136,16 @@ describe('the card order tests wait on observed state and read no wall clock', (
     }
   });
 
-  it('flags a wall-clock read in the card tests, which hold the time-label checks', async () => {
-    const file = 'tests/unit/controllerCard.test.ts';
-    expect({
-      dateNow: await errors(NO_TEST_WALL_CLOCK, 'const started = Date.now();\n', file),
-      performanceNow: await errors(NO_TEST_WALL_CLOCK, 'const started = performance.now();\n', file),
-      newDate: await errors(NO_TEST_WALL_CLOCK, 'const started = new Date();\n', file),
-      fixedDate: await errors(NO_TEST_WALL_CLOCK, 'const at = new Date(2026, 10, 6, 9, 0);\n', file),
-    }).toEqual({ dateNow: 1, performanceNow: 1, newDate: 1, fixedDate: 0 });
+  it('flags a wall-clock read in the card, frozen-list and in-place recency tests, which flush with a zero-delay timer', async () => {
+    for (const file of ['tests/unit/controllerCard.test.ts', 'tests/unit/controllerFrozenList.test.ts', 'tests/unit/controllerRecencyInPlace.test.ts']) {
+      expect({
+        file,
+        dateNow: await errors(NO_TEST_WALL_CLOCK, 'const started = Date.now();\n', file),
+        performanceNow: await errors(NO_TEST_WALL_CLOCK, 'const started = performance.now();\n', file),
+        newDate: await errors(NO_TEST_WALL_CLOCK, 'const started = new Date();\n', file),
+        fixedDate: await errors(NO_TEST_WALL_CLOCK, 'const at = new Date(2026, 10, 6, 9, 0);\n', file),
+      }).toEqual({ file, dateNow: 1, performanceNow: 1, newDate: 1, fixedDate: 0 });
+    }
   });
 
   it('accepts an observed-state wait and the fake clock, and leaves other tests alone', async () => {
