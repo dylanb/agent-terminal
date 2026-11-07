@@ -8,6 +8,7 @@ import { isAdoptedPickup } from '../shared/appBootstrap';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
+import { createRealPublishPrReviewPorts, publishPrReview, type PublishPrReviewRequest } from './publishPrReview';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
@@ -35,6 +36,9 @@ export interface AppGateGitHubOperations {
     bodyFile: string,
     closingIssue: number | null,
   ): Promise<void>;
+  /** §27.13 `publish-pr-review`: publishes an adopting run's review into the PR it adopted, or throws having
+   *  written nothing. */
+  publishPullRequestReview(request: PublishPrReviewRequest): Promise<void>;
 }
 
 export function createAppGateGitHub(
@@ -92,6 +96,9 @@ export function createAppGateGitHub(
           ctx.bodyFile,
           bootstrap?.issue ?? null,
         );
+        return { outcome: 'done' };
+      case GH_ACTION.publishPrReview:
+        await github.publishPullRequestReview({ pickup: ctx.pickup, pr: ctx.pr, report: ctx.bodyFile });
         return { outcome: 'done' };
       default:
         throw new Error(`unknown approve side-effect action: ${action}`);
@@ -166,6 +173,9 @@ export function createRealAppGateGitHub(
       await bodies.replaceBody(pullRequest, closingIssue === null
         ? body
         : `${body.trimEnd()}\n\ncloses #${closingIssue}\n`);
+    },
+    publishPullRequestReview: async (request) => {
+      await publishPrReview(createRealPublishPrReviewPorts(repoDir), request);
     },
   };
   return createAppGateGitHub(github);

@@ -336,7 +336,11 @@ export interface FlowStateView {
 /** §27.13 */
 export type PickupConfirmView =
   | { run: RunIdentity; state: 'looking' }
-  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
+  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[]; adopted?: AdoptedPickupConfirm };
+
+/** An adopting run's confirm: the primary ticket its start recorded, shown read-only, or why it cannot be
+ *  recovered. The confirm sends the primary's number; its repository stays in main's record. */
+export type AdoptedPickupConfirm = { recoverable: true; primary: TicketRef } | { recoverable: false; reason: string };
 
 /** §6 — the run is named so a confirm can only release the hold the operator was shown. */
 export interface FlowConfirmRunPickupMsg {

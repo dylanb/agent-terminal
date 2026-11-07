@@ -781,6 +781,28 @@ test('a relaunched adopting run with no saved pickup is held, showing the PR and
   expect.soft(w.contractBreaches()).toEqual([]);
 });
 
+test("a relaunched adopting run's confirm passes when the PR also closes a ticket in a third repository (#304 AC 24)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
+  const w = world({
+    prefix: 'agent-term-e2e-adopt-confirm-elsewhere',
+    pr: { fork: 'Contributor/Fork', closingIssues: [{ repo: 'contributor/fork', number: 177 }, { repo: 'elsewhere/other', number: 9 }] },
+  });
+  const first = await toGateThenClose(w);
+  rmSync(join(w.repo, ...RUN_PICKUP_REL));
+
+  const { page } = await launch(w, COMMITS_FIX, {}, { gate: PUBLISH_GATE, relaunchOf: first });
+  await typeCommand(page, `cd ${shellQuote(w.repo)}`);
+  const dialog = pickupConfirm(page);
+  await expect.soft(dialog).toBeVisible({ timeout: 15_000 });
+  await use(dialog.getByRole('button', { name: 'Confirm' }), (button) => button.click());
+  await expect.soft(dialog).toBeHidden({ timeout: 15_000 });
+  await typeCommand(page, 'fake-agent');
+  await approveAtGate(page);
+  await expect.soft.poll(() => flowStep(w), { timeout: 30_000 }).toBe('done');
+  expect.soft(runComments(w)).toHaveLength(1);
+  expect.soft(w.contractBreaches()).toEqual([]);
+});
+
 test("a relaunched adopting run's confirm is refused when the PR now closes the primary's number in another repository instead (#304 AC 24)", { tag: '@ownapp' }, async () => {
   test.setTimeout(2 * WINDOW_TIMEOUT_MS + 180_000);
   const w = world({ prefix: 'agent-term-e2e-adopt-confirm-repo', ...FORK_PRIMARY });

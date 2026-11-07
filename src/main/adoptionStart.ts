@@ -74,7 +74,7 @@ function ownerAndName(repo: string, host: string): GitHubRepositoryIdentity {
 }
 
 /** The tickets `pr` closes in its base repository (origin) or its head repository, each with its repository. */
-export function acceptableTickets(pr: AdoptionPullRequest, origin: GitHubRepositoryIdentity): TicketRef[] {
+export function acceptableTickets(pr: Pick<AdoptionPullRequest, 'headRepo' | 'closingIssues'>, origin: GitHubRepositoryIdentity): TicketRef[] {
   const host = repositoryHost(origin);
   const repositories = [origin, ...(pr.headRepo === null ? [] : [ownerAndName(pr.headRepo, host)])];
   return pr.closingIssues.flatMap((issue) => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { awaitingPickupConfirm, createRunPickupConfirmations, proposeRunPickup, type PickupEvidence } from '../../src/main/runPickupConfirm';
 import type { PullRequest, PullRequestLookup } from '../../src/main/pullRequestLookup';
 import type { RunIdentity } from '../../src/main/gateRunState';
@@ -28,7 +28,17 @@ const ADOPTED: AdoptedPickup = {
   headOid: 'a'.repeat(40),
   baseOid: 'b'.repeat(40),
 };
-const REVIEWED: PullRequest = { number: 41, branch: 'feature/reviewed-change', state: 'OPEN', closingIssues: [176, 177], crossRepository: true };
+const REVIEWED: PullRequest = {
+  number: 41,
+  branch: 'feature/reviewed-change',
+  state: 'OPEN',
+  closingIssues: [176, 177],
+  closingTickets: [
+    { repo: 'owner/repo', number: 176 },
+    { repo: 'contributor/fork', number: 177 },
+  ],
+  crossRepository: true,
+};
 
 function lookup(prs: PullRequest[]): PullRequestLookup {
   return {
@@ -47,12 +57,13 @@ const evidence = (over: Partial<PickupEvidence> = {}): PickupEvidence => ({
   branch: FIX_BRANCH,
   flowTicket: null,
   bootstrapRecord: { kind: 'complete', bootstrap: ADOPTED },
+  adopting: { pr: 41 },
   ...over,
 });
 
 describe('which adopting runs wait for a confirm', () => {
   it('a run resumed at its adopting step, with no saved pickup and a start record naming its PR, waits', () => {
-    const facts = { run: RUN, pickupInFlight: false, runBegunHere: false, flowRefs: { ticket: null, pr: 41 }, bootstrapRecord: { kind: 'complete' as const, bootstrap: ADOPTED } };
+    const facts = { run: RUN, pickupInFlight: false, runBegunHere: false, flowRefs: { ticket: null, pr: 41 }, bootstrapRecord: { kind: 'complete' as const, bootstrap: ADOPTED }, adopting: true as const };
     expect.soft(awaitingPickupConfirm({ ...facts, pickupStep: 'current' })).toEqual(RUN);
     expect.soft(awaitingPickupConfirm({ ...facts, pickupStep: 'behind' })).toEqual(RUN);
   });
@@ -109,7 +120,7 @@ describe("the confirm of an adopting run's pickup", () => {
   it.each([
     ['a ticket that is not the recorded primary', [REVIEWED], evidence(), 176, /177/],
     ['a reviewed PR that is closed', [{ ...REVIEWED, state: 'CLOSED' as const }], evidence(), 177, /closed|not open/i],
-    ['a reviewed PR that no longer closes the primary', [{ ...REVIEWED, closingIssues: [176] }], evidence(), 177, /177/],
+    ['a reviewed PR that no longer closes the primary', [{ ...REVIEWED, closingIssues: [176], closingTickets: [{ repo: 'owner/repo', number: 176 }] }], evidence(), 177, /177/],
     ['a checkout of a branch other than the fix branch', [REVIEWED], evidence({ branch: 'elsewhere' }), 177, new RegExp(FIX_BRANCH)],
     [
       'a start record that names another PR, saying the run must be terminated and started again',
@@ -126,5 +137,76 @@ describe("the confirm of an adopting run's pickup", () => {
     expect.soft(result.ok ? '' : result.reason).toMatch(reason);
     expect.soft(h.trusted).toEqual([]);
     expect.soft(h.confirmations.held('/repo')).toBe(true);
+  });
+});
+
+describe('a confirm naming a PR other than the one the run adopted', () => {
+  it('is refused, naming the recorded PR, and saves nothing', async () => {
+    const trusted: unknown[] = [];
+    const confirmations = createRunPickupConfirmations({
+      heldRun: () => ({ run: RUN, initialStatus: null }),
+      evidence: () => evidence(),
+      lookup: () => lookup([REVIEWED, { ...REVIEWED, number: 42 }]),
+      trust: (_repo, pickup) => void trusted.push(pickup),
+      changed: () => {},
+    });
+    const result = await confirmations.confirm('/repo', RUN, 42, 177);
+    expect.soft(result.ok).toBe(false);
+    expect.soft(result.ok ? '' : result.reason).toMatch(/#41\b/);
+    expect.soft(trusted).toEqual([]);
+    expect.soft(confirmations.held('/repo')).toBe(true);
+  });
+});
+
+describe('an adopting run whose GitHub lookup fails', () => {
+  const failing: PullRequestLookup = {
+    openForBranch: async () => [],
+    pullRequest: async () => {
+      throw new Error('gh: not logged in');
+    },
+  };
+
+  it('proposes with the failure as a problem instead of rejecting', async () => {
+    const proposal = await proposeRunPickup(evidence(), failing);
+    expect.soft(proposal).toMatchObject({ pr: 41 });
+    expect.soft(proposal.problems.join('\n')).toContain('gh: not logged in');
+  });
+
+  it('refuses the confirm with the failure, and saves nothing', async () => {
+    const trusted: unknown[] = [];
+    const confirmations = createRunPickupConfirmations({
+      heldRun: () => ({ run: RUN, initialStatus: null }),
+      evidence: () => evidence(),
+      lookup: () => failing,
+      trust: (_repo, pickup) => void trusted.push(pickup),
+      changed: () => {},
+    });
+    const result = await confirmations.confirm('/repo', RUN, 41, 177);
+    expect.soft(result.ok).toBe(false);
+    expect.soft(result.ok ? '' : result.reason).toContain('gh: not logged in');
+    expect.soft(trusted).toEqual([]);
+  });
+});
+
+describe("an adopting run's published proposal", () => {
+  it('is unchanged for later reads when a caller changes a view it was given', async () => {
+    const confirmations = createRunPickupConfirmations({
+      heldRun: () => ({ run: RUN, initialStatus: null }),
+      evidence: () => evidence({ branch: 'elsewhere' }),
+      lookup: () => lookup([REVIEWED]),
+      trust: () => {},
+      changed: () => {},
+    });
+    confirmations.view('/repo');
+    await vi.waitFor(() => expect(confirmations.view('/repo')?.state).toBe('proposed'));
+    const first = confirmations.view('/repo');
+    const problems = first?.state === 'proposed' ? [...first.problems] : [];
+    if (first?.state === 'proposed') {
+      first.problems.push('injected');
+      if (first.adopted?.recoverable) first.adopted.primary.number = 999;
+    }
+    const again = confirmations.view('/repo');
+    expect.soft(again?.state === 'proposed' ? again.problems : null).toEqual(problems);
+    expect.soft(again?.state === 'proposed' && again.adopted?.recoverable ? again.adopted.primary : null).toEqual({ repo: 'contributor/fork', number: 177 });
   });
 });

@@ -304,8 +304,14 @@ if (args[0] === 'pr' && args[1] === 'edit') {
 }
 
 if (args[0] === 'api') {
-  const o = options(args.slice(1), ['--method', '-X', '--hostname', '--input', '-H', '--header'], ['--paginate', '--slurp'], API_ARGV_FIELDS);
+  const o = options(args.slice(1), ['--method', '-X', '--hostname', '--input', '-H', '--header', '--jq'], ['--paginate', '--slurp'], API_ARGV_FIELDS);
   if (o.values['--hostname'] !== HOST) contract('every gh api call names --hostname ' + HOST);
+  // The one --jq filter modelled: each comment as a line {id, login, marked}, marked when its body starts with the marker.
+  const jq = o.values['--jq'];
+  const jqMarker = jq === undefined ? undefined : /^\.\[\] \| \{id, login: \.user\.login, marked: \(\.body \| startswith\(("(?:[^"\\]|\\.)*")\)\)\}$/.exec(jq);
+  if (jq !== undefined && !jqMarker) contract('unmodelled --jq filter ' + jq);
+  const marker = jqMarker ? JSON.parse(jqMarker[1]) : undefined;
+  const markerLines = (page) => page.map((c) => JSON.stringify({ id: c.id, login: c.user.login, marked: c.body.startsWith(marker) }) + '\n').join('');
   if (o.positional.length !== 1) contract('gh api names one route');
   const method = (o.values['--method'] ?? o.values['-X'] ?? (o.values['--input'] !== undefined ? 'POST' : 'GET')).toUpperCase();
   const url = new URL(o.positional[0].replace(/^\//, ''), 'https://api.invalid/');
@@ -331,7 +337,10 @@ if (args[0] === 'api') {
       const perPage = Math.min(Math.max(Number(url.searchParams.get('per_page') ?? PAGE) || PAGE, 1), 100);
       const pageList = [];
       for (let i = 0; i === 0 || i < all.length; i += perPage) pageList.push(all.slice(i, i + perPage));
-      if (!o.flags.has('--paginate')) out(pageList[Number(url.searchParams.get('page') ?? 1) - 1] ?? []);
+      if (jq !== undefined && o.flags.has('--slurp')) contract('--jq with --slurp');
+      const one = pageList[Number(url.searchParams.get('page') ?? 1) - 1] ?? [];
+      if (!o.flags.has('--paginate')) out(jq === undefined ? one : markerLines(one));
+      if (jq !== undefined) out(pageList.map(markerLines).join(''));
       out(o.flags.has('--slurp') ? JSON.stringify(pageList) : pageList.map((p) => JSON.stringify(p)).join(''));
     }
     if (method === 'POST') {
@@ -385,7 +394,9 @@ contract('unmodelled gh operation');
  * - `gh api --hostname github.com user`, and on `repos/<origin>/`: `issues/<n>/comments` (GET, one page of
  *   `ADOPTION_GH_PAGE_SIZE` or `?per_page=`, all pages with `--paginate`, as one array of pages with `--slurp`;
  *   POST with `--input -`), and `issues/comments/<id>` (PATCH with `--input -`, refused for another login's
- *   comment). `--input` carries exactly `{"body": …}`.
+ *   comment). `--input` carries exactly `{"body": …}`. The one `--jq` filter modelled on the comment list projects
+ *   each comment to a line `{"id","login","marked"}`, `marked` meaning its body starts with the marker the filter's
+ *   `startswith` names; any other filter, or `--jq` with `--slurp`, exits 97.
  *
  * It enforces two contracts, so a regression fails the test: every body arrives on stdin (`--body`, `-b`,
  * `-f`/`-F`/`--field`/`--raw-field` exit 97), and every call names the fixture repository and the host

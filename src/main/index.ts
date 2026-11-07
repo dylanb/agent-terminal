@@ -138,10 +138,10 @@ import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAdoptedPickup, writeAdoptedPickupIntent, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
-import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
+import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun, type ReachedPickupStep } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import { isAdoptPickup, type LoopDefV2Context, type PickupContractV2 } from './loopDefV2';
+import { isAdoptPickup, type LoopDefV2Context, type PickupV2 } from './loopDefV2';
 import { compensateAdoption, runAdoptionStart, type AdoptionStartDeps } from './adoptionStart';
 import { adoptedRunRefs } from '../shared/currentTicket';
 import { createRealAdoptionGit, createRealAdoptionGitHub } from './adoptionPorts';
@@ -783,17 +783,26 @@ async function createWindow(): Promise<void> {
   const pickupRecordPredatesRun = new Set<string>();
   // §27.13
   const runsBegunHere = new Set<string>();
+  /** The first pickup step the flow has reached, or null when its flow does not load or has reached none. */
+  const reachedPickup = (repoKey: string): ReachedPickupStep<PickupV2> => {
+    const load = resolveActiveDefinition(repoKey);
+    if (!load.ok) return null;
+    return reachedPickupStep(load.definition.steps, flow.state(repoKey).position, (step: FlowStepDef): PickupV2 | null => {
+      if (step.kind !== 'loop' || step.loop === undefined) return null;
+      const resolved = observedResolveDef(repoKey, step.loop);
+      return resolved.ok ? resolved.def.pickup : null;
+    });
+  };
+  const adoptingPickupStep = (repoKey: string): boolean => {
+    const reached = reachedPickup(repoKey);
+    return reached !== null && isAdoptPickup(reached.contract);
+  };
   const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
     const run = inProgressRunIdentity(repoKey);
     if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
-    const load = resolveActiveDefinition(repoKey);
-    if (!load.ok) return null;
     const view = flow.state(repoKey);
-    const reached = reachedPickupStep(load.definition.steps, view.position, (step: FlowStepDef): PickupContractV2 | null => {
-      if (step.kind !== 'loop' || step.loop === undefined) return null;
-      const resolved = observedResolveDef(repoKey, step.loop);
-      return resolved.ok && resolved.def.pickup !== null && !isAdoptPickup(resolved.def.pickup) ? resolved.def.pickup : null;
-    });
+    const reached = reachedPickup(repoKey);
+    const adopting = reached !== null && isAdoptPickup(reached.contract);
     const held = awaitingPickupConfirm({
       run,
       pickupInFlight: pickupInFlight?.repoKey === repoKey,
@@ -801,16 +810,24 @@ async function createWindow(): Promise<void> {
       runBegunHere: runsBegunHere.has(repoKey),
       flowRefs: { ticket: view.refs?.ticket ?? null, pr: view.refs?.pr ?? null },
       bootstrapRecord: readPickupRecord(repoKey),
+      ...(adopting ? { adopting: true as const } : {}),
     });
-    return held === null || reached === null ? null : { run: held, initialStatus: reached.contract.initialStatus };
+    if (held === null || reached === null) return null;
+    return { run: held, initialStatus: isAdoptPickup(reached.contract) ? null : reached.contract.initialStatus };
   };
   const pickupConfirmations = createRunPickupConfirmations({
     heldRun: pickupHeldRun,
     evidence: (repoKey) => {
       const branch = currentGitBranch(repoKey);
-      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, bootstrapRecord: readPickupRecord(repoKey) };
+      const refs = flow.state(repoKey).refs;
+      return {
+        branch: branch.ok ? branch.branch : null,
+        flowTicket: refs?.ticket ?? null,
+        bootstrapRecord: readPickupRecord(repoKey),
+        ...(adoptingPickupStep(repoKey) ? { adopting: { pr: refs?.pr ?? null } } : {}),
+      };
     },
-    lookup: createRealPullRequestLookup,
+    lookup: (repoKey) => createRealPullRequestLookup(repoKey, adoptingPickupStep(repoKey) ? 'ignore' : 'refuse'),
     trust: (repoKey, pickup) => {
       trustedAppBootstraps.set(repoKey, pickup);
       pickupRecordPredatesRun.delete(repoKey);

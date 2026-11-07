@@ -8,7 +8,7 @@ import {
   type PickupEvidence,
 } from '../../src/main/runPickupConfirm';
 import type { PullRequestLookup, PullRequest } from '../../src/main/pullRequestLookup';
-import type { AppLoopBootstrap } from '../../src/main/appLoopState';
+import type { RunPickup } from '../../src/main/trustedPickups';
 import type { RunIdentity } from '../../src/main/gateRunState';
 
 // §27.13 — a run past its pickup with no saved pickup is held until the operator confirms the ticket and PR
@@ -119,7 +119,7 @@ describe('the hold', () => {
   function harness(prs: PullRequest[] = [open233], gh: (prs: PullRequest[]) => PullRequestLookup = lookup) {
     let heldRun: RunIdentity | null = RUN;
     let ev = evidence();
-    const trusted: AppLoopBootstrap[] = [];
+    const trusted: RunPickup[] = [];
     let changes = 0;
     const confirmations = createRunPickupConfirmations({
       heldRun: () => (heldRun === null ? null : { run: heldRun, initialStatus: 'planning' }),

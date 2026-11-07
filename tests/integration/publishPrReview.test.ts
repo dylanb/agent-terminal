@@ -587,6 +587,22 @@ describe('a publish that failed part-way completes on the next approve without w
   });
 });
 
+describe("a retry after the run comment failed gives this run's fix PR the report as it is now (#304 AC 23)", () => {
+  it('replaces the fix PR body with the rewritten report', async () => {
+    const run = await adoptedRun();
+    commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
+    run.w.gh.set({ failOnce: ['comment-create'] });
+
+    const first = await approve(run);
+    writeFileSync(run.report, 'The report, rewritten before the retry.\n');
+    const second = await approve(run);
+
+    expect.soft(first.accepted).toBe(0);
+    expect.soft(second.accepted).toBe(1);
+    expect.soft(fixPrs(run.w, run.pickup.fixBranch).map((p) => p.body)).toEqual(['The report, rewritten before the retry.\n']);
+  });
+});
+
 describe('a new run on a PR an earlier run published to publishes its own, leaving the earlier one unchanged (#304 AC 13)', () => {
   it('uses its own fix branch, opens its own fix PR and posts its own run comment', async () => {
     const earlier = await adoptedRun();
@@ -660,5 +676,17 @@ describe('what the publish never takes as its own (#304)', () => {
     expect.soft(comments(run.w).find((c) => c.id === posted?.id)?.body).toBe(posted?.body);
     expect.soft(runComments(run.w)).toHaveLength(1);
     expect.soft(runComments(run.w)[0]?.body ?? '').toContain('A second report.');
+  });
+});
+
+describe('a patch too large for the command output buffer still holds naming its size (#304 AC 20)', () => {
+  it('a fork run whose fix makes a patch over 1 MiB holds, naming the run comment and the limit', async () => {
+    const run = await adoptedRun({ pr: { fork: 'Contributor/Fork' } });
+    const line = `${'x'.repeat(99)}\n`;
+    commitFix(run, 'big.txt', line.repeat(12_000), 'Add a large fix');
+
+    const reason = await expectHeld(run);
+    expect.soft(reason).toMatch(/comment/i);
+    expect.soft(sizesIn(run, reason)).toContain(LIMIT);
   });
 });

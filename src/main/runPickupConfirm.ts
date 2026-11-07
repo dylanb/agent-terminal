@@ -4,10 +4,10 @@
 import { errMsg } from './errno';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { pickupMismatch, type PullRequestLookup } from './pullRequestLookup';
-import { runPickupRel } from './trustedPickups';
-import type { AppLoopBootstrap, PickupRecord, ReadAppLoopBootstrap } from './appLoopState';
-import { isAdoptedPickup } from '../shared/appBootstrap';
-import type { ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
+import { runPickupRel, type RunPickup } from './trustedPickups';
+import type { PickupRecord, ReadAppLoopBootstrap } from './appLoopState';
+import { isAdoptedPickup, sameTicketRef, type AdoptedPickup } from '../shared/appBootstrap';
+import type { AdoptedPickupConfirm, ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
 
 export const PICKUP_CONFIRM_FIRST =
   'Confirm the run’s ticket and pull request first: the app has no saved pull request for this run, so nothing in it continues until you do.';
@@ -34,10 +34,14 @@ export interface PickupHoldFacts {
   runBegunHere: boolean;
   flowRefs: { ticket: number | null; pr: number | null };
   bootstrapRecord: PickupRecord;
+  /** The pickup step adopts the flow's PR. Its pickup is never re-run, and only the start's record can
+   *  recover its facts, so a run past it with no saved pickup always waits. */
+  adopting?: true;
 }
 
 export function awaitingPickupConfirm(f: PickupHoldFacts): RunIdentity | null {
   if (f.run === null || f.pickupInFlight || f.pickupStep === 'none' || f.runBegunHere) return null;
+  if (f.adopting) return f.run;
   const record = f.bootstrapRecord;
   const opened = openedPickupOf(record);
   const { ticket, pr } = f.flowRefs;
@@ -57,6 +61,8 @@ export interface PickupEvidence {
   branch: string | null;
   flowTicket: number | null;
   bootstrapRecord: PickupRecord;
+  /** Present when the run's pickup step adopts a PR: the flow's PR ref. */
+  adopting?: { pr: number | null };
 }
 
 export interface PickupProposal {
@@ -64,9 +70,72 @@ export interface PickupProposal {
   pr: number | null;
   ticket: number | null;
   problems: string[];
+  adopted?: AdoptedPickupConfirm;
 }
 
+const unrecoverable = (pr: number | null): string =>
+  `This run's primary ticket cannot be recovered: neither its saved pickup nor its start record names ${pr === null ? 'its pull request' : `pull request #${pr}`}. Terminate the run and start it again.`;
+
+/** The start's record of an adopting run, when it names the flow's PR. */
+function adoptedRecordOf(evidence: PickupEvidence & { adopting: { pr: number | null } }): AdoptedPickup | null {
+  const record = evidence.bootstrapRecord;
+  return record.kind === 'complete' && isAdoptedPickup(record.bootstrap) && record.bootstrap.pr === evidence.adopting.pr ? record.bootstrap : null;
+}
+
+/** Why the checkout or GitHub no longer backs an adopting run's recorded pickup, or null when they do. */
+async function adoptedPickupProblem(record: AdoptedPickup, branch: string | null, lookup: PullRequestLookup): Promise<string | null> {
+  if (branch !== record.fixBranch) {
+    return `The run's fix branch ${record.fixBranch} is not checked out${branch === null ? '' : `; ${branch} is`}. Check out ${record.fixBranch} and confirm again.`;
+  }
+  const primary = `${record.primary.repo}#${record.primary.number}`;
+  try {
+    const pr = await lookup.pullRequest(record.pr);
+    if (pr.state !== 'OPEN') return `Pull request #${record.pr} is ${pr.state.toLowerCase()}, not open.`;
+    if (!(pr.closingTickets ?? []).some((t) => sameTicketRef(t, record.primary))) return `Pull request #${record.pr} no longer closes ${primary}.`;
+  } catch (e) {
+    return `GitHub could not confirm pull request #${record.pr}: ${errMsg(e)}`;
+  }
+  return null;
+}
+
+async function proposeAdoptedPickup(evidence: PickupEvidence & { adopting: { pr: number | null } }, lookup: PullRequestLookup): Promise<PickupProposal> {
+  const record = adoptedRecordOf(evidence);
+  const { branch } = evidence;
+  if (record === null) {
+    const reason = unrecoverable(evidence.adopting.pr);
+    return { branch, pr: evidence.adopting.pr, ticket: null, problems: [reason], adopted: { recoverable: false, reason } };
+  }
+  const problem = await adoptedPickupProblem(record, branch, lookup);
+  return {
+    branch,
+    pr: record.pr,
+    ticket: record.primary.number,
+    problems: problem === null ? [] : [problem],
+    adopted: { recoverable: true, primary: { ...record.primary } },
+  };
+}
+
+/** The adopting run's recorded pickup, once the operator's numbers and GitHub back it; or why not. */
+async function verifyAdoptedPickup(
+  evidence: PickupEvidence & { adopting: { pr: number | null } },
+  lookup: PullRequestLookup,
+  pr: number,
+  ticket: number,
+): Promise<{ ok: true; pickup: AdoptedPickup } | { ok: false; reason: string }> {
+  const record = adoptedRecordOf(evidence);
+  if (record === null) return { ok: false, reason: unrecoverable(evidence.adopting.pr) };
+  if (pr !== record.pr) return { ok: false, reason: `This run reviews pull request #${record.pr}; Terminate the run and Start it again to review a different one.` };
+  if (ticket !== record.primary.number) {
+    return { ok: false, reason: `This run's primary ticket is ${record.primary.repo}#${record.primary.number}; Terminate the run and Start it again to work on a different ticket.` };
+  }
+  const problem = await adoptedPickupProblem(record, evidence.branch, lookup);
+  return problem === null ? { ok: true, pickup: record } : { ok: false, reason: problem };
+}
+
+const isAdopting = (evidence: PickupEvidence): evidence is PickupEvidence & { adopting: { pr: number | null } } => evidence.adopting !== undefined;
+
 export async function proposeRunPickup(evidence: PickupEvidence, lookup: PullRequestLookup): Promise<PickupProposal> {
+  if (isAdopting(evidence)) return proposeAdoptedPickup(evidence, lookup);
   const problems: string[] = [];
   const record = evidence.bootstrapRecord;
   const recorded = openedPickupOf(record);
@@ -120,14 +189,15 @@ export async function verifyRunPickup(
 
 export interface HeldPickupRun {
   run: RunIdentity;
-  initialStatus: string;
+  /** The ticket run's initial status; null for an adopting run, which has none. */
+  initialStatus: string | null;
 }
 
 export interface RunPickupConfirmDeps {
   heldRun(repoKey: string): HeldPickupRun | null;
   evidence(repoKey: string): PickupEvidence;
   lookup(repoKey: string): PullRequestLookup;
-  trust(repoKey: string, pickup: AppLoopBootstrap): void;
+  trust(repoKey: string, pickup: RunPickup): void;
   changed(): void;
 }
 
@@ -163,19 +233,37 @@ export function createRunPickupConfirmations(deps: RunPickupConfirmDeps): RunPic
         });
         return { run, state: 'looking' };
       }
-      return entry.proposal === null ? { run, state: 'looking' } : { run, state: 'proposed', ...entry.proposal };
+      if (entry.proposal === null) return { run, state: 'looking' };
+      const { adopted, problems, ...proposal } = entry.proposal;
+      return {
+        run,
+        state: 'proposed',
+        ...proposal,
+        problems: [...problems],
+        ...(adopted === undefined ? {} : { adopted: adopted.recoverable ? { recoverable: true, primary: { ...adopted.primary } } : { ...adopted } }),
+      };
     },
     held: (repoKey) => deps.heldRun(repoKey) !== null,
     async confirm(repoKey, run, pr, ticket) {
       if (heldAs(repoKey, run) === null) return { ok: false, reason: NO_LONGER_WAITING };
-      const { branch, flowTicket } = deps.evidence(repoKey);
+      const evidence = deps.evidence(repoKey);
+      if (isAdopting(evidence)) {
+        const verified = await verifyAdoptedPickup(evidence, deps.lookup(repoKey), pr, ticket);
+        if (!verified.ok) return verified;
+        if (heldAs(repoKey, run) === null) return { ok: false, reason: NO_LONGER_WAITING };
+        deps.trust(repoKey, verified.pickup);
+        proposals.delete(repoKey);
+        deps.changed();
+        return { ok: true };
+      }
+      const { branch, flowTicket } = evidence;
       if (flowTicket !== null && ticket !== flowTicket) {
         return { ok: false, reason: `This run is for ticket #${flowTicket}; Terminate the run and Start it again to work on a different ticket.` };
       }
       const refusal = await verifyRunPickup(deps.lookup(repoKey), { branch, pr, ticket });
       if (refusal !== null) return { ok: false, reason: refusal };
       const held = heldAs(repoKey, run);
-      if (held === null || branch === null) return { ok: false, reason: NO_LONGER_WAITING };
+      if (held === null || held.initialStatus === null || branch === null) return { ok: false, reason: NO_LONGER_WAITING };
       deps.trust(repoKey, { pr, branch, issue: ticket, initialStatus: held.initialStatus });
       proposals.delete(repoKey);
       deps.changed();

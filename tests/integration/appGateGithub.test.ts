@@ -54,6 +54,9 @@ function githubState(
           closingIssue,
         });
       },
+      publishPullRequestReview: async () => {
+        throw new Error('this fake publishes no review');
+      },
     },
   };
 }

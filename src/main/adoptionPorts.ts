@@ -12,6 +12,14 @@ import type { AdoptionGit, AdoptionGitHub, AdoptionPullRequest } from './adoptio
 
 const PR_FIELDS = 'state,headRefName,baseRefName,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences';
 
+/** `<owner>/<name>` of a PR's head repository, lowercased, from GitHub's `headRepository` and
+ *  `headRepositoryOwner`; null when GitHub reports none (a deleted fork). */
+export function headRepositoryName(headRepository: unknown, headRepositoryOwner: unknown): string | null {
+  const name = isRecord(headRepository) && typeof headRepository.name === 'string' ? headRepository.name : null;
+  const owner = isRecord(headRepositoryOwner) && typeof headRepositoryOwner.login === 'string' ? headRepositoryOwner.login : null;
+  return name === null || owner === null ? null : `${owner}/${name}`.toLowerCase();
+}
+
 /** GitHub's answer for a PR, or a thrown reason when it is not the shape the adoption reads. */
 export function parseAdoptionPullRequest(raw: string): AdoptionPullRequest {
   let doc: unknown;
@@ -29,13 +37,11 @@ export function parseAdoptionPullRequest(raw: string): AdoptionPullRequest {
   const closingIssues = closingIssuesReferences.flatMap((issue: unknown) =>
     isRecord(issue) && typeof issue.url === 'string' && typeof issue.number === 'number' ? [{ url: issue.url, number: issue.number }] : [],
   );
-  const name = isRecord(headRepository) && typeof headRepository.name === 'string' ? headRepository.name : null;
-  const owner = isRecord(headRepositoryOwner) && typeof headRepositoryOwner.login === 'string' ? headRepositoryOwner.login : null;
   return {
     state,
     headRef: headRefName,
     baseRef: baseRefName,
-    headRepo: name === null || owner === null ? null : `${owner}/${name}`.toLowerCase(),
+    headRepo: headRepositoryName(headRepository, headRepositoryOwner),
     crossRepository: isCrossRepository,
     closingIssues,
   };
