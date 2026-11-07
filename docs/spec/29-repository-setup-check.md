@@ -19,8 +19,8 @@ its first gate.
   condition fails. The startup check, outside a repository, shows the examples condition alone.
 - Checks run one at a time, in the order the terminal entered the repositories. A popup due while another app
   dialog is open waits until that dialog closes, so two modal dialogs are never open together (UI-STANDARDS.md §5).
-  A popup that steps aside while Run setup loop starts (§29.5) keeps its place: no queued check runs until it has
-  come back and closed. Showing it again is not a new check.
+  A popup that steps aside while Run setup loop starts (§29.5) keeps its place: no queued check runs until its check
+  has ended, because it came back and was closed or nothing was left listed. Showing it again is not a new check.
 - A check that could not run (the status request fails or is rejected) shows nothing and does not count as done:
   the next entry into that repository in the session checks it again. A check that could not run never passes.
 - `APP_SETUP_CHECK=off` turns the check off: the status reply then lists nothing. It is a test seam with no UI,

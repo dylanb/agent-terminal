@@ -120,6 +120,7 @@ export function fakeSetupDeps() {
   const installReplies: ScriptedInstall[] = [];
   const installRequests: InstallRequest[] = [];
   let previewCount = 0;
+  let previewHold: Promise<void> | null = null;
   let installHold: Promise<void> | null = null;
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
@@ -148,6 +149,9 @@ export function fakeSetupDeps() {
     },
     previewExamples: async () => {
       previewCount += 1;
+      const held = previewHold;
+      previewHold = null;
+      if (held !== null) await held;
       const next = previewReplies.shift() ?? { ok: false as const, error: 'no preview scripted' };
       if ('reject' in next) throw new Error(next.reject);
       return next;
@@ -209,6 +213,12 @@ export function fakeSetupDeps() {
       /** Queue the replies the next install requests get, in order. */
       install(...replies: ScriptedInstall[]): void {
         installReplies.push(...replies);
+      },
+      /** Keeps the next preview reply pending until the returned release runs. */
+      holdPreview(): () => void {
+        let release!: () => void;
+        previewHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
       },
       /** Keeps the next install reply pending until the returned release runs. */
       holdInstall(): () => void {

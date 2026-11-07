@@ -124,18 +124,13 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         .then((result) => (result.ok ? null : result.error), reasonOf);
       const reread = await deps.status(repoKey).catch((e: unknown): SetupStatusReply => ({ ok: false, reason: reasonOf(e) }));
       if (disposed) return;
-      if (!reread.ok) {
-        renderList(reply, true);
-        alertLine.textContent = installFailure ?? reread.reason;
-        return;
-      }
-      if (unfixed(reread.entries).length === 0) {
+      if (!reread.ok) return renderList(reply, true, installFailure ?? reread.reason);
+      if (installFailure === null && unfixed(reread.entries).length === 0) {
         confirm();
         settle();
         return;
       }
-      renderList(reread, true);
-      if (installFailure !== null) alertLine.textContent = installFailure;
+      renderList(reread, true, installFailure ?? undefined);
     }
 
     async function previewAndInstall(reply: StatusOk, confirm: () => void): Promise<void> {
@@ -170,7 +165,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
       });
     }
 
-    const renderList = (reply: StatusOk, focusFirstAction: boolean): void => {
+    const renderList = (reply: StatusOk, focusFirstAction: boolean, reason?: string): void => {
       const entries = unfixed(reply.entries);
       shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
         const card = doc.createElement('div');
@@ -195,6 +190,8 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         const error = doc.createElement('p');
         error.className = 'ph';
         error.setAttribute('role', 'alert');
+        error.id = `${titleId}-error`;
+        if (reason !== undefined) error.textContent = reason;
         alertLine = error;
         body.append(intro, list, error);
         const foot = doc.createElement('div');
@@ -234,14 +231,13 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
           if (disposed) return;
           setupStarted ||= run.ok;
           if (unfixed(reply.entries).length === 0) return settle();
-          renderList(reply, true);
-          if (!run.ok) alertLine.textContent = run.reason;
+          renderList(reply, true, run.ok ? undefined : run.reason);
         };
         if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);
         card.append(title, body, foot);
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
-        return { card, initialFocus, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
+        return { card, initialFocus, describedById: `${intro.id} ${list.id} ${error.id}`, grow: body, scroll: body };
       });
     };
     renderList(first, false);

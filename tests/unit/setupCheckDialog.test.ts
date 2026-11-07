@@ -911,6 +911,40 @@ describe('Install/update examples runs the install inside the popup (AC2, AC3, A
         expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
         expect.soft(read?.entries, 'what the re-read reports').toEqual([before.entries[1]]);
         expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+        expect.soft(read?.description, 'the reason is in the dialog description').toContain(REASON);
+      });
+
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) whose re-read lists nothing keeps the popup open with the reason, and Close ends it`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail-empty'));
+        fake.examples.install(reply);
+        const { screen } = await openMixed(fake, repoStatus(REPO.alpha, []));
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(read !== null, 'the popup is still open').toBe(true);
+        expect.soft(read?.description, 'the reason is in the dialog description').toContain(REASON);
+        expect.soft(read?.controls, 'it offers Close').toContain('Close');
+        if (screen.isOpen()) screen.control('Close').click();
+        await settle();
+        expect.soft(screen.isOpen(), 'Close ends it').toBe(false);
+      });
+
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) followed by a failed re-read shows the install reason and keeps the previous entries`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail-both'));
+        fake.examples.install(reply);
+        const { screen, before } = await openMixed(fake, { ok: false, reason: 'scripted-reread-reason-kx' });
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expect.soft(read?.description, 'the install reason is shown').toContain(REASON);
+        expect.soft(read?.description, 'not the re-read reason').not.toContain('scripted-reread-reason-kx');
       });
     }
 
@@ -928,8 +962,50 @@ describe('Install/update examples runs the install inside the popup (AC2, AC3, A
         expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
         expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
         expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+        expect.soft(read?.description, 'the reason is in the dialog description').toContain(REASON);
       });
     }
+  });
+
+  describe('a dialog disposed while a request is pending draws nothing when it answers', () => {
+    const drawn = (host: HTMLElement, screen: ReturnType<typeof setupCheckScreen>) => ({
+      open: screen.isOpen(),
+      focusInHost: host.contains(document.activeElement),
+    });
+
+    it('an install', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-dispose-install'));
+      fake.examples.install(installSucceeded());
+      const release = fake.examples.holdInstall();
+      const { host, dialog, screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.requests().length, 'the install is pending').toBe(1);
+
+      dialog.dispose();
+      release();
+      await settle();
+
+      expect(drawn(host, screen)).toEqual({ open: false, focusInHost: false });
+    });
+
+    it('a preview', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-dispose-preview'));
+      const release = fake.examples.holdPreview();
+      const { host, dialog, screen } = await openMixed(fake);
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.previews(), 'the preview is pending').toBe(1);
+
+      dialog.dispose();
+      release();
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'nothing installed').toEqual([]);
+      expect(drawn(host, screen)).toEqual({ open: false, focusInHost: false });
+    });
   });
 
   it('keeps the popup naming its own repository when the terminal checks another one meanwhile (AC11)', async () => {
@@ -1135,10 +1211,11 @@ describe('a dismissal that could not be saved', () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
       fake.answerDismiss(reply);
-      const { dialog, screen } = mountDialog(fake);
+      const { host, dialog, screen } = mountDialog(fake);
       void dialog.check(REPO.alpha);
       await shownFor(screen, REPO.alpha);
       const before = screen.entries();
+      const writtenToAlerts = alertTextsWrittenIn(host);
 
       screen.control(FOR_REPO).click();
 
@@ -1150,6 +1227,7 @@ describe('a dismissal that could not be saved', () => {
           alerted: (screen.alert() ?? '').includes(reason),
         }).toEqual({ asked: 1, entries: before, retryable: true, alerted: true }),
       );
+      expect(writtenToAlerts().some((text) => text.includes(reason)), 'written to the alert after the card was in the page').toBe(true);
     });
   }
 });
@@ -1330,11 +1408,10 @@ describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
     const fake = fakeSetupDeps();
     fake.setupFlow.answer({ ok: false, reason });
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
-    const { host, dialog, screen } = mountDialog(fake);
+    const { dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
     await shownFor(screen, REPO.alpha);
     const before = reading(screen);
-    const writtenToAlerts = alertTextsWrittenIn(host);
 
     screen.control(RUN_SETUP).click();
     await settle();
@@ -1343,7 +1420,7 @@ describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
     expect.soft(read?.entries, 'every entry it listed before is listed').toEqual(before?.entries);
     expect.soft(read?.controls, 'every control it offered before is offered, so the operator can retry').toEqual(before?.controls);
     expect.soft(read?.alert?.includes(reason), 'the reason is in its error line').toBe(true);
-    expect.soft(writtenToAlerts().some((text) => text.includes(reason)), 'the reason was written to the alert after the card was in the page').toBe(true);
+    expect.soft(read?.description.includes(reason), 'the reason is in the dialog description, read with the dialog').toBe(true);
     expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
     expect.soft(openModalDialogs(document.body), 'no other dialog is open').toBe(1);
   });
@@ -1363,6 +1440,7 @@ describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
     const read = reading(screen);
     expect.soft(read?.entries).toEqual(before?.entries);
     expect.soft(read?.alert?.includes('scripted start rejection')).toBe(true);
+    expect.soft(read?.description.includes('scripted start rejection'), 'the reason is in the dialog description').toBe(true);
   });
 
   it("draws nothing in the host when the setup flow's refusal lands after the dialog was disposed", async () => {
