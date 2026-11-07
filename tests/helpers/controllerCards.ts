@@ -276,6 +276,14 @@ export function headerStatusIn(card: ParentNode, directory: string): string {
   return (header.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** The end of a held card's header status (AC 15). */
+export const POSITION_HELD = / · position held$/;
+/** The directories, of `directories`, whose card header shows " · position held"; a card not shown is left out. */
+export const heldCardsIn = (root: ParentNode, directories: readonly string[]): string[] => directories.filter(directory => {
+  const card = cardIn(root, directory);
+  return !!card && POSITION_HELD.test(headerStatusIn(card, directory));
+});
+
 export const SORT_OPTIONS = ['Attention', 'Recently used'] as const;
 export type SortOption = (typeof SORT_OPTIONS)[number];
 const SORT_CONTROL_NAME = 'Sort cards';
