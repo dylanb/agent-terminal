@@ -94,50 +94,51 @@ function isSafeReuseDir(dir: string, home: string): boolean {
   } catch {
     return false;
   }
-  return ancestorsOwnerOnly(path.dirname(real), realHome);
+  return walkOwnerOnly(path.dirname(real), realHome).kind === 'ownerOnly';
 }
 
-type OwnerOnlyWalk = { ok: true } | { ok: false; error: unknown };
+type OwnerOnlyWalk = { kind: 'ownerOnly' } | { kind: 'writable' } | { kind: 'unreadable'; error: unknown };
 
-/** Whether `start` and every ancestor above it, up to but excluding `stopAt` (default: through `/`),
- *  is free of group/other write. `start` must already be symlink-resolved; a stat failure is
- *  reported with its cause. */
 function walkOwnerOnly(start: string, stopAt?: string): OwnerOnlyWalk {
-  for (let cur = start; cur !== stopAt; cur = path.dirname(cur)) {
+  let cur: string;
+  try {
+    cur = fs.realpathSync(start);
+  } catch (e) {
+    return { kind: 'unreadable', error: e };
+  }
+  for (; cur !== stopAt; cur = path.dirname(cur)) {
     try {
-      if ((fs.statSync(cur).mode & 0o022) !== 0) return { ok: false, error: undefined };
+      if ((fs.statSync(cur).mode & 0o022) !== 0) return { kind: 'writable' };
     } catch (e) {
-      return { ok: false, error: e };
+      return { kind: 'unreadable', error: e };
     }
     if (cur === path.dirname(cur)) break;
   }
-  return { ok: true };
-}
-
-function ancestorsOwnerOnly(start: string, stopAt?: string): boolean {
-  return walkOwnerOnly(start, stopAt).ok;
+  return { kind: 'ownerOnly' };
 }
 
 function appImageFolderRefusal(appImage: string): string | undefined {
   const folder = path.dirname(appImage);
   const writable = (what: string): string =>
     `Not installing the command: ${what} can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
+  const unreadable = (e: unknown): string =>
+    `Not installing the command: could not check who can write ${folder}: ${errMsg(e)}`;
+  let realFile: string;
   try {
-    const ownFolder = fs.realpathSync(folder);
-    const realFile = fs.realpathSync(appImage);
-    const targetFolder = path.dirname(realFile);
-    const walks: [string, string][] = [[ownFolder, `${folder} (or a folder above it)`]];
-    if (targetFolder !== ownFolder) walks.push([targetFolder, `${appImage}, or a folder above ${realFile},`]);
-    for (const [start, what] of walks) {
-      const walk = walkOwnerOnly(start);
-      if (walk.ok) continue;
-      if (walk.error !== undefined) throw walk.error;
-      return writable(what);
-    }
-    return undefined;
+    realFile = fs.realpathSync(appImage);
   } catch (e) {
-    return `Not installing the command: could not check who can write ${folder}: ${errMsg(e)}`;
+    return unreadable(e);
   }
+  const walks: [string, string][] = [
+    [folder, `${folder} (or a folder above it)`],
+    [path.dirname(realFile), `${appImage}, or a folder above ${realFile},`],
+  ];
+  for (const [start, what] of walks) {
+    const walk = walkOwnerOnly(start);
+    if (walk.kind === 'writable') return writable(what);
+    if (walk.kind === 'unreadable') return unreadable(walk.error);
+  }
+  return undefined;
 }
 
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {

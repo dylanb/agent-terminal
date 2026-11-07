@@ -29,11 +29,13 @@ export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
 const DEV_CONTROLLER_ENTRY = 'controller.js';
-const TERMINAL_APPIMAGE_PREFIX = 'agent-terminal';
+export const TERMINAL_APPIMAGE_PREFIX = 'agent-terminal';
 const MAC_BUNDLE_BINARY = /^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/;
 
-/** Where the controller of the same build as `invocation` may be: installed beside the terminal
- *  (/Applications, /opt), then in the controller package's build output beside the terminal's. */
+/** Where the controller of the same build as `invocation` may be: for an AppImage, only the sibling file
+ *  whose name replaces the leading `agent-terminal` with `agent-terminal-controller` (none without that
+ *  prefix); otherwise installed beside the terminal (/Applications, /opt), then in the controller
+ *  package's build output beside the terminal's. */
 export function controllerInvocations(invocation: LaunchInvocation): BinaryInvocation[] {
   if ('appImage' in invocation) {
     const name = path.basename(invocation.appImage);
@@ -84,9 +86,11 @@ function realOrRaw(p: string): string {
   }
 }
 
-/** How to launch a fresh instance of this build: a packaged build execs its app binary with no extra
- *  args; a dev build (Electron loading a main script) execs Electron with that script, absolutized
- *  against `cwd` so the generated shim launches the same build from anywhere. */
+/** How to launch a fresh instance of this build: when the running binary is inside the AppImage mount,
+ *  the AppImage file itself, since the mount exists only while the app runs; otherwise a packaged build
+ *  execs its app binary with no extra args, and a dev build (Electron loading a main script) execs
+ *  Electron with that script, absolutized against `cwd` so the generated shim launches the same build
+ *  from anywhere. */
 export function resolveLaunchInvocation(
   execPath: string,
   isDevBuild: boolean,

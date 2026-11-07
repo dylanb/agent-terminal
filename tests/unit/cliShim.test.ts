@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config';
 import { effectiveLinuxExecutableName, effectiveLinuxDesktopFileName } from '../helpers/linuxExecutableName';
-import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUBDIR, CLI_COMMAND_NAME } from '../../src/main/cliShim';
+import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUBDIR, CLI_COMMAND_NAME, TERMINAL_APPIMAGE_PREFIX } from '../../src/main/cliShim';
 
 // The launch invocation a fresh instance is started with (§23.4 / #25): the dev-vs-packaged decision
 // the shim encodes, tested as a pure function so it is not buried in untested main-process glue.
@@ -101,6 +101,10 @@ describe('controller launch names match the packaged controller (§23.5)', () =>
 
   it('looks for the controller binary under the product name the controller is packaged as', async () => {
     expect((await load('electron-builder.controller.yml')).productName).toBe(CONTROLLER_PRODUCT_NAME);
+  });
+
+  it('derives the controller AppImage from the prefix the terminal AppImage is packaged under', async () => {
+    expect((await load('electron-builder.yml')).productName).toBe(TERMINAL_APPIMAGE_PREFIX);
   });
 
   it('looks for the controller build output where the controller package config writes it', async () => {

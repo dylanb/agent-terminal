@@ -18,6 +18,7 @@ import { STARTUP_CARD } from '../helpers/startupCard';
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
 const STARTUP_BUDGET_MS = 30_000;
+const CLEANUP_POLL_MS = 100;
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -97,13 +98,10 @@ test('the installed agent-terminal command launches the AppImage the app runs fr
   } finally {
     const cleanupErrors: unknown[] = [];
     try {
-      const deadline = Date.now() + 15_000;
-      for (let pids = pidsCarrying(owner); pids.length && Date.now() < deadline; pids = pidsCarrying(owner)) {
+      for (let pids = pidsCarrying(owner); pids.length; pids = pidsCarrying(owner)) {
         for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
-        await delay(100);
+        await delay(CLEANUP_POLL_MS);
       }
-      const left = pidsCarrying(owner);
-      if (left.length) cleanupErrors.push(new Error(`processes still carry ${owner}: ${left.join(',')}`));
     } catch (e) { cleanupErrors.push(e); }
     try { rmSync(fixtureDir, { recursive: true, force: true }); } catch (e) { cleanupErrors.push(e); }
     try { await h.dispose(); } catch (e) { cleanupErrors.push(e); }
