@@ -325,4 +325,16 @@ describe('shim for an AppImage launch (#306)', () => {
     expect.soft(run.stderr).toContain(appImage);
     expect.soft(run.launched).toBe(false);
   });
+
+  it('a plain launch fails naming the AppImage path, launching nothing, when the file is not executable', async () => {
+    const apps = join(work, 'apps');
+    const appImage = join(apps, 'agent-terminal-1.4.0.AppImage');
+    writeShim(appImageInvocation(appImage).invocation);
+    mkdirSync(join(fixtureCwd, 'proj'));
+    chmodSync(appImage, 0o644);
+    const run = await runFailing(['proj']);
+    expect.soft(run.status).not.toBe(0);
+    expect.soft(run.stderr).toContain(appImage);
+    expect.soft(run.launched).toBe(false);
+  });
 });
