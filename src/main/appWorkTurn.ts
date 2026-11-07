@@ -370,6 +370,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       : req.completion?.kind === 'red' || req.completion?.kind === 'green' || req.completion?.kind === 'refactor'
         ? req.completion.resultRel
         : undefined;
+  if (req.entry !== undefined) parts.push('', `entry ${req.entry.position} of ${req.entry.count}: ${req.entry.title}`);
   parts.push('', doneSignalInstruction(req.turnKey, verifyRel, req.doneRelPath));
   return `${parts.join('\n')}\n`;
 }

@@ -1,5 +1,6 @@
 import type { AppGateDecisionDeps } from './appGateDecision';
 import type { FlowManager, FlowStepDef } from './flow';
+import type { RepeatListRecord } from './flowState';
 import type { LoopDefV2 } from './loopDefV2';
 import { outputLocation } from './appWorkTurn';
 import { countToSource, repeatListTitles, type RepeatListSpec } from '../shared/repeatList';
@@ -14,23 +15,29 @@ export interface RepeatSourcerDeps {
 
 const PLAN_OUTPUT = 'plan';
 const PLAN_SLICES: RepeatListSpec = { format: 'impl-slices' };
+const PLAN_SLICES_INPUT = 'slices';
 
 /** Re-sources a repeat's count at an approve of a step whose loop outputs its count source (§28.4.1). */
 export function createRepeatSourcer(deps: RepeatSourcerDeps): AppGateDecisionDeps['sourceSliceCount'] {
-  const sourced = (repoDir: string, def: LoopDefV2, artifact: string, spec: RepeatListSpec): number | null => {
+  const sourced = (repoDir: string, def: LoopDefV2, artifact: string, spec: RepeatListSpec): RepeatListRecord | null => {
     const currentSlice = deps.flow.currentSlice(repoDir);
     const at = outputLocation(def, artifact, currentSlice);
     if (at === null) return null;
     const text = deps.readArtifact(at.path);
     const titles = text === null ? null : repeatListTitles(spec, text);
-    return titles === null ? null : countToSource(titles.length, currentSlice);
+    const count = titles === null ? null : countToSource(titles.length, currentSlice);
+    return titles === null || count === null ? null : { count, titles };
   };
   return (repoDir, def) => {
-    const slices = sourced(repoDir, def, PLAN_OUTPUT, PLAN_SLICES);
-    if (slices !== null) deps.flow.resolveInputs(repoDir, { slices: String(slices) });
     const source = deps.repeatOf(repoDir)?.source;
+    const plan = sourced(repoDir, def, PLAN_OUTPUT, PLAN_SLICES);
+    if (plan !== null) {
+      const inputs = { [PLAN_SLICES_INPUT]: String(plan.count) };
+      if (source?.kind === 'input' && source.countInput === PLAN_SLICES_INPUT) deps.flow.sourceRepeatList(repoDir, { ...plan, inputs });
+      else deps.flow.resolveInputs(repoDir, inputs);
+    }
     if (source?.kind !== 'list') return;
-    const count = sourced(repoDir, def, source.artifact, source);
-    if (count !== null) deps.flow.sourceRepeatList(repoDir, { count });
+    const list = sourced(repoDir, def, source.artifact, source);
+    if (list !== null) deps.flow.sourceRepeatList(repoDir, list);
   };
 }

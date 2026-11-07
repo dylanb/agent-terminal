@@ -640,6 +640,15 @@ describe('No list, no entry line', () => {
     expect({ fromPlan, byPerson: r.flow.entryFor(r.repo, 'build') }).toEqual({ fromPlan: entry(1, 3, PLAN_TITLES[0]), byPerson: null });
   });
 
+  it('a value a person supplies for another input keeps the entry the plan source approve named', async () => {
+    const r = rig(flowSpec(SLICES_INPUT_FORM, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    leave(r.driver.outputPath('plan', 'plan'), exampleSlicePlan(3));
+    await r.driver.approve('plan');
+    r.flow.provideInput(r.repo, { other: 'x' });
+    expect(r.flow.entryFor(r.repo, 'build')).toEqual(entry(1, 3, PLAN_TITLES[0]));
+  });
+
   const toDone = (r: Rig): void => {
     for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).status !== 'done'; i++) r.flow.advance(r.repo);
   };

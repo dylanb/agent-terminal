@@ -1212,11 +1212,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
       const ticket = deps.workRefs(active.repoDir).ticket;
+      const entry = deps.repeatEntry(active.repoDir, active.stepId);
       const prompt = composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         ...(ticket !== null ? { ticket } : {}),
+        ...(entry !== null ? { entry } : {}),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'

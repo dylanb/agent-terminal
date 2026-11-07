@@ -11,6 +11,7 @@ import { confinedRealPathResult, resolveJail } from './confinedPath';
 import { errMsg } from './errno';
 import type { FlowStatus } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
+import { repeatEntryTitle } from '../shared/repeatList';
 import { isRecord } from './yamlRecord';
 
 /** Persisted progression (§19.1). `inputs` is flow-wide, not per-step, so a value resolved at one
@@ -33,12 +34,13 @@ export interface PersistedFlowState {
    *  id; each value a positive integer. Absent for a flow with no repeat steps or none yet reached. */
   repeatCounts?: Record<string, number>;
   /** §28.4.1 — the list a source approve last sourced the repeat's count from: its raw entry count, clamped where
-   *  it is used. Absent until a source approve sources one. */
+   *  it is used, and its entry titles. Absent until a source approve sources one. */
   repeatList?: RepeatListRecord;
 }
 
 export interface RepeatListRecord {
   count: number;
+  titles: readonly string[];
 }
 
 export interface FlowStateStore {
@@ -111,10 +113,13 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-/** Null unless `raw` is a record whose `count` is a positive integer: a repo can plant flow-state.yaml, and no
- *  record fails toward the single pass. */
+/** Null unless `raw` is a record whose `count` is a positive integer and whose `titles` are strings: a repo can
+ *  plant flow-state.yaml, so no record fails toward the single pass, and each title is cleaned again. */
 function readRepeatList(raw: unknown): RepeatListRecord | null {
-  return isRecord(raw) && isRepeatCount(raw.count) ? { count: raw.count } : null;
+  if (!isRecord(raw) || !isRepeatCount(raw.count)) return null;
+  const { titles } = raw;
+  if (!Array.isArray(titles) || !titles.every(isStringValue)) return null;
+  return { count: raw.count, titles: titles.map(repeatEntryTitle) };
 }
 
 /** §18.7.6 (CWE-400) — the progression read is byte-bounded like the pointer's. */
@@ -217,7 +222,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(state.flow !== undefined ? { flow: state.flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(hasRepeatCounts ? { repeat_counts: state.repeatCounts } : {}),
-      ...(state.repeatList ? { repeat_list: { count: state.repeatList.count } } : {}),
+      ...(state.repeatList ? { repeat_list: { count: state.repeatList.count, titles: [...state.repeatList.titles] } } : {}),
     });
   };
 
