@@ -222,7 +222,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     cards.forEach(({ card }) => card.dispose());
     list.replaceChildren();
     cards = [];
-    for (const entry of cardList(directories, observed, sortMode)) {
+    for (const entry of cardList(directories, observed, sortMode, new Map())) {
       if (entry.kind === 'heading') list.append(groupHeading(entry));
       else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
     }

@@ -2,19 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { directoryCards } from '../../src/shared/controllerCards';
 import { cardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from '../../src/renderer/src/controllerCardOrder';
 import type { ControllerSortMode, ControllerTerminal } from '../../src/shared/ipc';
-import { DURATION_TEXTS, ORDER_EXAMPLES, RECENT_EXAMPLES, TIME_VERBS, orderTerminal, type OrderStep } from '../helpers/controllerCardOrderFixture';
+import { DURATION_TEXTS, ORDER_EXAMPLES, RECENCY_EXAMPLES, RECENT_EXAMPLES, TIME_VERBS, orderDirectory, orderTerminal, type OrderStep } from '../helpers/controllerCardOrderFixture';
 
 const START = 1_000_000_000;
 
-/** The list in `sortMode` after the controller has seen `steps`, read as the list helper reads the screen. */
-function listAfter(steps: readonly OrderStep[], sortMode: ControllerSortMode): string[] {
+/** The list in `sortMode` after the controller has seen `steps` and the operator used the `used` directories (by
+ *  `orderTerminal` name, oldest first), read as the list helper reads the screen. */
+function listAfter(steps: readonly OrderStep[], sortMode: ControllerSortMode, used: readonly string[] = []): string[] {
+  const recency = new Map(used.map((name, index) => [orderDirectory(name), index + 1]));
   let observations: CardObservations | undefined;
   let cards = directoryCards([]);
   for (const { at, terminals } of steps) {
     cards = directoryCards(terminals);
     observations = observeCards(observations, cards, START + at);
   }
-  return cardList(cards, observations!, sortMode).map((entry: CardListEntry) =>
+  return cardList(cards, observations!, sortMode, recency).map((entry: CardListEntry) =>
     entry.kind === 'heading' ? [entry.name, entry.count].filter(part => part !== undefined).join(' ') : entry.card.launchDirectory);
 }
 
@@ -33,6 +35,12 @@ describe('the Attention list', () => {
 describe('the Recently used list', () => {
   it.each(Object.entries(RECENT_EXAMPLES))('%s', (_, { steps, list }) => {
     expect(listAfter(steps, 'recently-used')).toEqual(list);
+  });
+});
+
+describe('the list with recency', () => {
+  it.each(Object.entries(RECENCY_EXAMPLES))('%s', (_, { steps, used, sortMode, list }) => {
+    expect(listAfter(steps, sortMode, used)).toEqual(list);
   });
 });
 

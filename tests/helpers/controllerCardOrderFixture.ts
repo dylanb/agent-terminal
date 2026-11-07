@@ -180,3 +180,31 @@ export const RECENT_EXAMPLES: Readonly<Record<string, OrderExample>> = {
     list: [],
   },
 };
+
+/** Snapshots, as in `ORDER_EXAMPLES`; the directories (by `orderTerminal` name) that had a recency interaction, oldest
+ *  first; and the list in `sortMode` after the last snapshot. */
+export interface RecencyExample extends OrderExample { used: string[]; sortMode: SortMode }
+
+export const RECENCY_EXAMPLES: Readonly<Record<string, RecencyExample>> = {
+  'cards used in this run come first, most recent use first, then every other card in Attention order': {
+    steps: [{ at: 0, terminals: [t('w1', 'working'), t('i1', 'idle'), t('e1', 'flow-error'), t('h1', 'needs-human'), t('i2', 'idle')] }],
+    used: ['i2', 'w1'],
+    sortMode: 'recently-used',
+    list: [RECENTLY_USED_HEADING, d('w1'), d('i2'), d('e1'), d('h1'), d('i1')],
+  },
+  'a used card keeps its recency place though another card has been longer in its new group': {
+    steps: [
+      { at: 0, terminals: [t('a', 'idle'), t('b', 'idle'), t('c', 'flow-error')] },
+      { at: 5 * MINUTE, terminals: [t('a', 'flow-error'), t('b', 'idle'), t('c', 'flow-error')] },
+    ],
+    used: ['a'],
+    sortMode: 'recently-used',
+    list: [RECENTLY_USED_HEADING, d('a'), d('c'), d('b')],
+  },
+  'Attention order ignores recency': {
+    steps: [{ at: 0, terminals: [t('w1', 'working'), t('i1', 'idle'), t('e1', 'flow-error'), t('i2', 'idle')] }],
+    used: ['i2', 'w1'],
+    sortMode: 'attention',
+    list: [heading('errors', 1), d('e1'), heading('idle', 2), d('i1'), d('i2'), heading('working', 1), d('w1')],
+  },
+};

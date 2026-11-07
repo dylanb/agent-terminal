@@ -53,7 +53,10 @@ function observationOf(card: ControllerDirectoryCard, observations: CardObservat
   return observation;
 }
 
-export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode): CardListEntry[] {
+/** Each used launch directory's latest recency interaction, a higher number for a later one. */
+export type CardRecency = ReadonlyMap<string, number>;
+
+export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, _recency: CardRecency): CardListEntry[] {
   const observed = cards.map(card => ({ card, observation: observationOf(card, observations) }));
   const groups = SUMMARY_LABELS.map(group => ({
     group,

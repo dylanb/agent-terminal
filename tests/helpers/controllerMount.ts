@@ -86,6 +86,8 @@ interface MountOptions {
   /** The card order the controller fake holds as saved; `unreadable` makes reading it reject. */
   sortMode?: SortMode | 'unreadable';
   sortModeSave?: 'saved' | 'rejected';
+  /** How the controller fake answers a request to bring a terminal forward. */
+  activation?: 'activated' | 'unavailable' | 'rejected';
   clock?: FakeControllerClock;
   /** Whether the controller window itself starts focused (default true). */
   windowFocused?: boolean;
@@ -107,7 +109,7 @@ export function mountControllerPanes(options: MountOptions & { controller?: Cont
   const host = document.createElement('main');
   (options.parent ?? document.body).append(host);
   const service = options.controller ? undefined : statusService(options.terminals, {
-    theme: options.theme, sortMode: options.sortMode, sortModeSave: options.sortModeSave, alwaysOnTop: options.alwaysOnTop, alwaysOnTopReply: options.alwaysOnTopReply,
+    activation: options.activation, theme: options.theme, sortMode: options.sortMode, sortModeSave: options.sortModeSave, alwaysOnTop: options.alwaysOnTop, alwaysOnTopReply: options.alwaysOnTopReply,
   });
   const layout = fakeLayout(options.oneColumn);
   const clock = options.clock ?? fakeControllerClock();
