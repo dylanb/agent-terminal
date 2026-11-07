@@ -228,6 +228,9 @@ async function createWindow(): Promise<void> {
         process.defaultApp === true,
         process.argv[1],
         process.cwd(),
+        process.env.APPIMAGE && process.env.APPDIR
+          ? { appImage: process.env.APPIMAGE, mountDir: process.env.APPDIR }
+          : undefined,
       ),
     })));
   let refreshControllerStatus = (): void => {};

@@ -94,14 +94,51 @@ function isSafeReuseDir(dir: string, home: string): boolean {
   } catch {
     return false;
   }
-  for (let cur = path.dirname(real); cur !== realHome && cur !== path.dirname(cur); cur = path.dirname(cur)) {
-    try {
-      if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
-    } catch {
-      return false;
-    }
+  return walkOwnerOnly(path.dirname(real), realHome).kind === 'ownerOnly';
+}
+
+type OwnerOnlyWalk = { kind: 'ownerOnly' } | { kind: 'writable' } | { kind: 'unreadable'; error: unknown };
+
+function walkOwnerOnly(start: string, stopAt?: string): OwnerOnlyWalk {
+  let cur: string;
+  try {
+    cur = fs.realpathSync(start);
+  } catch (e) {
+    return { kind: 'unreadable', error: e };
   }
-  return true;
+  for (; cur !== stopAt; cur = path.dirname(cur)) {
+    try {
+      if ((fs.statSync(cur).mode & 0o022) !== 0) return { kind: 'writable' };
+    } catch (e) {
+      return { kind: 'unreadable', error: e };
+    }
+    if (cur === path.dirname(cur)) break;
+  }
+  return { kind: 'ownerOnly' };
+}
+
+function appImageFolderRefusal(appImage: string): string | undefined {
+  const folder = path.dirname(appImage);
+  const writable = (what: string): string =>
+    `Not installing the command: ${what} can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
+  const unreadable = (e: unknown): string =>
+    `Not installing the command: could not check who can write ${folder}: ${errMsg(e)}`;
+  let realFile: string;
+  try {
+    realFile = fs.realpathSync(appImage);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const walks: [string, string][] = [
+    [folder, `${folder} (or a folder above it)`],
+    [path.dirname(realFile), `${appImage}, or a folder above ${realFile},`],
+  ];
+  for (const [start, what] of walks) {
+    const walk = walkOwnerOnly(start);
+    if (walk.kind === 'writable') return writable(what);
+    if (walk.kind === 'unreadable') return unreadable(walk.error);
+  }
+  return undefined;
 }
 
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
@@ -172,6 +209,10 @@ export function handleCliInstall(m: unknown, gatherRuntime: () => RuntimeInfo): 
 /** Install the launcher for `runtime` onto PATH, idempotently reconciling to the current build, and
  *  report whether it is now runnable from a new shell (§23.4 / #25). */
 export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
+  if ('appImage' in runtime.invocation) {
+    const refusal = appImageFolderRefusal(runtime.invocation.appImage);
+    if (refusal) return { ok: false, error: refusal };
+  }
   const existingProfiles = PROFILE_CANDIDATES.map((n) => path.join(runtime.home, n)).filter((p) =>
     fs.existsSync(p),
   );
