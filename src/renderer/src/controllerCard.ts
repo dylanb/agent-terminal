@@ -10,6 +10,8 @@ export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
   timeText: string;
+  /** Whether the card is held in place, so its header status ends " · position held". */
+  held?: boolean;
   onAction(): void | Promise<unknown>;
   onClearHistory?(): void | Promise<unknown>;
   onDismissLoopMessage(id: string): void | Promise<unknown>;
@@ -29,6 +31,9 @@ export interface CardState {
 export interface ControllerCard {
   setExpandedByDefault(expanded: boolean): void;
   setTimeText(text: string): void;
+  setHeld(held: boolean): void;
+  /** Whether `node` is part of this card, such as the element under the pointer or the one with focus. */
+  contains(node: Node | null): boolean;
   state(): CardState;
   focusTarget(): HTMLElement | undefined;
   header(): HTMLElement;
@@ -100,8 +105,10 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   directoryText.dir = 'ltr';
   directory.append(directoryText);
   const statusLabel = element('span', 'controller-card-label');
-  const showTime = (timeText: string) => { statusLabel.textContent = `${statusText} · ${timeText}`; };
-  showTime(deps.timeText);
+  let timeText = deps.timeText;
+  let held = deps.held ?? false;
+  const showStatus = () => { statusLabel.textContent = `${statusText} · ${timeText}${held ? ' · position held' : ''}`; };
+  showStatus();
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
   toggle.id = toggleId;
@@ -255,7 +262,15 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    setTimeText: showTime,
+    setTimeText(text) {
+      timeText = text;
+      showStatus();
+    },
+    setHeld(next) {
+      held = next;
+      showStatus();
+    },
+    contains: node => card.contains(node),
     state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,

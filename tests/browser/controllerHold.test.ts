@@ -176,3 +176,22 @@ it('shows a sort-order change made while a card is held in the control and the s
     });
   } finally { dispose(); }
 });
+
+it('ends a pointer hold when the pointer leaves the controller without passing over anything else in it', async () => {
+  const outside = document.body.appendChild(document.createElement('div'));
+  outside.style.height = '40px';
+  const { host, service, clock, dispose } = mount();
+  try {
+    await pointerAway(host);
+    await userEvent.hover(card(host, 'e'));
+    await settled();
+    await publishLater(service, clock, B_IN_ERRORS);
+    const frozen = read(host);
+    await userEvent.hover(outside);
+    await settled();
+    expect({ frozen, after: read(host) }).toEqual({
+      frozen: { list: FROZEN_B_IN_ERRORS, held: [d('e')] },
+      after: { list: SORTED_B_IN_ERRORS, held: [] },
+    });
+  } finally { dispose(); }
+});

@@ -35,6 +35,25 @@ export function createControllerClock(view: Window): ControllerClock {
   };
 }
 
+export interface ControllerWindowFocus {
+  focused(): boolean;
+  onChange(listener: () => void): () => void;
+}
+
+export function createWindowFocus(view: Window): ControllerWindowFocus {
+  return {
+    focused: () => view.document.hasFocus(),
+    onChange(listener) {
+      view.addEventListener('focus', listener);
+      view.addEventListener('blur', listener);
+      return () => {
+        view.removeEventListener('focus', listener);
+        view.removeEventListener('blur', listener);
+      };
+    },
+  };
+}
+
 export function applyDocumentTheme(root: HTMLElement, theme: Theme): void {
   root.dataset.theme = theme;
 }

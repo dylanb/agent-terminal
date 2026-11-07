@@ -4,8 +4,8 @@ import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_SORT_MODE, CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerSortMode, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type CardState, type ControllerCard } from './controllerCard';
-import { cardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from './controllerCardOrder';
-import type { ControllerClock, ControllerLayout } from './controllerFrame';
+import { cardList, frozenCardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from './controllerCardOrder';
+import type { ControllerClock, ControllerLayout, ControllerWindowFocus } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
 import { createThemeToggle } from './themeToggle';
 import { createSortModeControl } from './sortModeControl';
@@ -14,6 +14,7 @@ export interface ControllerPanesDeps {
   controller: ControllerApi;
   layout: ControllerLayout;
   clock: ControllerClock;
+  windowFocus: ControllerWindowFocus;
   applyTheme(theme: Theme): void;
 }
 
@@ -83,6 +84,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const recency = new Map<string, number>();
   let uses = 0;
   let resortQueued = false;
+  let shown: CardListEntry[] = [];
+  let held: ReadonlySet<string> = new Set();
+  let pointerOver: string | undefined;
+  let focusedNode: Node | null = null;
+  let rendering = false;
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
     const slot = doc.createElement('span');
@@ -193,6 +199,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       card: directory,
       expandedByDefault: expandedFor(directory),
       timeText,
+      held: held.has(directory.launchDirectory),
       from,
       onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
         alert.replaceChildren();
@@ -231,7 +238,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
         resortQueued = true;
         queueMicrotask(() => {
           resortQueued = false;
-          if (!disposed && observations && !sameCardOrder(observations)) renderList();
+          if (!disposed && observations && !held.size && !sameCardOrder(observations)) renderList();
         });
       },
     });
@@ -243,32 +250,80 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     return order.length === cards.length && order.every((card, index) => card === cards[index].directory);
   }
 
+  /** The cards held in place: the one under the pointer, and the one with focus inside it while the window has focus. */
+  function currentHolds(): Set<string> {
+    const present = new Set(directories.map(({ launchDirectory }) => launchDirectory));
+    const holds = new Set<string>();
+    if (pointerOver !== undefined && present.has(pointerOver)) holds.add(pointerOver);
+    const focused = deps.windowFocus.focused() ? cards.find(({ card }) => card.contains(focusedNode)) : undefined;
+    if (focused && present.has(focused.directory.launchDirectory)) holds.add(focused.directory.launchDirectory);
+    return holds;
+  }
+
+  function refreshHolds(): void {
+    if (disposed || rendering) return;
+    const wasFrozen = held.size > 0;
+    held = currentHolds();
+    if (wasFrozen && !held.size) renderList();
+    else for (const { directory, card } of cards) card.setHeld(held.has(directory.launchDirectory));
+  }
+
+  const nodeOf = (target: EventTarget | null): Node | null => (target instanceof Node && host.contains(target) ? target : null);
+  /** Read from the event, not `activeElement`: between a native `focusout` and its `focusin`, focus is on the body. */
+  const focusMoved = (event: FocusEvent) => {
+    focusedNode = nodeOf(event.type === 'focusin' ? event.target : event.relatedTarget);
+    refreshHolds();
+  };
+  const pointerMoved = (event: PointerEvent) => {
+    const target = event.target instanceof Node ? event.target : null;
+    pointerOver = cards.find(({ card }) => card.contains(target))?.directory.launchDirectory;
+    refreshHolds();
+  };
+  const pointerLeft = () => {
+    pointerOver = undefined;
+    refreshHolds();
+  };
+  host.addEventListener('pointerover', pointerMoved);
+  host.addEventListener('pointerleave', pointerLeft);
+  host.addEventListener('focusin', focusMoved);
+  host.addEventListener('focusout', focusMoved);
+  const unsubscribeWindowFocus = deps.windowFocus.onChange(refreshHolds);
+
   function renderList(): void {
     if (!observations) return;
     const observed = observations;
     const now = deps.clock.now();
     const restoreFocus = captureSubtreeFocus(list);
-    const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
-    cards.forEach(({ card }) => card.dispose());
-    list.replaceChildren();
-    cards = [];
-    for (const entry of cardList(directories, observed, sortMode, recency)) {
-      if (entry.kind === 'heading') list.append(groupHeading(entry));
-      else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
+    rendering = true;
+    try {
+      const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
+      cards.forEach(({ card }) => card.dispose());
+      list.replaceChildren();
+      cards = [];
+      shown = held.size ? frozenCardList(shown, directories, observed, sortMode, recency) : cardList(directories, observed, sortMode, recency);
+      for (const entry of shown) {
+        if (entry.kind === 'heading') list.append(groupHeading(entry));
+        else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
+      }
+      if (!directories.length) {
+        const empty = doc.createElement('p');
+        empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
+        empty.tabIndex = -1;
+        list.append(empty);
+      }
+      restoreFocus(() => cards.map(({ card }) => card.focusTarget()).find(Boolean) ?? cards[0]?.card.header() ?? list.querySelector('p'));
+    } finally {
+      rendering = false;
     }
-    if (!directories.length) {
-      const empty = doc.createElement('p');
-      empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
-      empty.tabIndex = -1;
-      list.append(empty);
-    }
-    restoreFocus(() => cards.map(({ card }) => card.focusTarget()).find(Boolean) ?? cards[0]?.card.header() ?? list.querySelector('p'));
+    refreshHolds();
   }
 
   const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
     directories = directoryCards(snapshot);
     const present = new Set(directories.map(({ launchDirectory }) => launchDirectory));
     for (const directory of recency.keys()) if (!present.has(directory)) recency.delete(directory);
+    if (pointerOver !== undefined && !present.has(pointerOver)) pointerOver = undefined;
+    held = currentHolds();
     observations = observeCards(observations, directories, deps.clock.now());
     announceAttention(directories);
     header.render(directories);
@@ -280,6 +335,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       unsubscribe();
       unsubscribeLayout();
       unsubscribeClock();
+      unsubscribeWindowFocus();
+      host.removeEventListener('pointerover', pointerMoved);
+      host.removeEventListener('pointerleave', pointerLeft);
+      host.removeEventListener('focusin', focusMoved);
+      host.removeEventListener('focusout', focusMoved);
       alwaysOnTopControl.dispose();
       themeToggle?.dispose();
       sortControl?.dispose();

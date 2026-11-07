@@ -310,3 +310,12 @@ describe('the end of the last hold', () => {
     } finally { dispose(); }
   });
 });
+
+describe('disposing the panes', () => {
+  it('stops following the controller window\'s focus', () => {
+    const { windowFocus, dispose } = mountControllerPanes({ terminals: TERMINALS });
+    expect.soft(windowFocus.following(), 'follows window focus while mounted').toBe(true);
+    dispose();
+    expect(windowFocus.following(), 'follows window focus once disposed').toBe(false);
+  });
+});
