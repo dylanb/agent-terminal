@@ -6,6 +6,9 @@ set -e
 # Keep pnpm's content-addressable store off the bind-mounted repo (a cached volume),
 # else it lands in the host tree as a ~1 GB .pnpm-store.
 pnpm install --frozen-lockfile --store-dir /pnpm-store
+# electron has no install script: require('electron') downloads a missing binary, so on a fresh volume every
+# Playwright worker downloaded it at once and launches failed with ETXTBSY. Fetch it once here.
+node -e "require('electron')"
 pnpm run rebuild
 pnpm run build
 
