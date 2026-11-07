@@ -294,6 +294,16 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the shell's `setView` itself, not on its
    callers, so every caller is covered, and it shares ONE "a dialog is open" predicate with the
    loop-panel's Escape deference — two copies disagree about which roles count.
+9. **A dialog the app raises on its own waits until no other dialog is open.** A dialog raised by the
+   app rather than in answer to a press (the setup-check popup is the reference implementation) opens
+   only while `Shell.modalIsOpen()` is false. Otherwise it waits for `Shell.onModalClosed` and checks
+   again, so it never opens over another dialog. It reads that predicate when it is about to open, not
+   when its work began, because another dialog can open meanwhile. This rule governs only the dialog
+   that waits: a system alert raised while it is open (errorDialog) still shows at once. `modalIsOpen()` is
+   item 8's one predicate, and `onModalClosed` fires when that same predicate turns from true to false,
+   so the two members can never disagree about what counts as a dialog. The organism takes both as
+   injected deps (`blockingDialogOpen`, `onBlockingDialogClosed`) and never queries outside its host
+   (§2.2).
 
 **Every** blocking dialog composes `createModalShell`; this doc keeps no list of them, because the
 composer a list omits is the one that drifts. A dialog is tested like any organism

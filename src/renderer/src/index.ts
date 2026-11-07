@@ -9,6 +9,8 @@ import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
 import { createAdoptTicketChoice } from './adoptTicketChoice';
+import { createSetupCheckDialog } from './setupCheckDialog';
+import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -88,7 +90,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
-createInstallExamples(document.getElementById('install-examples-view')!, {
+const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>
     window.examples.apply(previewId, replace, removeRetired),
@@ -355,6 +357,27 @@ if (flowStripHost) {
   });
   const seededKey = repo.repoKey();
   if (seededKey !== null) strip.onRepoChanged(seededKey);
+}
+
+const setupCheckHost = document.getElementById('setup-check-host');
+if (setupCheckHost) {
+  const setupCheck = createSetupCheckDialog(setupCheckHost, {
+    status: (repoKey) => window.setup.status(repoKey),
+    dismiss: (dismissal) => window.setup.dismiss(dismissal),
+    openInstallExamples: () => {
+      shell.setView('4');
+      installExamples.open();
+    },
+    runSetupFlow: createSetupFlowRun({
+      setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
+      start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
+    }),
+    announce: (title, message) => showError({ title, message }),
+    onFocusLost: landFocus,
+    blockingDialogOpen: () => shell.modalIsOpen(),
+    onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),
+  });
+  repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
 
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live

@@ -26,6 +26,8 @@ export interface InstallExamplesDeps {
 }
 
 export interface InstallExamples {
+  /** Runs what a press of the Install examples button runs. */
+  open(): void;
   dispose(): void;
 }
 
@@ -348,6 +350,10 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   }
 
   return {
+    open: () => {
+      btn.focus();
+      installGroup.run(btn, () => run());
+    },
     dispose: () => {
       modal.dispose();
       host.replaceChildren();

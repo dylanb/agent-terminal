@@ -7,6 +7,10 @@ import { startControllerTransport } from '../../src/main/controllerTransport';
 import type { ControllerTerminal } from '../../src/shared/ipc';
 import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 
+const departed = (terminal: ControllerTerminal): ControllerTerminal => ({
+  ...terminal, status: 'disconnected', clearHistoryTarget: expect.any(Object) as unknown as ControllerTerminal['clearHistoryTarget'], timeline: [{ kind: 'status', text: 'Disconnected', receivedAt: expect.any(Number) as unknown as number }],
+});
+
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 
 describe('controller stale representations', () => {
@@ -124,7 +128,7 @@ describe('controller stale representations', () => {
     await server.dismiss(live.terminal.id);
     await server.dismiss('unknown');
     expect.soft(server.terminals()).toHaveLength(2);
-    expect.soft(server.terminals()).toEqual(expect.arrayContaining([{ ...stale.terminal, status: 'disconnected' }, live.terminal]));
+    expect.soft(server.terminals()).toEqual(expect.arrayContaining([departed(stale.terminal), live.terminal]));
     expect(await server.activate(live.terminal.id)).toBe('activated');
   });
 
@@ -149,7 +153,7 @@ describe('controller stale representations', () => {
     try {
       await server.dismiss(selected.terminal.id);
       const expected = [
-        { ...otherDirectory.terminal, status: 'disconnected' },
+        departed(otherDirectory.terminal),
         live.terminal,
       ];
       expect.soft(server.terminals()).toHaveLength(expected.length);
@@ -174,10 +178,10 @@ describe('controller stale representations', () => {
       expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared')).toEqual([third.terminal]);
       await disconnect(third);
       expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared'))
-        .toEqual([{ ...third.terminal, status: 'disconnected' }]);
-      expect.soft(server.terminals()).toContainEqual({ ...other.terminal, status: 'disconnected' });
+        .toEqual([departed(third.terminal)]);
+      expect.soft(server.terminals()).toContainEqual(departed(other.terminal));
       await server.dismiss(first.terminal.id);
-      expect.soft(server.terminals()).toContainEqual({ ...third.terminal, status: 'disconnected' });
+      expect.soft(server.terminals()).toContainEqual(departed(third.terminal));
     }
   });
 

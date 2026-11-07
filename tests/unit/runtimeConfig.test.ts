@@ -23,6 +23,19 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: 'nope' }).startupExitGraceMs).toBe(1000);
   });
 
+  it('defaults the shell quit grace to 2000ms and parses a valid override, falling back on garbage', () => {
+    expect(resolveRuntimeConfig({}).shellQuitGraceMs).toBe(2000);
+    expect(resolveRuntimeConfig({ APP_SHELL_QUIT_GRACE_MS: '600000' }).shellQuitGraceMs).toBe(600_000);
+    expect(resolveRuntimeConfig({ APP_SHELL_QUIT_GRACE_MS: 'nope' }).shellQuitGraceMs).toBe(2000);
+  });
+
+  it('defaults the controller branch re-read to five minutes and parses a valid override, falling back on garbage', () => {
+    expect(resolveRuntimeConfig({}).branchRefreshMs).toBe(300_000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '1000' }).branchRefreshMs).toBe(1000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: 'nope' }).branchRefreshMs).toBe(300_000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '0' }).branchRefreshMs).toBe(300_000);
+  });
+
   // §27.9.1 N9b.5(e), #137 AC14 — the engine's gate-decision bound.
   it('defaults the auto-gate decision bound to 300 000 ms and parses an override', () => {
     expect(resolveRuntimeConfig({}).autoGateDecisionMs).toBe(300_000);

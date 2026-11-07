@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeControllerMessage, parseControllerMessage, CONTROLLER_MAX_MESSAGE_BYTES } from '../../src/shared/controllerProtocol';
+import { encodeControllerMessage, parseControllerMessage, CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_MESSAGE_BYTES } from '../../src/shared/controllerProtocol';
 
 const registration = { version: 2, minor: 0, type: 'register', launchDirectory: '/tmp/project', repositoryRoot: null } as const;
 
@@ -91,5 +91,10 @@ describe('controller wire protocol', () => {
   it('keeps hostile-looking directory labels as literal data', () => {
     const message = { ...registration, launchDirectory: '/tmp/$(echo unsafe)\n<img src=x>' };
     expect(parseControllerMessage(encodeControllerMessage(message).trimEnd())).toEqual(message);
+  });
+
+  it('names minor 3 as the first whose peers carry title and branch, and speaks it', () => {
+    expect({ identity: CONTROLLER_IDENTITY_MINOR, speaks: CONTROLLER_PROTOCOL_MINOR, afterLoopMessages: CONTROLLER_IDENTITY_MINOR > CONTROLLER_LOOP_MESSAGE_MINOR })
+      .toEqual({ identity: 3, speaks: 3, afterLoopMessages: true });
   });
 });

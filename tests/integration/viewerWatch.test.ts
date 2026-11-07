@@ -11,6 +11,8 @@ import {
   watchableDirs,
   viewerWatchDirs,
   VIEWER_WATCH_DEBOUNCE_MS,
+  viewerWatchMode,
+  viewerWatchFactory,
   type ViewerWatchFactory,
 } from '../../src/main/viewerWatch';
 
@@ -318,6 +320,17 @@ describe('viewerWatchDirs — scope the watch by git-ness (§20.1)', () => {
     expect(set.has(join(dir, '.agent-terminal', 'loop', 'consolidate'))).toBe(true);
   });
 
+  it('covers .agent-terminal itself and its loop/ subtree, never other trees an agent leaves under .agent-terminal', () => {
+    gitInit(dir);
+    writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n');
+    mkdirSync(join(dir, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+    mkdirSync(join(dir, '.agent-terminal', 'platform', 'copy', 'dist', 'mac'), { recursive: true });
+    const dirs = viewerWatchDirs(dir);
+    expect(dirs).toContain(join(dir, '.agent-terminal'));
+    expect(dirs).toContain(join(dir, '.agent-terminal', 'loop', 'artifacts'));
+    expect(dirs.filter((d) => d.startsWith(join(dir, '.agent-terminal', 'platform')))).toEqual([]);
+  });
+
   // The reported crash: launching in ~ (not a repo) watched the entire home filesystem → ENOSPC. Outside a
   // repo the watch must cover ONLY the app-owned state dirs, never the cwd itself nor unrelated siblings.
   it('outside a git repo watches ONLY the app state dirs (.agent-terminal / .agent-loop), never the cwd', () => {
@@ -338,6 +351,64 @@ describe('viewerWatchDirs — scope the watch by git-ness (§20.1)', () => {
     const set = new Set(viewerWatchDirs(dir));
     expect(set.has(dir)).toBe(false);
     for (const d of set) expect(d.startsWith(join(dir, '.agent'))).toBe(true);
+  });
+});
+
+describe('viewerWatchMode — the watch backend per platform', () => {
+  it('uses one recursive watch on macOS, where each per-dir watcher rebuilds a shared FSEvents stream', () => {
+    expect(viewerWatchMode('darwin')).toBe('recursive');
+  });
+
+  it('watches each covered dir on Linux, where a recursive watch spends an inotify watch per dir', () => {
+    expect(viewerWatchMode('linux')).toBe('per-dir');
+  });
+});
+
+describe('the recursive watch backend — same coverage as the per-dir one (§20.1)', () => {
+  let dir: string;
+  let stop: (() => void) | undefined;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'watchrec-')));
+  });
+  afterEach(() => {
+    stop?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Re-touches `file` until the watcher reports `name`, so the test waits for the stream to be live rather
+  // than for a guessed interval.
+  const seenAfterTouching = (seen: string[], name: string, file: string): Promise<void> =>
+    new Promise((resolve) => {
+      const poll = (): void => {
+        if (seen.includes(name)) return resolve();
+        writeFileSync(file, String(Math.random()));
+        setTimeout(poll, 20);
+      };
+      poll();
+    });
+
+  it('reports edits in covered dirs by their dir-relative name and drops edits outside the covered set', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    writeFileSync(join(dir, '.gitignore'), 'node_modules/\n.agent-terminal/\n');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'keep.ts'), '');
+    mkdirSync(join(dir, 'node_modules', 'x'), { recursive: true });
+    mkdirSync(join(dir, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+    mkdirSync(join(dir, '.agent-terminal', 'platform', 'copy'), { recursive: true });
+
+    const seen: string[] = [];
+    const watcher = viewerWatchFactory('recursive')(dir, (f) => {
+      if (f !== null) seen.push(f.toString());
+    });
+    stop = () => watcher.close();
+    await seenAfterTouching(seen, 'keep.ts', join(dir, 'src', 'keep.ts'));
+
+    writeFileSync(join(dir, 'node_modules', 'x', 'dropped-a.js'), '');
+    writeFileSync(join(dir, '.agent-terminal', 'platform', 'copy', 'dropped-b.js'), '');
+    await seenAfterTouching(seen, 'kept-a.ts', join(dir, 'src', 'kept-a.ts'));
+    await seenAfterTouching(seen, 'kept-b.md', join(dir, '.agent-terminal', 'loop', 'artifacts', 'kept-b.md'));
+
+    expect(seen.filter((f) => f.startsWith('dropped'))).toEqual([]);
   });
 });
 

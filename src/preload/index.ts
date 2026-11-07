@@ -10,6 +10,9 @@ import {
   type CliApi,
   type CliInstallResult,
   type ExamplesApi,
+  type SetupApi,
+  type SetupDismissReply,
+  type SetupStatusReply,
   type InstallExamplesPreview,
   type InstallExamplesResult,
   type InstallExamplesApplyMsg,
@@ -248,6 +251,11 @@ export const examplesApi: ExamplesApi = {
     } satisfies InstallExamplesApplyMsg) as Promise<InstallExamplesResult>,
 };
 
+export const setupApi: SetupApi = {
+  status: (repoKey) => ipcRenderer.invoke(CH.setupStatus, { sessionId: SESSION_ID, repoKey }) as Promise<SetupStatusReply>,
+  dismiss: (dismissal) => ipcRenderer.invoke(CH.setupDismiss, { sessionId: SESSION_ID, dismissal }) as Promise<SetupDismissReply>,
+};
+
 if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
   contextBridge.exposeInMainWorld('controller', controllerApi);
 } else {
@@ -257,4 +265,5 @@ if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
   contextBridge.exposeInMainWorld('flow', flowApi);
   contextBridge.exposeInMainWorld('cli', cliApi);
   contextBridge.exposeInMainWorld('examples', examplesApi);
+  contextBridge.exposeInMainWorld('setup', setupApi);
 }

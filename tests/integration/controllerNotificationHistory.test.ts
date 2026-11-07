@@ -11,7 +11,7 @@ import { directoryCards } from '../../src/shared/controllerCards';
 import type { NotificationCondition } from '../../src/shared/controllerProtocol';
 import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
-import { notificationEntries, type HistoryTerminal } from '../helpers/controllerHistory';
+import { notificationEntries, statusEntries, timelineOf, type HistoryTerminal } from '../helpers/controllerHistory';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -42,10 +42,11 @@ async function fixture() {
     await registered;
     const id = registry.terminals().filter(t => t.launchDirectory === directory && t.status !== 'disconnected').at(-1)!.id;
     let revision = 0;
+    let activity: ReturnType<typeof workStatus>['activity'] = 'active';
     async function flush(attention: ReturnType<typeof workStatus>['attention'] = null, error: ReturnType<typeof workStatus>['error'] = null) {
-      const step = `barrier-${++revision}`;
-      peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ attention, error, flow: { availability: 'known', name: 'history', step, assignment: 'assigned' } }) }));
-      await expect.poll(() => registry.terminals().find(t => t.id === id)?.work?.flow).toMatchObject({ step });
+      const number = 1000 + ++revision;
+      peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ activity, attention, error, ticket: { availability: 'known', number, title: { availability: 'loading' } } }) }));
+      await expect.poll(() => registry.terminals().find(t => t.id === id)?.work?.ticket).toMatchObject({ number });
     }
     async function report(value: NotificationCondition | null) {
       peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification: value }));
@@ -54,6 +55,7 @@ async function fixture() {
     await report(current);
     return {
       id, flush, report,
+      async setActivity(next: typeof activity) { activity = next; await flush(); },
       async arrival(message: string, conditionId = `condition-${message}`) {
         peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId, message } }));
         await flush();
@@ -99,6 +101,33 @@ it('counts exact-text repeats without reordering, retiming or eviction, and forg
   expect.soft(h.entries()).toEqual([entry('A', 5000), entry('C', 4000), entry(' A', 3000)]);
 });
 
+const shape = (items: ReturnType<typeof timelineOf>) => items.map(item => item.kind === 'notification'
+  ? { kind: item.kind, message: item.message, receivedAt: item.receivedAt, count: item.count }
+  : { kind: item.kind, receivedAt: item.receivedAt });
+
+it('an exact-text repeat counts in place, keeping its position and receipt time, even with a status entry above it', async () => {
+  const h = await fixture(); const a = await h.connect();
+  await a.arrival('A');
+  h.time(2000); await a.setActivity('quiet');
+  h.time(3000); await a.arrival('A');
+  expect(shape(timelineOf(h.terminal()))).toEqual([
+    { kind: 'status', receivedAt: 2000 },
+    { kind: 'notification', message: 'A', receivedAt: 1000, count: 2 },
+  ]);
+});
+
+it('two identical status changes are two entries, not a counted repeat', async () => {
+  const h = await fixture(); const a = await h.connect();
+  h.time(2000); await a.setActivity('quiet');
+  h.time(3000); await a.setActivity('active');
+  h.time(4000); await a.setActivity('quiet');
+  const texts = statusEntries(h.terminal());
+  expect.soft(texts.map(item => item.receivedAt)).toEqual([4000, 3000, 2000]);
+  expect.soft(texts[0]?.text).toBe(texts[2]?.text);
+  expect.soft(texts[1]?.text).not.toBe(texts[0]?.text);
+  expect.soft(notificationEntries(h.terminal())).toEqual([]);
+});
+
 it('keeps original receipt after the gate ends and ignores ordinary status and unchanged current refreshes', async () => {
   const h = await fixture(); const a = await h.connect('/work/a', condition('pending'));
   h.time(9000);
@@ -113,7 +142,8 @@ it('projects disconnected history without exposing stale live work, and reuses i
   await a.arrival('older context');
   await a.close();
   const card = directoryCards(h.registry().terminals())[0];
-  expect.soft(card).toMatchObject({ kind: 'disconnected', notifications: [entry('older context', 1000), entry('pending', 1000)] });
+  expect.soft(card).toMatchObject({ kind: 'disconnected' });
+  expect.soft(notificationEntries(card)).toEqual([entry('older context', 1000), entry('pending', 1000)]);
   expect.soft('work' in card ? card.work : undefined).toBeUndefined();
   h.time(9000); await h.connect('/work/a', condition('pending'));
   expect.soft(h.entries()).toEqual([entry('older context', 1000), entry('pending', 1000, 2)]);
@@ -145,7 +175,7 @@ it.each(['restart', 'dismiss'] as const)('%s with no current request restores no
   if (reset === 'restart') await h.restart(); else h.registry().dismiss(a.id);
   await h.connect('/work/a', null);
   expect(h.entries()).toEqual([]);
-  expect(h.terminal()?.notifications?.[0]).toBeUndefined();
+  expect(timelineOf(h.terminal())[0]).toBeUndefined();
 });
 
 it.each([true, false])('overlap discards all history and rebuilds only the current survivor (current=%s)', async pending => {
@@ -164,10 +194,11 @@ it.each([true, false])('overlap discards all history and rebuilds only the curre
 it('does not let a consumer mutate retained history or another subscriber snapshot', async () => {
   const h = await fixture(); const a = await h.connect(); await a.arrival('original');
   const snapshot = h.terminal();
-  if (snapshot?.notifications?.[0]) snapshot.notifications[0].message = 'corrupted';
+  const held = snapshot?.timeline?.[0];
+  if (held?.kind === 'notification') held.message = 'corrupted';
   const stop = h.registry().subscribeTerminals(values => {
-    const first = notificationEntries(values[0])[0];
-    if (first) first.count = 999;
+    const first = values[0]?.timeline?.[0];
+    if (first?.kind === 'notification') first.count = 999;
   });
   await a.flush(); stop();
   expect(h.entries()).toEqual([entry('original', 1000)]);
@@ -199,7 +230,7 @@ for (const disconnected of [false, true]) {
     const before = h.terminal()!; const other = h.terminal('/work/b');
     const result = h.registry().clearHistory(before.clearHistoryTarget!);
     expect.soft(h.entries()).toEqual([]);
-    expect.soft(h.terminal()?.notifications?.[0]).toBeUndefined();
+    expect.soft(timelineOf(h.terminal())).toEqual([]);
     expect.soft(result).toBe('cleared');
     expect.soft(h.terminal()?.id).toBe(before.id);
     expect.soft(h.terminal()?.status).toBe(before.status);
@@ -231,10 +262,10 @@ it.each(['arrival', 'repeat', 'disconnect', 'replacement', 'overlap', 'dismiss']
   expect.soft(h.terminal('/work/b')).toEqual(before.find(t => t.id === b.id));
 });
 
-it('an unrelated live-status update does not invalidate observed Clear or remove the updated live condition', async () => {
+it('a status update that changes no tracked dimension does not invalidate observed Clear or remove the updated live condition', async () => {
   const h = await fixture(); const a = await h.connect(); await a.arrival('original');
   const observed = h.terminal()!;
-  await a.flush({ status: 'complete', reasons: ['Still requires approval'] }, { reason: 'New live failure' });
+  await a.flush(null, null);
   const work = h.terminal()!.work;
   expect.soft(h.registry().clearHistory(observed.clearHistoryTarget!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
@@ -247,9 +278,9 @@ it('refuses an old Clear when overlap rebuilds identical history at the same rec
   const observed = h.terminal()!;
   const peer = await h.connect('/work/a');
   await peer.close();
-  expect(h.entries()).toEqual(observed.notifications);
+  expect(h.entries()).toEqual(notificationEntries(observed));
   expect.soft(h.registry().clearHistory(observed.clearHistoryTarget!)).toBe('stale');
-  expect.soft(h.entries()).toEqual(observed.notifications);
+  expect.soft(h.entries()).toEqual(notificationEntries(observed));
   expect.soft(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
 });
@@ -358,10 +389,12 @@ it('publishes notification content only through retained entries in snapshots an
   const peer = await h.connect();
   await peer.arrival('one');
   const published = h.terminal()!;
-  expect.soft(published.notifications).toEqual([entry('one', 1000)]);
+  expect.soft(published.timeline).toEqual([{ kind: 'notification', ...entry('one', 1000) }]);
+  expect.soft(published).not.toHaveProperty('notifications');
   expect.soft(published).not.toHaveProperty('latestNotification');
   const card = directoryCards([published])[0];
-  expect.soft(card).toMatchObject({ notifications: [entry('one', 1000)] });
+  expect.soft(card).toMatchObject({ timeline: [{ kind: 'notification', ...entry('one', 1000) }] });
+  expect.soft(card).not.toHaveProperty('notifications');
   expect(card).not.toHaveProperty('latestNotification');
 });
 

@@ -8,7 +8,7 @@ export const CARD_STATUS_TEST_ID = 'card-status';
 
 export interface RoleScope<L> {
   getByRole(
-    role: 'article' | 'button' | 'heading' | 'switch' | 'region',
+    role: 'article' | 'button' | 'heading' | 'switch' | 'region' | 'list' | 'listitem',
     options?: { name?: string | RegExp; exact?: boolean; expanded?: boolean; pressed?: boolean; checked?: boolean },
   ): L;
   getByTestId(testId: string): L;
@@ -30,8 +30,10 @@ export const cardLocator = <L>(scope: RoleScope<L>, directory: string): L =>
 /** The card for `directory` only while its accessible name also holds `text`. */
 export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text: string): L =>
   scope.getByRole('article', { name: new RegExp(`^(?=[\\s\\S]*${directoryPattern(directory).source})(?=[\\s\\S]*${escapeRegExp(text)})`) });
-const activationName = /Bring (?:both |[0-9]+ terminals )?forward/;
+const activationName = /^Bring\b[\s\S]*\bforward\b/;
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: activationName });
+export const headerActivationLocator = <L extends RoleScope<L>>(card: { locator(selector: string): L }): L =>
+  card.locator('header').getByRole('button', { name: activationName });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
 const loopMessageDismissalName = /^Dismiss (?:loop error|notice) /;
 export const dismissLoopMessageLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: loopMessageDismissalName });
@@ -50,10 +52,10 @@ export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector:
 export const accentLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_ACCENT_TEST_ID);
 export const statusRowLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_STATUS_TEST_ID);
 
-type DomRole = 'article' | 'button' | 'switch' | 'heading' | 'region';
+type DomRole = 'article' | 'button' | 'switch' | 'heading' | 'region' | 'list' | 'listitem';
 const implicitRoles: Record<string, DomRole> = {
   ARTICLE: 'article', BUTTON: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
-  H4: 'heading', H5: 'heading', H6: 'heading',
+  H4: 'heading', H5: 'heading', H6: 'heading', OL: 'list', UL: 'list', LI: 'listitem',
 };
 const roleOf = (node: Element): string | undefined => node.getAttribute('role') ?? implicitRoles[node.tagName];
 const nameText = (node: Node): string => {
@@ -96,6 +98,20 @@ export const windowHeaderIn = (root: ParentNode): HTMLElement | undefined =>
 const controlsIn = (scope: ParentNode, text: string | RegExp): HTMLElement[] => roleMatches(scope, ['button', 'switch'], text);
 const controlIn = (scope: ParentNode, text: string | RegExp): HTMLElement | undefined => controlsIn(scope, text)[0];
 export const bringForwardIn = (card: ParentNode) => controlIn(card, activationName);
+export function headerActivationIn(card: ParentNode): HTMLElement | undefined {
+  const header = card.querySelector('header');
+  return header ? roleMatches(header, ['button'], activationName).find(button => !button.hasAttribute('aria-expanded')) : undefined;
+}
+export const bodyActivationIn = (card: ParentNode): HTMLElement | undefined =>
+  roleMatches(card, ['button'], activationName).find(button => !button.closest('header'));
+export const bodyControlIn = (card: ParentNode): HTMLElement | undefined =>
+  roleMatches(card, ['button', 'switch']).find(control => !control.closest('header'));
+export function bodyDirectoryIn(card: ParentNode, directory: string): HTMLElement | undefined {
+  const pattern = directoryPattern(directory);
+  return [...card.querySelectorAll<HTMLElement>('*')].find(element =>
+    !element.closest('header') && !element.closest('[hidden]')
+    && [...element.childNodes].some(node => node.nodeType === 3 && pattern.test(node.textContent ?? '')));
+}
 export const dismissIn = (card: ParentNode) => controlIn(card, 'Dismiss');
 export const dismissLoopMessageIn = (card: ParentNode) => controlIn(card, loopMessageDismissalName);
 export const showFullReasonIn = (card: ParentNode) => controlIn(card, 'Show full reason');
@@ -124,6 +140,13 @@ export function isExpanded(card: ParentNode, directory: string): boolean {
   if (!header) throw new Error(`No disclosure header for ${directory}`);
   return header.getAttribute('aria-expanded') === 'true';
 }
+export const cardHeaderTextIn = (card: ParentNode): string => card.querySelector('header')?.textContent ?? '';
+export const cardHeaderElementLocator = <L>(card: { locator(selector: string): L }): L => card.locator('header');
+
+export function headerRemainder(headerText: string, named: readonly string[]): string {
+  return named.reduce((text, part) => (part ? text.split(part).join(' ') : text), headerText).replace(/[\s·]+/g, ' ').trim();
+}
+
 export const accentIn = (card: ParentNode): HTMLElement | null => card.querySelector(`[data-testid="${CARD_ACCENT_TEST_ID}"]`);
 export const statusRowIn = (card: ParentNode): HTMLElement | null => card.querySelector(`[data-testid="${CARD_STATUS_TEST_ID}"]`);
 
@@ -150,11 +173,19 @@ export function showsFullReason(control: Element | undefined): boolean {
   return state === 'true';
 }
 
-export const receivedNotificationLocator = <L>(card: RoleScope<L>): L => card.getByRole('region', { name: /received notification/i });
-export const receivedNotificationIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['region'], /received notification/i)[0];
-
 export const historyLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /History\s+\d\s*\/\s*3/i });
 export const historyIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /History\s+\d\s*\/\s*3/i);
+
+export const timelineLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => card.getByRole('list');
+export const timelineEntriesLocator = <L extends RoleScope<L>>(card: RoleScope<L>): L => timelineLocator(card).getByRole('listitem');
+export const timelineIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['list'])[0];
+export const timelineEntriesIn = (card: ParentNode): HTMLElement[] => {
+  const list = timelineIn(card);
+  return list ? roleMatches(list, ['listitem']) : [];
+};
+export const entryAccessibleText = (entry: Element): string => controlName(entry);
+export const entryTimesIn = (entry: ParentNode): HTMLTimeElement[] => [...entry.querySelectorAll('time')];
+export const entryIsNotification = (entry: Element): boolean => /notification/i.test(entryAccessibleText(entry));
 
 export const clearHistoryLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /Clear history/i });
 export const clearHistoryIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /Clear history/i);

@@ -23,6 +23,8 @@ The app matches what the user already gets in their native terminal: a login she
       note right of StartupFailureVisible : window stays open, diagnostic visible
   ```
 
+- **Quitting waits for the shell's exit.** Closing the window hangs up a running shell, and the app's quit is held until that shell's exit has been delivered to the main process: node-pty delivers the exit through a callback that aborts the process when it lands during teardown. A shell still running after `APP_SHELL_QUIT_GRACE_MS` (default 2000 ms), such as one that ignores the hang-up, is killed: until its exit is delivered the app cannot finish exiting, because node-pty's thread waiting on the shell holds the process.
+
 - **Controller registration comes first.** The shell is not spawned until the controller confirms the terminal's registration (§23.6).
 
 ---

@@ -7,7 +7,8 @@ import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { controllerSnapshot } from './controllerSnapshot';
-import { cardLocator, receivedNotificationLocator } from '../helpers/controllerCards';
+import { notificationEntries } from '../helpers/controllerHistory';
+import { cardLocator, timelineLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -65,11 +66,11 @@ for (const scenario of ['focused', 'unfocused', 'absent', 'restarting'] as const
       const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
       expect(source.loop?.humanNeeded).toBe(true);
       if (scenario === 'focused' || scenario === 'unfocused') {
-        const notification = receivedNotificationLocator(cardLocator(controller.page, repo));
+        const notification = timelineLocator(cardLocator(controller.page, repo));
         await expect.soft(notification).toContainText(source.loop!.status);
         await expect.soft.poll(async () => {
           const terminal = (await controllerSnapshot(controller.page)).find(item => item.launchDirectory === repo);
-          const receivedAt = terminal?.notifications?.[0]?.receivedAt;
+          const receivedAt = notificationEntries(terminal)[0]?.receivedAt;
           return typeof receivedAt === 'number' && Number.isFinite(receivedAt)
             && receivedAt >= receiptLowerBound && receivedAt <= Date.now();
         }).toBe(true);

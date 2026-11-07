@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
+import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -65,7 +66,7 @@ describe('controller card header control', () => {
 });
 
 describe('controller card body', () => {
-  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available', () => {
+  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available in the header', () => {
     const { terminal, text } = STATUS_CASES['flow-error-and-human'];
     const { element } = mount(terminal);
     const status = element ? statusRowIn(element)?.textContent?.trim() : undefined;
@@ -75,7 +76,8 @@ describe('controller card body', () => {
         text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Idle',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
-      ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
+      ...(element && headerActivationIn(element) ? [] : ['Bring forward is missing from the header']),
+      ...(element && bodyActivationIn(element) ? ['Bring forward is also in the body'] : []),
     ]).toEqual([]);
   });
 
@@ -125,17 +127,6 @@ describe('controller card body', () => {
     ]).toEqual([]);
   });
 
-  it('offers Bring forward, named with the directory, which reports its use once', () => {
-    const { terminal } = STATUS_CASES.working;
-    const { element, calls } = mount(terminal);
-    const control = element ? bringForwardIn(element) : undefined;
-    control?.click();
-    expect({
-      named: controlName(control).includes(terminal.launchDirectory),
-      calls,
-    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0 } });
-  });
-
   it('shows a disconnected card as Disconnected with no work details and Dismiss, which reports its use once', () => {
     const { terminal } = STATUS_CASES['disconnected-with-error'];
     const { element, calls } = mount(terminal);
@@ -147,9 +138,83 @@ describe('controller card body', () => {
       ...(element && statusRowIn(element)?.textContent?.trim() === 'Disconnected' ? [] : ['wrong status row']),
       ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Working'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
       ...(element && bringForwardIn(element) ? ['offers Bring forward'] : []),
+      ...(dismiss && !dismiss.closest('header') ? [] : ['Dismiss is not in the body']),
       ...(controlName(dismiss).includes(terminal.launchDirectory) ? [] : ['Dismiss is not named with the directory']),
       ...(calls.dismiss === 1 && calls.bringForward === 0 ? [] : [`calls ${JSON.stringify(calls)}`]),
     ]).toEqual([]);
+  });
+});
+
+describe('controller card launch directory', () => {
+  const { terminal } = STATUS_CASES.working;
+  const directory = terminal.launchDirectory;
+
+  it.each([true, false])('keeps the directory out of the header text while the card and toggle names still hold it (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const toggle = element ? cardHeaderIn(element, directory) : undefined;
+    expect({
+      headerHoldsDirectory: element ? cardHeaderTextIn(element).includes(directory) : 'no card',
+      toggleName: directoryPattern(directory).test(controlName(toggle)),
+      cardName: directoryPattern(directory).test(controlName(element)),
+    }).toEqual({ headerHoldsDirectory: false, toggleName: true, cardName: true });
+  });
+
+  it('shows the directory as text of the expanded body', () => {
+    const { element } = mount(terminal, true);
+    expect(Boolean(element && bodyDirectoryIn(element, directory))).toBe(true);
+  });
+});
+
+describe('controller card bring-forward icon', () => {
+  const terminal = statusTerminal();
+
+  it.each([true, false])('sits in the header outside the disclosure toggle and leaves the body without a Bring forward button (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    const toggle = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    expect({
+      inHeader: Boolean(icon),
+      outsideToggle: Boolean(icon && toggle && !toggle.contains(icon) && !icon.contains(toggle)),
+      inBody: Boolean(element && bodyActivationIn(element)),
+    }).toEqual({ inHeader: true, outsideToggle: true, inBody: false });
+  });
+
+  it.each([true, false])('is named with the repository and the full launch directory, and explains itself to pointer users (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    expect({
+      directory: directoryPattern(terminal.launchDirectory).test(controlName(icon)),
+      repository: /\brepository\b/.test(controlName(icon)),
+      tooltip: /bring/i.test(icon?.getAttribute('title') ?? ''),
+    }).toEqual({ directory: true, repository: true, tooltip: true });
+  });
+
+  it('draws a decorative glyph that adds nothing to its name', () => {
+    const { element } = mount(terminal, true);
+    const icon = element ? headerActivationIn(element) : undefined;
+    const shown = [...(icon?.children ?? [])];
+    expect({
+      icon: Boolean(icon),
+      glyph: shown.length > 0,
+      text: icon?.textContent?.trim() ?? '',
+      hidden: shown.every(child => child.getAttribute('aria-hidden') === 'true'),
+    }).toEqual({ icon: true, glyph: true, text: '', hidden: true });
+  });
+
+  it.each([true, false])('reports its use once and leaves the card as expanded or collapsed as it was (expanded=%s)', expanded => {
+    const { element, calls } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    icon?.click();
+    const toggle = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    expect({ icon: Boolean(icon), calls, expanded: toggle?.getAttribute('aria-expanded') })
+      .toEqual({ icon: true, calls: { bringForward: 1, dismiss: 0 }, expanded: String(expanded) });
+  });
+
+  it('is not offered on a disconnected card, whose Dismiss stays in the body', () => {
+    const { terminal: gone } = STATUS_CASES['disconnected-with-error'];
+    const { element } = mount(gone);
+    expect({ icon: Boolean(element && headerActivationIn(element)), dismissInBody: Boolean(element && dismissIn(element) && !dismissIn(element)?.closest('header')) })
+      .toEqual({ icon: false, dismissInBody: true });
   });
 });
 
@@ -220,5 +285,144 @@ describe('controller card action while its work is being answered', () => {
     await settle();
     control?.click();
     expect({ pending, afterAnswer: later }).toEqual({ pending: [], afterAnswer: ['pressed'] });
+  });
+});
+
+describe('controller card identity', () => {
+  const identity = { title: 'Reconcile the card identity', branch: 'feature/identity-slots' };
+  const named = (terminal: ControllerTerminal, status: string) =>
+    [terminal.repositoryRoot?.split('/').at(-1) ?? '', terminal.launchDirectory, status];
+
+  it.each([true, false])('shows the repository name, title, branch and status in the header, in that order (expanded=%s)', expanded => {
+    const terminal = withWork({ ...identity, activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    const order = expanded ? ['repository', identity.title, identity.branch] : ['repository', identity.title, identity.branch, 'Idle'];
+    expect(missingInOrder(header, order)).toEqual([]);
+  });
+
+  it.each([true, false])('shows neither a title slot nor a branch slot, and no placeholder, when the terminal has none (expanded=%s)', expanded => {
+    const terminal = withWork({ title: null, branch: null, activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    expect({
+      leftover: headerRemainder(header, named(terminal, 'Idle')),
+      name: header.includes('repository'),
+      status: expanded || header.includes('Idle'),
+    }).toEqual({ leftover: '', name: true, status: true });
+  });
+
+  it.each([true, false])('shows the name and status alone for a terminal that does not report title or branch (expanded=%s)', expanded => {
+    const terminal = withWork({ activity: 'quiet' });
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderTextIn(element) : '';
+    expect({
+      leftover: headerRemainder(header, named(terminal, 'Idle')),
+      name: header.includes('repository'),
+      status: expanded || header.includes('Idle'),
+    }).toEqual({ leftover: '', name: true, status: true });
+  });
+
+  it('keeps each slot independent: a title with no branch, and a branch with no title', () => {
+    const titleOnly = withWork({ title: identity.title, branch: null, activity: 'quiet' });
+    const branchOnly = { ...withWork({ title: null, branch: identity.branch, activity: 'quiet' }), id: 'terminal-b', launchDirectory: '/fixed/other-worktree' };
+    const first = mount(titleOnly, false);
+    const second = mount(branchOnly, false);
+    const firstHeader = first.element ? cardHeaderTextIn(first.element) : '';
+    const secondHeader = second.element ? cardHeaderTextIn(second.element) : '';
+    expect({
+      titleOnly: [firstHeader.includes(identity.title), firstHeader.includes(identity.branch), headerRemainder(firstHeader, [...named(titleOnly, 'Idle'), identity.title])],
+      branchOnly: [secondHeader.includes(identity.title), secondHeader.includes(identity.branch), headerRemainder(secondHeader, [...named(branchOnly, 'Idle'), identity.branch])],
+    }).toEqual({ titleOnly: [true, false, ''], branchOnly: [false, true, ''] });
+  });
+
+  it('shows a title that holds markup characters as plain text', () => {
+    const title = '<b>bold</b> & "quoted"';
+    const { element } = mount(withWork({ title, branch: 'a<b' }));
+    expect({ text: element ? cardHeaderTextIn(element).includes(title) : false, injected: element?.querySelector('header b') ?? null }).toEqual({ text: true, injected: null });
+  });
+});
+
+describe('controller card timeline', () => {
+  const at = (hour: number, minute: number) => new Date(2026, 9, 28, hour, minute).getTime();
+  const timeline = [
+    statusItem('Turned quiet at the newest moment', at(15, 43)),
+    notificationItem('Review the release proposal', at(13, 24), 2),
+    statusItem('Started the oldest retained change', at(10, 17)),
+  ];
+  const withTimeline = (items: readonly unknown[], work: Partial<WorkStatus> = {}) => ({ ...statusTerminal(work), timeline: items }) as ControllerTerminal;
+  function mountWithClear(terminal: ControllerTerminal) {
+    const host = document.createElement('div');
+    document.body.append(host);
+    let cleared = 0;
+    const card = createControllerCard(host, {
+      card: directoryCards([terminal])[0], expandedByDefault: true,
+      onAction() {}, onDismissLoopMessage() {}, onClearHistory() { cleared += 1; },
+    });
+    return { card, element: cardIn(host, terminal.launchDirectory)!, cleared: () => cleared };
+  }
+
+  it('shows every entry newest first, each with its time, and no History control', () => {
+    const { element } = mountWithClear(withTimeline(timeline));
+    const entries = timelineEntriesIn(element);
+    expect.soft(entries).toHaveLength(3);
+    expect.soft(missingInOrder(element.textContent ?? '', ['Turned quiet at the newest moment', 'Review the release proposal', 'Started the oldest retained change'])).toEqual([]);
+    expect.soft(entries.map(entry => entryTimesIn(entry).length)).toEqual([1, 1, 1]);
+    const clocks = [/\b(?:15|3):43\b/, /\b(?:13|1):24\b/, /\b10:17\b/];
+    clocks.forEach((clock, index) => expect.soft(entries[index]?.textContent ?? '').toMatch(clock));
+    expect.soft(historyIn(element)).toBeUndefined();
+  });
+
+  it('identifies a notification entry to assistive technology and does not label a status entry as one', () => {
+    const { element } = mountWithClear(withTimeline(timeline));
+    const [newestStatus, notification, oldestStatus] = timelineEntriesIn(element);
+    expect.soft(entryAccessibleText(notification ?? element)).toContain('Review the release proposal');
+    expect.soft(notification && entryIsNotification(notification)).toBe(true);
+    expect.soft(entryAccessibleText(newestStatus ?? element)).toContain('Turned quiet at the newest moment');
+    expect.soft(newestStatus && entryIsNotification(newestStatus)).toBe(false);
+    expect.soft(oldestStatus && entryIsNotification(oldestStatus)).toBe(false);
+  });
+
+  it('shows how many times a notification arrived only when more than once', () => {
+    const { element } = mountWithClear(withTimeline([notificationItem('Seen once', at(9, 5)), notificationItem('Seen twelve times', at(8, 5), 12)]));
+    const [once, many] = timelineEntriesIn(element);
+    expect.soft(many?.textContent ?? '').toMatch(/12\s*(?:arrivals|times|×)|(?:×|received)\s*12/i);
+    expect.soft(once?.textContent ?? '').not.toMatch(/\b1\s*(?:arrivals|times|×)|(?:×|received)\s*1\b/i);
+  });
+
+  it('shows Clear history whenever the timeline has entries, status entries alone included, and reports its use once', () => {
+    const { element, cleared } = mountWithClear(withTimeline([statusItem('Turned quiet', at(9, 5))]));
+    const clear = clearHistoryIn(element);
+    expect.soft(clear).toBeDefined();
+    clear?.click();
+    expect.soft(cleared()).toBe(1);
+  });
+
+  it('shows no entries and no Clear history when the timeline is empty or absent', () => {
+    for (const items of [[], undefined]) {
+      const terminal = items ? withTimeline(items) : statusTerminal();
+      const { element, card } = mountWithClear(terminal);
+      expect.soft(timelineEntriesIn(element)).toEqual([]);
+      expect.soft(clearHistoryIn(element)).toBeUndefined();
+      card.dispose();
+    }
+  });
+
+  it('shows terminal-supplied entry text as plain text', () => {
+    const { element } = mountWithClear(withTimeline([statusItem('<img src=x onerror=alert(1)> became idle', at(9, 5)), notificationItem('<b>approve</b>', at(8, 5))]));
+    expect.soft(element.querySelector('img')).toBeNull();
+    expect.soft(element.querySelector('b')).toBeNull();
+    expect.soft(timelineEntriesIn(element)[0]?.textContent).toContain('<img src=x onerror=alert(1)> became idle');
+    expect.soft(timelineEntriesIn(element)[1]?.textContent).toContain('<b>approve</b>');
+  });
+
+  it('shows no timeline on a card for terminals that conflict', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const [a, b] = [withTimeline(timeline), { ...withTimeline(timeline), id: 'peer' }];
+    const component = createControllerCard(host, { card: directoryCards([a, b])[0], expandedByDefault: true, onAction() {}, onDismissLoopMessage() {} });
+    try {
+      expect(timelineEntriesIn(cardIn(host, a.launchDirectory)!)).toEqual([]);
+    } finally { component.dispose(); }
   });
 });

@@ -75,11 +75,13 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never han
 The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STANDARDS.md)** carries each linked rule's rationale — cite its section in review rather than re-arguing a settled decision.
 
 - TypeScript, `strict: true`. No `any` in `src/shared/ipc.ts` or `src/shared/ipc/` — the IPC contract is the part TS exists to protect.
+- Code that turns a kind (a discriminated union's tag, a string-literal union) into behaviour handles every kind, through an exhaustive `Record<Kind, …>` table or a `switch` ending in `satisfies never` — never only the kind that exists today. → [CODE-STANDARDS.md § Code that acts on a kind](CODE-STANDARDS.md#code-that-acts-on-a-kind-handles-every-kind)
 - `@xterm/xterm` and `@xterm/headless` are pinned to the same exact version (§8.2) — two parsers at different versions silently corrupt captures. Bump only together.
 - Security defaults are non-negotiable: `contextIsolation: true`, `nodeIntegration: false`, paste-breakout `ESC[201~` strip on both injection paths (§7.5, §9.3).
 - **Security review defends the trust boundaries the spec names, and escalates any new attack class to the operator.** A finding must cross a spec-drawn boundary (e.g. §27.9.1's human-decided gate) or be ordinary robustness (malformed/missing/unreadable input fails closed). A threat the spec places inside the operator boundary — §27.9.1 treats working agents as trusted operators — is not a finding. An attack class the spec does not settle is escalated as a `needs a human` decision, never silently hardened against or dismissed: adding a boundary is a spec decision.
 - Untrusted data crossing a process/shell/OS boundary travels as a structured value (env var, `argv` element, quoted literal), never concatenated into a string the far side parses (CWE-78). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Any value placed into shell text is quoted through `src/shared/shellQuote.ts`, never hand-rolled (CWE-78). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- A new `git` call in a checked-out repository leads its argv with `src/main/gitHardening.ts`'s overrides, never a second copy, and still hardens its own command's execution surfaces. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Any path derived from repo content is confined through `src/main/confinedPath.ts` before it is walked, opened, or written (CWE-22/59/367). `resolveJail` for a jail inside untrusted content, `resolveOwnedDirJail` for a root in the user's own space — getting that backwards is the bug. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - A caught value's "which errno?" and "what do I tell the user?" are answered by `src/main/errno.ts` (`isErrno` against a closed `ErrnoCode` union, `errMsg`), never inline. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - A tree-walk whose emptiness would be a silent DATA problem uses `src/main/dirEntries.ts` — absent yields `[]`, unreadable throws. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
@@ -88,6 +90,7 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - No production code modifies the user's `.gitignore`, ever (§19.1/§25); persistence tests assert the write creates none and leaves an existing one byte-for-byte unchanged. Only an explicit, user-invoked install action is exempt. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - App-owned state with an independent set/clear lifecycle lives in its **own file**, disjoint from any wholesale-written document (`polish.yaml`/`armed-interrupt.yaml` vs `run-state.yaml`, §27). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Bracketed-paste mode is read live at injection time (renderer `term.paste()`; main `shadow.modes.bracketedPasteMode`) — never cached, never decided by us (§9.3).
+- **Diagrams in the repository's Markdown are Mermaid, never ASCII art, and every ```` ```mermaid ```` block parses.** `pnpm lint` (run by the pre-commit hook and the pull-request CI) parses each one and fails on any that does not.
 - Renderer UI follows **[`UI-STANDARDS.md`](UI-STANDARDS.md)** — atomic tiers, per-component tests (organisms also get e2e + a relocation test), typed `createX(host, deps)` factories, host-subtree only, services injected, `src/renderer/src/tokens.css` theming.
 - Every renderer control runs its press through `src/renderer/src/pressable.ts`, and an action returns the promise for the work it starts, so neither it nor a related control can start again while that work is pending (enforced by lint). → [UI-STANDARDS.md §1.4](UI-STANDARDS.md)
 - The monitor pane talks only to `window.monitor.*` (§9.1) — never imports terminal/selection modules or touches renderer xterm state, which keeps it relocatable to a separate process.
@@ -95,12 +98,20 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - Every IPC payload carries `sessionId` (§6), and the identity of the resource it acts on; the receiver never re-derives that target from ambient state — a data-loss defect for destructive or outward-facing actions. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Published state snapshots define ownership and isolate consumers, nested values included; tests verify isolation through observable behavior. → [CODE-STANDARDS.md § Published snapshots](CODE-STANDARDS.md#published-snapshots-have-explicit-ownership-and-isolate-consumers)
 - A best-effort or cosmetic side effect must never abort the critical path it sits on; wrap it, and coerce every caught value as `unknown` (`e instanceof Error ? e.message : String(e)`). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- Every async failure is caught where it arises and at every boundary. That covers each promise, timer, emitter or native callback, an early synchronous throw from a promise-returning function the code does not own, and a handler's own work such as a listener it calls. Its reason (`errMsg`) travels on in the form its context needs: surfaced to the user, returned as a named outcome, recorded with `console.error` once per distinct failure for a cosmetic fallback, or narrowed away only when it is the expected answer. → [CODE-STANDARDS.md](CODE-STANDARDS.md#every-async-failure-is-caught-where-it-arises-at-every-boundary-and-its-reason-travels-on)
 - Never silently swallow an error whose consequence is a state the user cannot recover from through the UI — surface it and leave a retry/back-out path. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Never allow an unrecoverable state: every operation rolls back to the prior good state or forward to one with a visible next action. When unsure whether a path has a UI route out, ask the operator before building it. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - The policy authorizing a destructive operation is checked at the operation (not at the prompt that precedes it) and hard-fails before any prompt is raised. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Every §25 run-log entry is true: written only when that outcome happened, never one entry for two outcomes. When a yes/no can't tell outcomes apart, return a value naming each, and RED-test both directions. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - One theme per PR — a second theme wants a second PR, or a per-theme review checkpoint when they must land together. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Fixing churn or dev friction you hit while doing a PR's work is REQUIRED in that same PR — it is not a second theme. The boundary is the source of the discovery, not the file it touches. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- **A PR keeps `README.md` current in the same PR.** Update it when the PR:
+  - adds, removes or renames a bundled flow, or changes a bundled flow's steps or gates;
+  - adds, removes or renames a reviewer persona on a bundled loop;
+  - adds or changes a notable user-visible feature — a capability a new user would want to know about, not every bug fix or internal refactor;
+  - changes install or upgrade steps, the published platforms or architectures, the prerequisites, or an environment variable in the README's `## Settings (environment variables)` table.
+
+  A PR that meets one of these and leaves the README unchanged states in its description why no update is needed.
 
 ## Ticket standards (agent-loop ready)
 

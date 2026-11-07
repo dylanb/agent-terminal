@@ -578,6 +578,59 @@ test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async
   expect(app.windows()).toHaveLength(0);
 });
 
+test('quitting while the shell runs waits for the shell to finish exiting, and the app exits cleanly (§5)', { tag: '@ownapp' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-quit-'));
+  const marker = join(dir, 'shell-exited');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_QUIT_GRACE_MS: '600000' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`trap 'sleep 2; : > "${marker}"' EXIT; echo "trap-""armed"`);
+  await expect(termRows()).toContainText('trap-armed');
+  const proc = app.process();
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
+    proc.once('exit', (code, signal) => done({ code, signal }));
+  });
+  await app.close();
+  expect.soft(existsSync(marker)).toBe(true);
+  expect.soft(await exited).toEqual({ code: 0, signal: null });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('quitting kills a shell that ignores the hang-up once the quit grace runs out, and the app exits cleanly (§5)', { tag: '@ownapp' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-quit-kill-'));
+  const pidFile = join(dir, 'shell-pid');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_QUIT_GRACE_MS: '200' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`echo $$ > "${pidFile}"; trap '' HUP; exec sleep 600`);
+  await expect.poll(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '').toBe(true);
+  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  const proc = app.process();
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
+    proc.once('exit', (code, signal) => done({ code, signal }));
+  });
+  const shellAlive = (): boolean => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  // A shell that survives the quit keeps the app from exiting and close() from resolving, so the shell's end
+  // is checked first and close() is settled after it.
+  const closed = app.close();
+  try {
+    await expect.poll(shellAlive, { timeout: 30_000 }).toBe(false);
+    expect.soft(await exited).toEqual({ code: 0, signal: null });
+  } finally {
+    if (shellAlive()) process.kill(pid, 'SIGKILL');
+    await closed;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an immediate shell startup failure keeps the app open (§5 grace exception)', { tag: '@ownapp' }, async () => {
   // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
   // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
@@ -1559,9 +1612,13 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted — survives a renderer reload (§20.2).
+  // Persisted — survives a renderer reload (§20.2). A chord pressed before the reloaded renderer installs its
+  // key handler is dropped, so the press repeats until the view it selects is showing.
   await page.reload();
-  await page.keyboard.press('Control+2');
+  await expect(async () => {
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect.poll(() => treeW()).toBe('318px');
 
   // Reset to default so the persisted width doesn't leak into later runs.

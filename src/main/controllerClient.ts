@@ -3,7 +3,7 @@ import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_STATUS_BYTES, supportsControllerNotifications, type ControllerNotificationSource, type ControllerMessage, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_STATUS_BYTES, supportsControllerNotifications, type ControllerNotificationSource, type ControllerMessage, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
@@ -52,8 +52,9 @@ export function registerControllerTerminal(
         return;
       }
       sendingStatus = true;
-      const { loopMessage, ...older } = work;
-      const shared = controllerMinor >= CONTROLLER_LOOP_MESSAGE_MINOR ? { ...older, loopMessage } : older;
+      const { loopMessage, title, branch, ...older } = work;
+      const withMessage = controllerMinor >= CONTROLLER_LOOP_MESSAGE_MINOR ? { ...older, loopMessage } : older;
+      const shared = controllerMinor >= CONTROLLER_IDENTITY_MINOR ? { ...withMessage, title, branch } : withMessage;
       current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: shared }), error => {
         sendingStatus = false;
         if (error) { current.terminate(); return; }

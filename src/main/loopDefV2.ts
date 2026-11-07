@@ -93,6 +93,14 @@ export function requiresResultBinding(mode: WorkCompletion): boolean {
   return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);
 }
 
+/** The checks a work turn's agent can be handed to run on what it wrote (§29). Prompt-only: no engine gate. */
+export const SELF_CHECKS = ['loop-capabilities'] as const;
+export type SelfCheck = (typeof SELF_CHECKS)[number];
+const SELF_CHECK_SET: ReadonlySet<string> = new Set(SELF_CHECKS);
+function isSelfCheck(value: string): value is SelfCheck {
+  return SELF_CHECK_SET.has(value);
+}
+
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
  *  §28.4 — the optional completion mode (absent for the existing §27 loops). */
 export interface WorkRecipe {
@@ -105,6 +113,7 @@ export interface WorkRecipe {
   checkpoint?: { passes: number };
   /** §28.5.1 */
   frozenCheck?: true;
+  selfCheck?: SelfCheck;
 }
 
 /** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
@@ -438,6 +447,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
   if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
+  let workSelfCheck: SelfCheck | undefined;
+  if (work.self_check !== undefined) {
+    const c = requireString(work.self_check, 'work self_check');
+    if (!isSelfCheck(c)) fail(`unknown work self_check: ${c} (expected ${SELF_CHECKS.join(' or ')})`);
+    workSelfCheck = c;
+  }
 
   let workGoal: string | undefined;
   if (work.goal !== undefined) {
@@ -504,6 +519,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       ...(workGoal !== undefined ? { goal: workGoal } : {}),
       ...(workCheckpoint !== undefined ? { checkpoint: workCheckpoint } : {}),
       ...(workFrozenCheck ? { frozenCheck: true as const } : {}),
+      ...(workSelfCheck !== undefined ? { selfCheck: workSelfCheck } : {}),
     },
     reviewers,
     rounds,

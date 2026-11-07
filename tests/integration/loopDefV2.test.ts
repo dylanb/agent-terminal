@@ -709,6 +709,36 @@ describe('resolveLoopDefV2 — the loop brief (§27.8)', () => {
   });
 });
 
+describe('resolveLoopDefV2 — a work turn can be handed a self-check (§29)', () => {
+  const withSelfCheck = (v: string): string => VALID_DEF.replace('  artifact: plan\n', `  artifact: plan\n  self_check: ${v}\n`);
+
+  it('reads a declared loop-capabilities self-check', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('loop-capabilities'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok, r.ok ? '' : r.reason).toBe(true);
+    expect(r.ok && r.def.work.selfCheck).toBe('loop-capabilities');
+  });
+
+  it('declares none when the def names none', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok && r.def.work.selfCheck).toBeUndefined();
+  });
+
+  it('refuses a self-check outside the closed set, naming the field', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('lint-everything'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.reason).toContain('self_check');
+  });
+
+  it('refuses a self-check that is a list rather than a single name', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('[loop-capabilities]'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe('resolveLoopDefV2 — a reviewer with no tools list gets every tool (§27.8)', () => {
   it('parses a reviewer that declares no tools as having all tools', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('    tools: [Read, Grep, Glob]\n', ''));

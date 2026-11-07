@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { observeStatus, STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { autoGateFlowYaml, seedTrustedFlow } from './autoGateHarness';
-import { cardLocator, dismissLocator } from '../helpers/controllerCards';
+import { cardHeaderLocator, cardLocator, dismissLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -60,7 +60,8 @@ fi
       const titleStatus = await observeStatus(controller.page, repo, { title: title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i });
       writeFileSync(h.fixture.env.TITLE_ALLOW, 'release title');
       expect.soft({ ['title after releasing the external result']: (await titleStatus()).shown.title }).toEqual({ ['title after releasing the external result']: true });
-      await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY|Different pull request title/);
+      if (title !== 'unavailable') await expect.soft(cardHeaderLocator(pane, repo)).toContainText('Different pull request title', { timeout: STATUS_BUDGET_MS });
+      await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY/);
     } finally {
       if (h.fixture.env.TITLE_ALLOW) writeFileSync(h.fixture.env.TITLE_ALLOW, 'release during cleanup');
       await h.dispose();

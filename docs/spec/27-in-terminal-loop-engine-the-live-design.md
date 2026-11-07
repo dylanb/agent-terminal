@@ -115,7 +115,7 @@ A `/clear` at every actor boundary is why nothing in the old loop amortized: eve
 - **The defs are owned by agent-terminal**, in a **new schema of its own design**. The `github.com/dequelabs/loops` defs are **not vendored, not parsed, and not a compatibility target**. This is the clean break: no dual schema, no upstream coordination.
 - A def declares:
   - **`brief`** (optional) — the standing instructions the work turn and every review-and-fix turn carry (§27.3), a reference confined like the recipes;
-  - **`work`** — the work prompt recipe, the artifact it produces, and optionally a `goal` the turn works until and, with it, a `checkpoint` of review `passes` per leg (§27.3);
+  - **`work`** — the work prompt recipe, the artifact it produces, and optionally a `goal` the turn works until and, with it, a `checkpoint` of review `passes` per leg (§27.3), and optionally a prompt-only `self_check` the agent runs on what it wrote (§29.6);
   - **`reviewers`** — the **catalog** of personas available to this loop, each with its **charter** (a reference, never an inline body — §18.6) and, optionally, the tools it may use; a reviewer whose def lists none has every tool, as every bundled reviewer does. Round 1 runs the whole catalog; thereafter the consolidator selects from it (§27.6);
   - **`consolidator`** — its prompt recipe. A def without one runs no review rounds (§27.3); a def that declares reviewers and no `work.goal` must declare one, and a def with a `work.goal` must not;
   - **`boundaries`** — `clear` or `compact: <message>` for each actor boundary (§27.7);

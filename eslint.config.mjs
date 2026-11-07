@@ -79,11 +79,25 @@ const WIRE_FORMAT_TESTS = [
 ];
 const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts'];
 
+const IO_BUILTINS = ['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]);
+/** A decision core in src/main: no I/O built-in, no `process`/`fetch`/`WebSocket` global, no `require` or dynamic
+ *  `import()`, and no value import of a src/main sibling except `allowedSiblings`; type imports and src/shared stay allowed. */
+function pureCoreRules(message, allowedSiblings) {
+  return {
+    'no-restricted-syntax': ['error', ...['ImportExpression', "CallExpression[callee.name='require']"].map((selector) => ({ selector, message }))],
+    'no-restricted-imports': ['error', { paths: IO_BUILTINS.map((name) => ({ name, message })) }],
+    '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ group: ['./*', ...allowedSiblings.map((sibling) => `!./${sibling}`)], allowTypeImports: true, message }] }],
+    'no-restricted-globals': ['error', ...['process', 'fetch', 'WebSocket'].map((name) => ({ name, message }))],
+  };
+}
 const TEST_PROOF_CORE_MESSAGE = 'The test-proof core decides from its seam values only: it reaches processes, the filesystem, the network, git and gh through its injected ports (CLAUDE.md § Test-driven development, injection seams).';
-const TEST_PROOF_CORE_IMPORTS = [
-  ...['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]),
-].map((name) => ({ name, message: TEST_PROOF_CORE_MESSAGE }));
-const TEST_PROOF_CORE_SIBLINGS = [{ group: ['./*', '!./errno'], allowTypeImports: true, message: TEST_PROOF_CORE_MESSAGE }];
+const SETUP_CHECK_CORE_MESSAGE = 'The setup-check core decides from its seam values only: git, the installer, the capabilities reader, the dismissal store and the environment reach it through createSetupCheck\'s deps, built at the composition root (CLAUDE.md § Test-driven development, injection seams).';
+
+const SETUP_DIALOG_DEPS_MESSAGE = 'The setup dialog reaches the app only through its injected deps and its own host (host.ownerDocument), never window or document (UI-STANDARDS.md §2.2).';
+const SETUP_DIALOG_SCREEN_MESSAGE = 'Read the setup dialog by role and name through tests/helpers/setupCheckScreen.ts (UI-STANDARDS.md §3.4 rule 1).';
+const SETUP_DIALOG_DOM = [
+  { selector: "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|getElementById|getElementsByClassName|getElementsByTagName)$/]", message: SETUP_DIALOG_SCREEN_MESSAGE },
+];
 
 const PRESS_HELPER_MESSAGE =
   'Run a control\'s action through createPressGroup/onPress in src/renderer/src/pressable.ts, so a press cannot start it again while it is still running (UI-STANDARDS §1.4).';
@@ -137,12 +151,20 @@ export default [
     files: ['src/main/testProof*.ts'],
     ignores: ['src/main/testProofPorts.ts', 'src/main/testProofResults.ts', 'src/main/testProofMain.ts'],
     plugins: { '@typescript-eslint': tseslint.plugin },
-    rules: {
-      'no-restricted-syntax': ['error', ...['ImportExpression', "CallExpression[callee.name='require']"].map((selector) => ({ selector, message: TEST_PROOF_CORE_MESSAGE }))],
-      'no-restricted-imports': ['error', { paths: TEST_PROOF_CORE_IMPORTS }],
-      '@typescript-eslint/no-restricted-imports': ['error', { patterns: TEST_PROOF_CORE_SIBLINGS }],
-      'no-restricted-globals': ['error', ...['process', 'fetch', 'WebSocket'].map((name) => ({ name, message: TEST_PROOF_CORE_MESSAGE }))],
-    },
+    rules: pureCoreRules(TEST_PROOF_CORE_MESSAGE, ['errno']),
+  },
+  {
+    files: ['src/main/setupCheck.ts'],
+    plugins: { '@typescript-eslint': tseslint.plugin },
+    rules: pureCoreRules(SETUP_CHECK_CORE_MESSAGE, ['errno']),
+  },
+  {
+    files: ['src/renderer/src/setupCheckDialog.ts'],
+    rules: { 'no-restricted-globals': ['error', ...['window', 'document'].map((name) => ({ name, message: SETUP_DIALOG_DEPS_MESSAGE }))] },
+  },
+  {
+    files: ['tests/**/setupCheckDialog*.test.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...SETUP_DIALOG_DOM] },
   },
   {
     files: ['src/renderer/**/*.ts'],

@@ -5,7 +5,7 @@ import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
-import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { CAPABILITIES_CHECK_COMMAND, createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
 // §27.3 — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
 // and a goal work turn is submitted as one `/goal` command whose condition names the full work prompt, written
@@ -198,5 +198,29 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     const prompt = goalPrompt();
     const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
     expect(handoff).toContain('This round covers impl-slice 2 of the plan only');
+  });
+});
+
+describe('a work turn whose def declares the capabilities self-check is handed its command (§29)', () => {
+  const selfCheckDef = (): LoopDefV2 => {
+    const base = noRoundsDef();
+    return { ...base, work: { ...base.work, selfCheck: 'loop-capabilities' } };
+  };
+
+  it('names the capabilities check command in the work prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(selfCheckDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.') && p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(true);
+  });
+
+  it('names no capabilities check in the work prompt of a def that declares none', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(noRoundsDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    expect(h.injected.some((p) => p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(false);
   });
 });

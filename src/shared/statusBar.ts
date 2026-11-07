@@ -48,7 +48,13 @@ export function sameTitle(a: StatusBarTitle | null, b: StatusBarTitle | null): b
   return a !== null && b !== null && titleKey(a) === titleKey(b);
 }
 
-function titleOf(view: FlowStateView): StatusBarTitle {
+export function statusBarTitleText(title: StatusBarTitle, resolved: string | null): string | null {
+  if (title.kind === 'user') return title.text.length > 0 ? title.text : null;
+  if (resolved !== null) return stripDisplayControlChars(resolved);
+  return title.kind === 'pr' ? `PR #${title.number}` : `#${title.number}`;
+}
+
+export function titleOf(view: Pick<FlowStateView, 'refs' | 'userTitle'>): StatusBarTitle {
   if (view.refs?.pr !== undefined) return { kind: 'pr', number: view.refs.pr };
   if (view.refs?.ticket !== undefined) return { kind: 'ticket', number: view.refs.ticket };
   return { kind: 'user', text: view.userTitle ?? '' };

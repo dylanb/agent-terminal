@@ -1,0 +1,167 @@
+import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
+import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
+import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
+
+/** Repository keys no two of which share a path segment, so a dialog naming one cannot be read as naming
+ *  another. */
+export const REPO = {
+  alpha: '/work/alpha-orchard',
+  bravo: '/srv/bravo-quarry',
+  charlie: '/home/op/charlie-delta',
+} as const;
+
+/** One entry per failure kind the slice lists. */
+export const ENTRY = {
+  absent: { condition: 'capabilities', failure: 'absent' },
+  malformed: { condition: 'capabilities', failure: 'malformed' },
+  confinement: { condition: 'capabilities', failure: 'confinement' },
+  notIgnored: { condition: 'ignore', failure: 'not-ignored' },
+  unchecked: { condition: 'ignore', failure: 'unchecked' },
+  examplesStale: { condition: 'examples', failure: 'stale' },
+  examplesUnchecked: { condition: 'examples', failure: 'unchecked' },
+} as const satisfies Record<string, SetupConditionEntry>;
+
+/** The app version every scripted status reply names. */
+export const APP_VERSION = '7.3.1-fixture';
+
+/** The status of a git repository; the repo-setup flow is not installed unless `setupFlowInstalled` says so. */
+export const repoStatus = (repoKey: string, entries: SetupConditionEntry[], setupFlowInstalled = false): SetupStatusReply => ({
+  ok: true,
+  repoKey,
+  isRepository: true,
+  appVersion: APP_VERSION,
+  setupFlowInstalled,
+  entries,
+});
+
+/** The status of a directory that is not a git repository. */
+export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupStatusReply => ({
+  ok: true,
+  repoKey: dir,
+  isRepository: false,
+  appVersion: APP_VERSION,
+  setupFlowInstalled: false,
+  entries,
+});
+
+type Scripted = SetupStatusReply | { reject: string };
+type ScriptedDismiss = SetupDismissReply | { reject: string };
+
+/** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
+ *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
+ *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
+ *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
+ *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
+ *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued;
+ *  each `announce` is recorded. */
+export function fakeSetupDeps() {
+  const scripts = new Map<string, Scripted[]>();
+  const deliveries = new Map<string, Array<() => void>>();
+  const holds = new Map<string, Promise<void>>();
+  let blocking = false;
+  const closedListeners = new Set<() => void>();
+  let landing: HTMLElement | null = null;
+  const installOpens: unknown[] = [];
+  let atInstallOpen: () => unknown = () => null;
+  const dismissals: SetupDismissal[] = [];
+  const dismissReplies: ScriptedDismiss[] = [];
+  const setupRuns: string[] = [];
+  const setupRunReplies: SetupFlowRun[] = [];
+  const announcements: Array<{ title: string; message: string }> = [];
+  const deps: SetupCheckDialogDeps = {
+    status: async (repoKey) => {
+      const held = holds.get(repoKey);
+      if (held !== undefined) {
+        holds.delete(repoKey);
+        await held;
+      }
+      const next = scripts.get(repoKey)?.shift();
+      for (const resolve of deliveries.get(repoKey)?.splice(0) ?? []) queueMicrotask(resolve);
+      if (next === undefined) return { ok: false, reason: `no status scripted for ${repoKey}` };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
+    },
+    dismiss: async (dismissal) => {
+      dismissals.push(dismissal);
+      const next = dismissReplies.shift() ?? { ok: true };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
+    },
+    openInstallExamples: () => {
+      installOpens.push(atInstallOpen());
+    },
+    runSetupFlow: async (repoKey) => {
+      setupRuns.push(repoKey);
+      return setupRunReplies.shift() ?? { ok: true };
+    },
+    announce: (title, message) => {
+      announcements.push({ title, message });
+    },
+    onFocusLost: () => landing?.focus(),
+    blockingDialogOpen: () => blocking,
+    onBlockingDialogClosed: (cb) => {
+      closedListeners.add(cb);
+      return () => closedListeners.delete(cb);
+    },
+  };
+  return {
+    deps,
+    /** Queue the replies the next status requests for `repoKey` get, in order. */
+    answer(repoKey: string, ...replies: Scripted[]): void {
+      scripts.set(repoKey, [...(scripts.get(repoKey) ?? []), ...replies]);
+    },
+    /** Settles once the next status request for `repoKey` has been answered and a task has run after it. */
+    answered(repoKey: string): Promise<void> {
+      return new Promise<void>((resolve) => {
+        deliveries.set(repoKey, [...(deliveries.get(repoKey) ?? []), resolve]);
+      }).then(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+    },
+    /** Keeps the next status reply for `repoKey` pending until the returned release runs. */
+    hold(repoKey: string): () => void {
+      let release!: () => void;
+      holds.set(repoKey, new Promise<void>((resolve) => (release = resolve)));
+      return release;
+    },
+    /** Queue the replies the next `dismiss` calls get, in order. */
+    answerDismiss(...replies: ScriptedDismiss[]): void {
+      dismissReplies.push(...replies);
+    },
+    /** Every dismissal the dialog asked to record, in order. */
+    dismissals: (): SetupDismissal[] => [...dismissals],
+    /** What each `openInstallExamples` call records about the moment it was made. */
+    whenInstallOpens(probe: () => unknown): void {
+      atInstallOpen = probe;
+    },
+    /** One record per `openInstallExamples` call, in order. */
+    installOpens: (): unknown[] => [...installOpens],
+    setupFlow: {
+      /** Queue the results the next `runSetupFlow` calls get, in order. */
+      answer(...results: SetupFlowRun[]): void {
+        setupRunReplies.push(...results);
+      },
+      /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
+      runs: (): string[] => [...setupRuns],
+    },
+    /** Every message `announce` showed, in order. */
+    announcements: (): Array<{ title: string; message: string }> => [...announcements],
+    /** Where `onFocusLost` lands focus. */
+    landFocusOn(el: HTMLElement): void {
+      landing = el;
+    },
+    /** Another app dialog, which the setup dialog must not open over. */
+    otherDialog: {
+      open(): void {
+        blocking = true;
+      },
+      close(): void {
+        blocking = false;
+        for (const cb of [...closedListeners]) cb();
+      },
+      /** Closes the open dialog with another opening in its place, so a close is signalled while one stays open. */
+      replace(): void {
+        for (const cb of [...closedListeners]) cb();
+      },
+    },
+  };
+}

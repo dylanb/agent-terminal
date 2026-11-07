@@ -54,6 +54,9 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Starts `repoKey`'s selected flow exactly as a press of Start does; settles once that has finished, and never
+   *  rejects. */
+  start(repoKey: string): Promise<void>;
   /** Focus the loop read-out if one is shown, returning whether it did (so the root can fall back),
    *  so the root needn't reach into the strip's markup (WCAG 2.4.3). */
   focusLoopReadout(): boolean;
@@ -542,6 +545,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       void refresh();
     },
+    start: (key) => runAct('start', key, '').then(afterTransition(key)).catch(onActFailed),
     focusLoopReadout() {
       const el = host.querySelector<HTMLElement>('.loopstat');
       el?.focus();

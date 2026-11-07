@@ -61,6 +61,8 @@ import {
   type UiSetSettingsMsg,
   type ViewerReadMsg,
   type ViewerTreeMsg,
+  type SetupDismissMsg,
+  type SetupStatusMsg,
 } from '../shared/ipc';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
@@ -212,6 +214,17 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
     m.id.length > 0 &&
     m.id.length <= MAX_CATALOG_ID_LENGTH
   );
+}
+
+export function isValidSetupStatus(m: unknown): m is SetupStatusMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+export function isValidSetupDismiss(m: unknown): m is SetupDismissMsg {
+  if (!isRecord(m) || !isLiveSession(m) || !isRecord(m.dismissal)) return false;
+  const { dismissal } = m;
+  if (dismissal.kind === 'repo') return isSafeRepoKey(dismissal.repoKey);
+  return dismissal.kind === 'examples' && typeof dismissal.appVersion === 'string';
 }
 
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
