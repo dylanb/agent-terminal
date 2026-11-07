@@ -1,3 +1,11 @@
+## Stalled loop turns resume from the gate question
+
+§27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:
+
+- the question on a halt over a resumable stall names the turn's key and done-file and tells a still-working agent to answer, then finish the turn and write its done-file, which resumes the loop;
+- every turn prompt tells the agent to run long commands in the foreground, splitting one that exceeds its tool's time limit;
+- the stall watchdog defaults to forty-five minutes (`APP_TURN_TIMEOUT_MS` still overrides it).
+
 ## #290 — Warn at startup when a repository isn't set up for agent loops, and ship a repo-setup flow
 
 §29 (new): at startup, and the first time in a session the terminal enters a git repository, the app checks three conditions (the bundled examples are installed and current; git ignores the whole `.agent-terminal/` folder; the repository has a `loop-capabilities.yaml` the app's reader accepts) and lists each failing one in a blocking popup. It offers Install/update examples, Run setup loop, a per-repository and a per-version dismissal, and Close. Dismissals are app-owned, in their own file under the app-state home. Run setup loop selects and starts the new bundled `repo-setup` flow through the existing selection and Start requests, and is refused with a reason when the repository's run has begun. The flow's setup step writes the ignore rule and the capabilities file behind a human gate; only after approval does its publish step make the branch and draft PR under the repository's own rules. Both steps refuse, changing nothing and saying why, while the operator has anything staged or their own uncommitted edits in `.gitignore`; the publish step checks again before any outward action. §27.8 gains the prompt-only `work.self_check` field, and §18.1 points at the flow.
