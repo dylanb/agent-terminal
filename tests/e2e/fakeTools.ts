@@ -18,6 +18,7 @@ import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { FAKE_SPAWN_ARM, fakeSpawnShell } from './fakeProcesses';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -414,7 +415,8 @@ const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
 // that step's `work-`, `review-` and `consolidate-` turn keys. On the app WORK prompt it produces the §27
 // completion artifact and/or done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained
 // REVIEW-AND-FIX prompt it writes the round report + the review done-file. It records the boundary commands and
-// bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
+// bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. A `fake-spawn` line starts a
+// long-running fake command or helper (fakeProcesses.ts). Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
 export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>): void {
   const scripts = Object.entries(steps);
@@ -433,6 +435,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
+    fakeSpawnShell(binDir) +
     'while IFS= read -r line; do\n' +
     logInjected +
     '  [ -z "$line" ] && continue\n' +
@@ -441,6 +444,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     repairArm +
     '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${FAKE_SPAWN_ARM}\n` +
     ordered.flatMap(([id, s]) => stepArms(id, s)).join('\n') +
     '\n  esac\n' +
     'done\n';
