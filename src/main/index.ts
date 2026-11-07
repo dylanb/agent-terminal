@@ -121,7 +121,7 @@ import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
-import { resolveLaunchInvocation } from './cliShim';
+import { cliRuntime } from './cliRuntime';
 import type { BundleLocation } from './bundleLocation';
 import {
   createInstallExamplesCoordinator,
@@ -219,20 +219,16 @@ async function createWindow(): Promise<void> {
     return startupReady;
   });
   ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
-    handleCliInstall(m, () => ({
-      home: os.homedir(),
-      shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
-      currentPath: process.env.PATH ?? '',
-      invocation: resolveLaunchInvocation(
-        process.execPath,
-        process.defaultApp === true,
-        process.argv[1],
-        process.cwd(),
-        process.env.APPIMAGE && process.env.APPDIR
-          ? { appImage: process.env.APPIMAGE, mountDir: process.env.APPDIR }
-          : undefined,
-      ),
-    })));
+    handleCliInstall(m, () =>
+      cliRuntime({
+        env: process.env,
+        home: os.homedir(),
+        user: os.userInfo(),
+        execPath: process.execPath,
+        isDevBuild: process.defaultApp === true,
+        mainScript: process.argv[1],
+        cwd: process.cwd(),
+      })));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
   let finishRegistration!: (accepted: boolean) => void;

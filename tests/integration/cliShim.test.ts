@@ -22,7 +22,7 @@ function recorderShim(extra = ''): void {
   writeFileSync(recorder, `#!/bin/sh\n${extra}printf '%s' "$APP_LAUNCH_DIR" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
   chmodSync(recorder, 0o755);
   shimPath = join(work, 'agent-terminal');
-  writeFileSync(shimPath, generateShim({ execPath: recorder, appArgs: [] }));
+  writeFileSync(shimPath, generateShim(resolveLaunchInvocation(recorder, false, undefined, work)));
   chmodSync(shimPath, 0o755);
 }
 
@@ -142,7 +142,7 @@ describe('shim --controller (§23.5)', () => {
     const terminal = macBinary(join(work, 'dist', 'mac-arm64'), 'agent-terminal');
     recorderAt(terminal, 'terminal');
     recorderAt(macBinary(join(work, 'dist', 'controller', 'mac-arm64'), 'agent-terminal-controller'), 'controller');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     expect(await runShim(['--controller'])).toBe('controller:');
   });
 
@@ -150,7 +150,7 @@ describe('shim --controller (§23.5)', () => {
     const terminal = macBinary(join(work, 'Applications'), 'agent-terminal');
     recorderAt(terminal, 'terminal');
     recorderAt(macBinary(join(work, 'Applications'), 'agent-terminal-controller'), 'controller');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     expect(await runShim(['--controller'])).toBe('controller:');
   });
 
@@ -158,7 +158,7 @@ describe('shim --controller (§23.5)', () => {
     const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
     recorderAt(terminal, 'terminal');
     recorderAt(join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'), 'controller');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     expect(await runShim(['--controller'])).toBe('controller:');
   });
 
@@ -166,7 +166,7 @@ describe('shim --controller (§23.5)', () => {
     const terminal = join(work, 'opt', 'agent-terminal', 'agent-terminal');
     recorderAt(terminal, 'terminal');
     recorderAt(join(work, 'opt', 'agent-terminal-controller', 'agent-terminal-controller'), 'controller');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     expect(await runShim(['--controller'])).toBe('controller:');
   });
 
@@ -177,14 +177,14 @@ describe('shim --controller (§23.5)', () => {
     mkdirSync(mainDir, { recursive: true });
     writeFileSync(join(mainDir, 'index.js'), '');
     writeFileSync(join(mainDir, 'controller.js'), '');
-    shimFor({ execPath: electron, appArgs: [join(mainDir, 'index.js')] });
+    shimFor(resolveLaunchInvocation(electron, true, join(mainDir, 'index.js'), work));
     expect(await runShim(['--controller'])).toBe(`electron:${join(mainDir, 'controller.js')}`);
   });
 
   it('finds a controller that appeared after the launcher was installed', async () => {
     const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
     recorderAt(terminal, 'terminal');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     recorderAt(join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'), 'controller');
     expect(await runShim(['--controller'])).toBe('controller:');
   });
@@ -198,7 +198,7 @@ describe('shim --controller (§23.5)', () => {
       'controller',
       `while [ ! -f "${go}" ]; do sleep 0.05; done\n`,
     );
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     execFileSync(shimPath, ['--controller'], { cwd: fixtureCwd, timeout: 5000 });
     expect(existsSync(recOut)).toBe(false);
     writeFileSync(go, '');
@@ -208,12 +208,21 @@ describe('shim --controller (§23.5)', () => {
   it('fails visibly, launching nothing, when no controller is found', async () => {
     const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
     recorderAt(terminal, 'terminal');
-    shimFor({ execPath: terminal, appArgs: [] });
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
     const run = spawnSync(shimPath, ['--controller'], { cwd: fixtureCwd, timeout: 5000, encoding: 'utf8' });
     expect(run.status).not.toBe(0);
     expect(run.stderr).toMatch(/controller/i);
     await new Promise((r) => setTimeout(r, 200));
     expect(existsSync(recOut)).toBe(false);
+  });
+
+  it('names every place it looked when no controller is found', () => {
+    const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    shimFor(resolveLaunchInvocation(terminal, false, undefined, work));
+    const run = spawnSync(shimPath, ['--controller'], { cwd: fixtureCwd, timeout: 5000, encoding: 'utf8' });
+    expect(run.stderr).toContain(join(work, 'dist', 'agent-terminal-controller', 'agent-terminal-controller'));
+    expect(run.stderr).toContain(join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'));
   });
 
   it('still treats a directory named --controller as a target when spelled as a path', async () => {
@@ -311,6 +320,15 @@ describe('shim for an AppImage launch (#306)', () => {
     expect.soft(run.launched).toBe(false);
   });
 
+  it('--controller names the sibling it looked for when that controller AppImage is missing', async () => {
+    const apps = join(work, 'apps');
+    writeShim(appImageInvocation(join(apps, 'agent-terminal-1.4.0.AppImage')).invocation);
+    const run = await runFailing(['--controller']);
+    expect.soft(run.status).not.toBe(0);
+    expect.soft(run.stderr).toContain(join(apps, 'agent-terminal-controller-1.4.0.AppImage'));
+    expect.soft(run.launched).toBe(false);
+  });
+
   it.each([
     ['a plain launch', [] as string[]],
     ['--controller', ['--controller']],
@@ -349,7 +367,7 @@ describe('shim for an AppImage launch (#306)', () => {
     expect(await readWhenReady(recOut, 3000).catch(() => '')).toMatch(/^controller\|/);
   });
 
-  it('treats the running binary as inside the AppImage mount when the mount path reaches it through a symlink', () => {
+  it('decides from the paths it is given, leaving symlink resolution to whoever supplies the AppImage facts', () => {
     const appImage = join(work, 'apps', 'agent-terminal.AppImage');
     const binary = join(work, 'realtmp', '.mount_agentX', 'usr', 'bin', 'agent-terminal');
     standIn(appImage, 'appimage');
@@ -359,6 +377,6 @@ describe('shim for an AppImage launch (#306)', () => {
       appImage,
       mountDir: join(work, 'linktmp', '.mount_agentX'),
     });
-    expect(invocation).toEqual({ appImage });
+    expect(invocation).toEqual({ kind: 'binary', execPath: realpathSync(binary), appArgs: [] });
   });
 });

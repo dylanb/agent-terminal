@@ -159,14 +159,14 @@ Assets: `agent-terminal-<version>-arm64.dmg`, `agent-terminal-<version>-arm64-ma
 Assets: `agent-terminal_<version>_amd64.deb`, `agent-terminal-<version>.AppImage`, and the same two files for `agent-terminal-controller`.
 
 - **`.deb`** (Debian, Ubuntu): run `sudo apt install ./agent-terminal_<version>_amd64.deb ./agent-terminal-controller_<version>_amd64.deb` from the download folder. Launch each app from your applications menu.
-- **`.AppImage`**: run `chmod +x agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage`, then start each file (`./agent-terminal-<version>.AppImage`).
+- **`.AppImage`**: run `chmod u+x,go-w agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage` (executable, and writable only by you), then start each file (`./agent-terminal-<version>.AppImage`).
 
 #### The `agent-terminal` command
 
 Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. To install it, open **Settings → Command line → Install** in the app, or use the install button on the "Startup paused" card.
 
 - It goes to `~/.local/bin` (then `~/bin`) when that folder is already on the app's own `PATH` when it starts, and only you can write to it. Otherwise it goes to `~/.agent-terminal/bin`, and a block is added to your shell profile that appends that folder to `PATH`. Either way, open a new shell afterwards.
-- **Linux `.AppImage`:** the command launches the AppImage file. Keep the terminal and controller AppImages together in a folder only you can write to (Install refuses a folder, or a parent folder, that others can write), either with the release file names or both renamed the same way (`agent-terminal-controller` replacing `agent-terminal` at the start of the name), because `--controller` starts the sibling file. A newer AppImage with the same file name keeps the command working. If you move or rename the file, reinstall the command.
+- **Linux `.AppImage`:** the command launches the AppImage file. Keep the terminal and controller AppImages together in a folder only you can write to (Install refuses a folder, or a parent folder, that others can write or that another user owns, and an AppImage file that others can write: run `chmod go-w` on the file), either with the release file names or both renamed the same way (`agent-terminal-controller` replacing `agent-terminal` at the start of the name), because `--controller` starts the sibling file. A newer AppImage with the same file name keeps the command working. If you move or rename the file, reinstall the command.
 
 #### Before you use it
 

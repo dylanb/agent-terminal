@@ -10,6 +10,7 @@ import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUB
 describe('resolveLaunchInvocation (§23.4 / #25)', () => {
   it('execs the app binary with no extra args for a packaged build', () => {
     expect(resolveLaunchInvocation('/Applications/AgentTerminal', false, undefined, '/work')).toEqual({
+      kind: 'binary',
       execPath: '/Applications/AgentTerminal',
       appArgs: [],
     });
@@ -17,6 +18,7 @@ describe('resolveLaunchInvocation (§23.4 / #25)', () => {
 
   it('execs Electron with the dev main script, absolutized against the launch cwd', () => {
     expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work')).toEqual({
+      kind: 'binary',
       execPath: '/apps/Electron',
       appArgs: ['/work/out/main/index.js'],
     });
@@ -24,6 +26,7 @@ describe('resolveLaunchInvocation (§23.4 / #25)', () => {
 
   it('passes an already-absolute dev main script through unchanged', () => {
     expect(resolveLaunchInvocation('/apps/Electron', true, '/abs/out/main/index.js', '/work')).toEqual({
+      kind: 'binary',
       execPath: '/apps/Electron',
       appArgs: ['/abs/out/main/index.js'],
     });
@@ -31,6 +34,7 @@ describe('resolveLaunchInvocation (§23.4 / #25)', () => {
 
   it('omits args when a dev build has no main script', () => {
     expect(resolveLaunchInvocation('/apps/Electron', true, undefined, '/work')).toEqual({
+      kind: 'binary',
       execPath: '/apps/Electron',
       appArgs: [],
     });
@@ -44,18 +48,21 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
 
   it('launches the AppImage file when the running binary lives under its mount', () => {
     expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', facts)).toEqual({
+      kind: 'appImage',
       appImage,
     });
   });
 
   it('launches the AppImage file for a dev-build call inside the mount, with no app args', () => {
     expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', true, 'out/main/index.js', '/work', facts)).toEqual({
+      kind: 'appImage',
       appImage,
     });
   });
 
   it('keeps the packaged result when the binary is outside the mount (the mount facts were inherited)', () => {
     expect(resolveLaunchInvocation('/opt/agent-terminal/agent-terminal-app', false, undefined, '/work', facts)).toEqual({
+      kind: 'binary',
       execPath: '/opt/agent-terminal/agent-terminal-app',
       appArgs: [],
     });
@@ -63,6 +70,7 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
 
   it('keeps the dev result when a dev build runs outside the mount', () => {
     expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work', facts)).toEqual({
+      kind: 'binary',
       execPath: '/apps/Electron',
       appArgs: ['/work/out/main/index.js'],
     });
@@ -70,6 +78,7 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
 
   it('does not treat a sibling folder sharing the mount name as a prefix as inside the mount', () => {
     expect(resolveLaunchInvocation('/tmp/.mount_AbCD/x', false, undefined, '/work', facts)).toEqual({
+      kind: 'binary',
       execPath: '/tmp/.mount_AbCD/x',
       appArgs: [],
     });
@@ -81,7 +90,7 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
         appImage: 'Apps/agent-terminal.AppImage',
         mountDir,
       }),
-    ).toEqual({ execPath: '/tmp/.mount_AbC/agent-terminal-app', appArgs: [] });
+    ).toEqual({ kind: 'binary', execPath: '/tmp/.mount_AbC/agent-terminal-app', appArgs: [] });
   });
 
   it('keeps the packaged result when the mount path is relative, even one that resolves around the binary', () => {
@@ -91,7 +100,7 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
         appImage,
         mountDir: '.mount_AbC',
       }),
-    ).toEqual({ execPath: insideRelativeMount, appArgs: [] });
+    ).toEqual({ kind: 'binary', execPath: insideRelativeMount, appArgs: [] });
   });
 });
 
