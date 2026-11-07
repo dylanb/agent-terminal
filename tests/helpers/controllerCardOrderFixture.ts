@@ -175,4 +175,8 @@ export const RECENT_EXAMPLES: Readonly<Record<string, OrderExample>> = {
     ],
     list: [RECENTLY_USED_HEADING, d('b'), d('a'), d('c'), d('d')],
   },
+  'with no cards, no heading, as an empty status group shows none': {
+    steps: [{ at: 0, terminals: [] }],
+    list: [],
+  },
 };

@@ -2,7 +2,7 @@ import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
-import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_SORT_MODE, CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerSortMode, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type CardState, type ControllerCard } from './controllerCard';
 import { cardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from './controllerCardOrder';
 import type { ControllerClock, ControllerLayout } from './controllerFrame';
@@ -22,6 +22,11 @@ const newestNotification = (timeline: readonly ControllerTimelineEntry[] | undef
   timeline?.find((entry): entry is NotificationEntry => entry.kind === 'notification');
 
 const EXPANDED_IN_ONE_COLUMN: ReadonlySet<CardStatusClass> = new Set(['error', 'needs-human']);
+
+const SORT_SENTENCES: Readonly<Record<ControllerSortMode, string>> = {
+  attention: 'Sorted by attention: errors first, then needs a human, idle & unassigned, and working, each longest in its state first.',
+  'recently-used': 'Sorted by your most recent use of each card in this controller; cards you have not used yet follow in attention order.',
+};
 
 function windowHeader(doc: Document): { element: HTMLElement; render(directories: readonly ControllerDirectoryCard[]): void } {
   const element = doc.createElement('header');
@@ -73,6 +78,8 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   let previousNotifications = new Map<string, NotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   let observations: CardObservations | undefined;
+  let directories: ControllerDirectoryCard[] = [];
+  let sortMode = CONTROLLER_DEFAULT_SORT_MODE;
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
     const slot = doc.createElement('span');
@@ -82,9 +89,19 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const alwaysOnTopSlot = controlSlot();
   const themeSlot = controlSlot();
   const sortSlot = controlSlot();
-  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot, ' ', sortSlot);
+  const sentence = doc.createElement('p');
+  sentence.className = 'controller-sort-sentence';
+  sentence.textContent = SORT_SENTENCES[sortMode];
+  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot, ' ', sortSlot, sentence);
   const alwaysOnTopControl = createAlwaysOnTopControl(alwaysOnTopSlot, { controller: deps.controller });
-  const sortControl = createSortModeControl(sortSlot, { mode: 'attention', onChange() {} });
+  const sortControl = createSortModeControl(sortSlot, {
+    mode: sortMode,
+    onChange(next) {
+      sortMode = next;
+      sentence.textContent = SORT_SENTENCES[next];
+      renderList();
+    },
+  });
   let themeToggle: { dispose(): void } | undefined;
   void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
     if (disposed) return;
@@ -152,7 +169,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   function groupHeading({ name, count }: Extract<CardListEntry, { kind: 'heading' }>): HTMLElement {
     const heading = doc.createElement('h2');
     heading.className = 'controller-group-heading';
-    heading.textContent = `${name} (${count})`;
+    heading.textContent = count === undefined ? name : `${name} (${count})`;
     return heading;
   }
 
@@ -196,18 +213,16 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     });
   }
 
-  const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
-    const directories = directoryCards(snapshot);
+  function renderList(): void {
+    if (!observations) return;
+    const observed = observations;
     const now = deps.clock.now();
-    const observed = observations = observeCards(observations, directories, now);
-    announceAttention(directories);
-    header.render(directories);
     const restoreFocus = captureSubtreeFocus(list);
     const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
     cards.forEach(({ card }) => card.dispose());
     list.replaceChildren();
     cards = [];
-    for (const entry of cardList(directories, observed, 'attention')) {
+    for (const entry of cardList(directories, observed, sortMode)) {
       if (entry.kind === 'heading') list.append(groupHeading(entry));
       else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
     }
@@ -218,6 +233,14 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       list.append(empty);
     }
     restoreFocus(() => cards.map(({ card }) => card.focusTarget()).find(Boolean) ?? cards[0]?.card.header() ?? list.querySelector('p'));
+  }
+
+  const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
+    directories = directoryCards(snapshot);
+    observations = observeCards(observations, directories, deps.clock.now());
+    announceAttention(directories);
+    header.render(directories);
+    renderList();
   });
   return {
     dispose() {

@@ -15,8 +15,10 @@ export interface CardObservations {
 }
 
 export type CardListEntry =
-  | { readonly kind: 'heading'; readonly name: string; readonly count: number }
+  | { readonly kind: 'heading'; readonly name: string; readonly count?: number }
   | { readonly kind: 'card'; readonly card: ControllerDirectoryCard };
+
+const RECENTLY_USED_HEADING = 'Recently used';
 
 const GROUP_HEADINGS: Readonly<Record<SummaryLabel, string>> = {
   errors: 'Errors', 'need a human': 'Needs a human', idle: 'Idle & unassigned', working: 'Working',
@@ -51,15 +53,17 @@ function observationOf(card: ControllerDirectoryCard, observations: CardObservat
   return observation;
 }
 
-export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, _sortMode: ControllerSortMode): CardListEntry[] {
+export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode): CardListEntry[] {
   const observed = cards.map(card => ({ card, observation: observationOf(card, observations) }));
-  return SUMMARY_LABELS.flatMap((group): CardListEntry[] => {
-    const members = observed
+  const groups = SUMMARY_LABELS.map(group => ({
+    group,
+    members: observed
       .filter(({ observation }) => observation.group === group)
-      .sort((a, b) => a.observation.enteredAt - b.observation.enteredAt || a.observation.seen - b.observation.seen);
-    if (!members.length) return [];
-    return [{ kind: 'heading', name: GROUP_HEADINGS[group], count: members.length }, ...members.map(({ card }) => ({ kind: 'card' as const, card }))];
-  });
+      .sort((a, b) => a.observation.enteredAt - b.observation.enteredAt || a.observation.seen - b.observation.seen)
+      .map(({ card }): CardListEntry => ({ kind: 'card', card })),
+  })).filter(({ members }) => members.length);
+  if (sortMode === 'recently-used') return !groups.length ? [] : [{ kind: 'heading', name: RECENTLY_USED_HEADING }, ...groups.flatMap(({ members }) => members)];
+  return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'heading', name: GROUP_HEADINGS[group], count: members.length }, ...members]);
 }
 
 const MINUTE = 60_000;

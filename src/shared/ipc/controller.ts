@@ -121,4 +121,5 @@ export interface ControllerIncompatibility {
 export type ControllerSortMode = 'attention' | 'recently-used';
 
 export const CONTROLLER_DEFAULT_THEME: Theme = 'light';
+export const CONTROLLER_DEFAULT_SORT_MODE: ControllerSortMode = 'attention';
 export const CONTROLLER_DEFAULT_ALWAYS_ON_TOP = true;
