@@ -38,6 +38,7 @@ import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shar
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { sliceBriefReader, type SliceBriefDelivery } from './sliceBriefReader';
+import type { RepeatEntry } from '../shared/repeatList';
 import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_DONE_REL_PATH, APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
@@ -189,6 +190,8 @@ export interface AppLoopEngineDeps {
   reopenStep(repoDir: string): string | null;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
+  /** §28.4.1 — the list entry a work turn of `stepId` is on, or null when it is on none. */
+  repeatEntry(repoDir: string, stepId: string): RepeatEntry | null;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
   gateReaching?: AutoGate['gateReaching'];

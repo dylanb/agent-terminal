@@ -5,6 +5,7 @@
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
 import type { SliceBriefDelivery } from './sliceBriefReader';
+import type { RepeatEntry } from '../shared/repeatList';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
@@ -113,6 +114,8 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  /** §28.4.1 — the list entry this turn of a repeated step is on. */
+  entry?: RepeatEntry;
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */

@@ -470,3 +470,20 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
     expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
   });
 });
+
+describe('composeAppWorkPrompt — a repeated turn names the list entry it is on (§28.4.1)', () => {
+  const base = {
+    recipeBody: '# work turn\nBuild the entry.',
+    turnKey: 'work-build',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: null,
+  };
+  const ENTRY_LINE = /^entry \d+ of \d+: .*$/gm;
+
+  it('names the entry it is given as its own line, and names none without one', () => {
+    expect.soft(composeAppWorkPrompt({ ...base, entry: { position: 2, count: 3, title: 'Render the table' } }).match(ENTRY_LINE)).toEqual(['entry 2 of 3: Render the table']);
+    expect.soft(composeAppWorkPrompt({ ...base, entry: { position: 50, count: 50, title: '  spaced  ' } }).match(ENTRY_LINE)).toEqual(['entry 50 of 50:   spaced  ']);
+    expect.soft(composeAppWorkPrompt({ ...base, goalProgress: ['PROGRESS — keep two files.'], entry: { position: 1, count: 1, title: 'Only' } }).match(ENTRY_LINE)).toEqual(['entry 1 of 1: Only']);
+    expect.soft(composeAppWorkPrompt(base).match(ENTRY_LINE)).toBeNull();
+  });
+});

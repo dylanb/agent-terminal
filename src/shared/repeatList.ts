@@ -2,6 +2,13 @@ import type { RepeatListFormat } from './engineCapabilities/flow';
 import { checkJsonList } from './jsonList';
 import { parseSlicePlan, slicePlanWellFormed } from './slicePlan';
 
+/** The entry a repeated work turn is on: its position counted from 1, the standing count, and its shown title. */
+export interface RepeatEntry {
+  position: number;
+  count: number;
+  title: string;
+}
+
 /** Which list a repeat's count is read from: a `json-list` names its key, every other format has one list. */
 export type RepeatListSpec = { format: 'json-list'; list: string } | { format: Exclude<RepeatListFormat, 'json-list'> };
 

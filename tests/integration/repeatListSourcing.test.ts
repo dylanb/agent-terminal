@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createFlowManager, loadFlowDefinition, type FlowManager } from '../../src/main/flow';
 import { MAX_LOOP_ARTIFACT_BYTES, readLoopArtifact } from '../../src/main/appLoopPaths';
 import { createRepeatSourcer } from '../../src/main/repeatSourcing';
-import { createFlowStateStore } from '../../src/main/flowState';
+import { MAX_FLOW_STATE_BYTES, createFlowStateStore } from '../../src/main/flowState';
+import type { RepeatEntry } from '../../src/shared/repeatList';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { createApproveDriver, type ApproveDriver } from '../helpers/repeatApprove';
 import { flowLocations, writeFlow, writeLoopDef, type FlowSpec, type FlowStepSpec, type RepeatSpec } from '../helpers/flowFixtures';
@@ -105,12 +106,13 @@ const MAX_STEPS = 400;
 
 /** Approves every loop step the flow reaches, each after its work turn leaves `writes[step]` at the output
  *  `outputId`, until the flow reaches a manual step. Returns the steps entered, in order. */
-async function play(r: Rig, outputId: string, writes: Writes): Promise<string[]> {
+async function play(r: Rig, outputId: string, writes: Writes, onStep: (step: string) => void = () => {}): Promise<string[]> {
   const seen: string[] = [];
   const runs: Record<string, number> = {};
   for (let i = 0; i < MAX_STEPS; i++) {
     const view = r.flow.state(r.repo);
     seen.push(view.stepName);
+    onStep(view.stepName);
     if (view.stepName === 'done') return seen;
     runs[view.stepName] = (runs[view.stepName] ?? 0) + 1;
     const write = writes[view.stepName];
@@ -335,11 +337,12 @@ describe("Today's form is unchanged: count_input sourced from the plan output", 
 describe('The sourced list in flow-state.yaml: its read boundary and its clearing', () => {
   const stateFile = (repo: string): string => join(repo, '.agent-terminal', 'flow-state.yaml');
   /** A run planted at `build` whose persisted record is `record`, advanced to `done` with no source approve. */
-  const plantedRun = (record: string): Rig => {
-    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
-    writeFileSync(stateFile(r.repo), `step: build\nstatus: in_progress\n${record}`);
+  const plantedRun = (record: string, repeat: RepeatSpec = STEPS_LIST, extra = ''): Rig => {
+    const r = rig(flowSpec(repeat, ['design']), 'steps');
+    writeFileSync(stateFile(r.repo), `step: build\nstatus: in_progress\n${extra}${record}`);
     return r;
   };
+  const TITLES_3 = '  titles:\n    - First\n    - Second\n    - Third\n';
   const advanceToDone = (r: Rig): string[] => {
     const seen: string[] = [];
     for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).stepName !== 'done'; i++) {
@@ -350,23 +353,39 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
   };
   const groupOf = (times: number): string[] => sequence([], times).slice(0, -1);
 
-  it('a persisted { count: 3 } record runs the group 3 times; a count of 0, -1, 2.5 or a word reads as no record', () => {
-    expect.soft(advanceToDone(plantedRun('repeat_list:\n  count: 3\n'))).toEqual(groupOf(3));
-    expect.soft(advanceToDone(plantedRun('repeat_list:\n  count: 60\n')), 'clamped where it is used').toEqual(groupOf(50));
+  it('a persisted { count: 3, titles } record runs the group 3 times; a count of 0, -1, 2.5 or a word reads as no record', () => {
+    expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: 3\n${TITLES_3}`))).toEqual(groupOf(3));
+    expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: 60\n${TITLES_3}`)), 'clamped where it is used').toEqual(groupOf(50));
     for (const bad of ['0', '-1', '2.5', 'three']) {
-      expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: ${bad}\n`)), bad).toEqual(groupOf(1));
+      expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: ${bad}\n${TITLES_3}`)), bad).toEqual(groupOf(1));
     }
   });
 
+  const BAD_TITLES: readonly (readonly [string, string])[] = [
+    ['no titles', ''],
+    ['titles that are not a list', '  titles: First\n'],
+    ['titles holding a non-string', '  titles:\n    - First\n    - 2\n    - Third\n'],
+  ];
+
+  it.each(BAD_TITLES)('a persisted record with %s reads as no record: no entry and the group runs once, beside a valid record that names its entry', (_name, titles) => {
+    const valid = plantedRun(`repeat_list:\n  count: 3\n${TITLES_3}`);
+    expect.soft(valid.flow.entryFor(valid.repo, 'build')).toEqual({ position: 1, count: 3, title: 'First' });
+    expect.soft(advanceToDone(valid)).toEqual(groupOf(3));
+    const bad = plantedRun(`repeat_list:\n  count: 3\n${titles}`);
+    expect.soft(bad.flow.entryFor(bad.repo, 'build')).toBeNull();
+    expect.soft(advanceToDone(bad)).toEqual(groupOf(1));
+  });
+
   it('the strict write keeps a valid record and refuses an ill-typed one, leaving its file byte-for-byte', () => {
-    const valid = plantedRun('repeat_list:\n  count: 3\n');
+    const valid = plantedRun(`repeat_list:\n  count: 3\n${TITLES_3}`);
     expect.soft(() => valid.flow.setTitle(valid.repo, 'Named')).not.toThrow();
     expect.soft(advanceToDone(valid)).toEqual(groupOf(3));
-    for (const count of ['0', '-1', '2.5', 'three']) {
-      const bad = plantedRun(`repeat_list:\n  count: ${count}\n`);
+    const records = [...['0', '-1', '2.5', 'three'].map((count) => `repeat_list:\n  count: ${count}\n${TITLES_3}`), ...BAD_TITLES.map(([, titles]) => `repeat_list:\n  count: 3\n${titles}`)];
+    for (const record of records) {
+      const bad = plantedRun(record);
       const before = readFileSync(stateFile(bad.repo), 'utf8');
-      expect.soft(() => bad.flow.setTitle(bad.repo, 'Named'), count).toThrow(/unrecognized/i);
-      expect.soft(readFileSync(stateFile(bad.repo), 'utf8'), count).toBe(before);
+      expect.soft(() => bad.flow.setTitle(bad.repo, 'Named'), record).toThrow(/unrecognized/i);
+      expect.soft(readFileSync(stateFile(bad.repo), 'utf8'), record).toBe(before);
     }
   });
 
@@ -422,5 +441,294 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
     };
     const runs = { toEarlierStep: await reverted(false)(), toNotStarted: await reverted(true)() };
     expect(runs).toEqual({ toEarlierStep: sequence(['design'], 3), toNotStarted: sequence(['design'], 1) });
+  });
+});
+
+// #278 slice 3 — the entry a repeated step's work turn names: the flow manager's entry read for each step the run
+// reaches, before that step is approved.
+
+type Named = readonly [step: string, entry: RepeatEntry | null];
+
+/** `play`, recording at each step the entry the flow manager names for it. */
+async function playNamed(r: Rig, outputId: string, writes: Writes): Promise<Named[]> {
+  const named: Named[] = [];
+  await play(r, outputId, writes, (step) => named.push([step, r.flow.entryFor(r.repo, step)]));
+  return named;
+}
+
+const entry = (position: number, count: number, title: string): RepeatEntry => ({ position, count, title });
+
+/** What a run names whose sources come before the group and whose group runs `count` times over `titles`: each
+ *  group step names its iteration's entry, and every other step names none. */
+function namedRun(sources: readonly string[], titles: readonly string[], count = titles.length): Named[] {
+  const group = Array.from({ length: count }, (_, i): Named[] => [
+    ['build', entry(i + 1, count, titles[i])],
+    ['check', entry(i + 1, count, titles[i])],
+  ]).flat();
+  return [...sources.map((s): Named => [s, null]), ...group, ['finish', null], ['done', null]];
+}
+
+/** The steps of a run that names no entry anywhere. */
+const unnamed = (steps: readonly string[]): Named[] => steps.map((s): Named => [s, null]);
+
+const SLICES_INPUT_FORM: RepeatSpec = { backTo: 'build', countInput: 'slices' };
+const DESIGN_SLICES_FORM: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'design', format: 'impl-slices' } };
+const PLAN_TITLES = ['Slice 1 of the feature', 'Slice 2 of the feature', 'Slice 3 of the feature'];
+const REORDERED_BLOCK = '## Impl-slices\n\n### Impl-slice 2 — Second first\nAcceptance criteria: a\n\n### Impl-slice 1 — First second\nAcceptance criteria: b\n';
+const implSlices = (titles: readonly string[]): string =>
+  ['## Impl-slices', '', ...titles.flatMap((t, i) => [`### Impl-slice ${i + 1} — ${t}`, `Acceptance criteria: criterion ${i + 1}`, ''])].join('\n');
+
+/** A manager over the same repository, as a relaunched app constructs one. */
+const relaunched = (): FlowManager => createFlowManager({ globalDir: tmp('repeat-sourcing-relaunch-global-') });
+
+/** From `build` on its first iteration, the entry a relaunched manager names for `build` on each iteration, moving
+ *  the run on with `flow.advance` and no source approve. */
+function relaunchedEntriesAcross(r: Rig): (RepeatEntry | null)[] {
+  const named: (RepeatEntry | null)[] = [];
+  for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).stepName === 'build'; i++) {
+    named.push(relaunched().entryFor(r.repo, 'build'));
+    r.flow.advance(r.repo);
+    r.flow.advance(r.repo);
+  }
+  return named;
+}
+
+async function sourcedAtBuild(r: Rig, steps: Leave): Promise<void> {
+  r.flow.start(r.repo);
+  leave(r.driver.outputPath('design', 'steps'), steps);
+  await r.driver.approve('design');
+}
+
+describe('Each repeated work turn names its entry', () => {
+  it.each([1, 3])('a %i-entry JSON list names entry k of N with the k-th title on each group step', async (n) => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    r.flow.start(r.repo);
+    expect(await playNamed(r, 'steps', { design: always(list(n)) })).toEqual(namedRun(['design'], distinctTitles(n)));
+  });
+
+  it('a 60-entry list names entries 1 to 50 of 50: N is the count after the clamp', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    r.flow.start(r.repo);
+    expect(await playNamed(r, 'steps', { design: always(list(60)) })).toEqual(namedRun(['design'], distinctTitles(60), 50));
+  });
+
+  it.each([
+    ['in file order', exampleSlicePlan(3), PLAN_TITLES],
+    ['numbered 2 then 1, where entry 1 is the heading numbered 2', REORDERED_BLOCK, ['Second first', 'First second']],
+  ] as const)('an impl-slices block in any artifact names its headings %s', async (_name, text, titles) => {
+    const r = rig(flowSpec(DESIGN_SLICES_FORM, ['design']), 'design');
+    r.flow.start(r.repo);
+    expect(await playNamed(r, 'design', { design: always(text) })).toEqual(namedRun(['design'], titles));
+  });
+
+  it.each([
+    ['in file order', exampleSlicePlan(3), PLAN_TITLES],
+    ['numbered 2 then 1, where entry 1 is the heading numbered 2', REORDERED_BLOCK, ['Second first', 'First second']],
+  ] as const)("today's count_input form sourced from a plan names its headings %s", async (_name, text, titles) => {
+    const r = rig(flowSpec(SLICES_INPUT_FORM, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    expect(await playNamed(r, 'plan', { plan: always(text) })).toEqual(namedRun(['plan'], titles));
+  });
+
+  it('a title is named with each control character, line or paragraph separator, bidi override and zero-width character turned into a space, ZWJ and ZWNJ kept, and its spaces untrimmed', async () => {
+    const fromJson = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    fromJson.flow.start(fromJson.repo);
+    expect.soft(await playNamed(fromJson, 'steps', { design: always(jsonListText(['Parse\u2028the\u202Einput', 'Zero\u200Bwidth\u2066iso', 'a\u200Db\u200Cc', '  two  spaces  '])) })).toEqual(namedRun(['design'], ['Parse the input', 'Zero width iso', 'a\u200Db\u200Cc', '  two  spaces  ']));
+    const fromBlock = rig(flowSpec(DESIGN_SLICES_FORM, ['design']), 'design');
+    fromBlock.flow.start(fromBlock.repo);
+    expect.soft(await playNamed(fromBlock, 'design', { design: always(implSlices(['Red \u001b[31mtitle', 'Plain'])) })).toEqual(namedRun(['design'], ['Red  [31mtitle', 'Plain']));
+  });
+
+  const CAPPED: readonly (readonly [string, string])[] = [
+    ['x'.repeat(150), 'x'.repeat(100)],
+    ['y'.repeat(100), 'y'.repeat(100)],
+    [`${'a'.repeat(99)}\u{1F600}b`, `${'a'.repeat(99)}\u{1F600}`],
+  ];
+
+  it.each([
+    ['a JSON list', STEPS_LIST, 'steps', jsonListText(CAPPED.map(([source]) => source))],
+    ['an impl-slices block', DESIGN_SLICES_FORM, 'design', implSlices(CAPPED.map(([source]) => source))],
+  ] as const)('from %s, a title over 100 characters is named by its first 100, one of exactly 100 whole, and an astral character at the cut is kept whole', async (_name, repeat, outputId, text) => {
+    const r = rig(flowSpec(repeat, ['design']), outputId);
+    r.flow.start(r.repo);
+    expect(await playNamed(r, outputId, { design: always(text) })).toEqual(namedRun(['design'], CAPPED.map(([, shown]) => shown)));
+  });
+
+  it('a planted record whose titles hold an ESC sequence, a bidi override, 150 characters, a ZWJ and edge spaces names each cleaned and cut to 100, ZWJ and spaces kept', () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    writeFileSync(join(r.repo, '.agent-terminal', 'flow-state.yaml'), `step: build\nstatus: in_progress\nrepeat_list:\n  count: 5\n  titles:\n    - "Red \\e[31mtitle"\n    - "a\\u202Eb"\n    - "${'x'.repeat(150)}"\n    - "a\\u200Db"\n    - "  two  spaces  "\n`);
+    expect(relaunchedEntriesAcross(r)).toEqual([entry(1, 5, 'Red  [31mtitle'), entry(2, 5, 'a b'), entry(3, 5, 'x'.repeat(100)), entry(4, 5, 'a\u200Db'), entry(5, 5, '  two  spaces  ')]);
+  });
+
+  it('a planted record with fewer titles than its count names an entry only on the iterations that have a title', () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    writeFileSync(join(r.repo, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: in_progress\nrepeat_list:\n  count: 3\n  titles:\n    - First\n');
+    expect(relaunchedEntriesAcross(r)).toEqual([entry(1, 3, 'First'), null, null]);
+  });
+
+  it('50 titles of 100 four-byte characters each are saved within the flow-state read bound, and a relaunch names every one', async () => {
+    const titles = Array.from({ length: 50 }, (_, i) => String.fromCodePoint(0x1f600 + i).repeat(100));
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, jsonListText(titles));
+    expect.soft(statSync(join(r.repo, '.agent-terminal', 'flow-state.yaml')).size).toBeLessThanOrEqual(MAX_FLOW_STATE_BYTES);
+    expect.soft(relaunchedEntriesAcross(r)).toEqual(titles.map((t, i) => entry(i + 1, 50, t)));
+  });
+
+  it('a list of 200 titles of 100 four-byte characters keeps only the first 50 within the flow-state read bound, and a relaunch names entries 1 to 50 of 50', async () => {
+    const titles = Array.from({ length: 200 }, (_, i) => String.fromCodePoint(0x1f600 + i).repeat(100));
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, jsonListText(titles));
+    expect.soft(statSync(join(r.repo, '.agent-terminal', 'flow-state.yaml')).size).toBeLessThanOrEqual(MAX_FLOW_STATE_BYTES);
+    expect.soft(relaunchedEntriesAcross(r)).toEqual(titles.slice(0, 50).map((t, i) => entry(i + 1, 50, t)));
+  });
+
+  it('an edit to the list file outside a source approve leaves the named titles as they were sourced', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, list(3));
+    leave(r.driver.outputPath('design', 'steps'), jsonListText(['Changed 1', 'Changed 2', 'Changed 3']));
+    expect(await playNamed(r, 'steps', {})).toEqual(namedRun([], distinctTitles(3)));
+  });
+
+  it('a later source approve that sources nothing leaves the named titles as they were sourced', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design', 'redesign']), 'steps');
+    r.flow.start(r.repo);
+    expect(await playNamed(r, 'steps', { design: always(list(3)), redesign: always(NO_LIST) })).toEqual(namedRun(['design', 'redesign'], distinctTitles(3)));
+  });
+
+  it("a count_input that is not slices names no entry, even when a person's value equals the plan's slice count, beside a slices count_input that does", async () => {
+    const byPerson = rig(flowSpec({ backTo: 'build', countInput: 'n' }, ['plan']), 'plan');
+    byPerson.flow.start(byPerson.repo);
+    byPerson.flow.provideInput(byPerson.repo, { n: '3' });
+    expect.soft(await playNamed(byPerson, 'plan', { plan: always(exampleSlicePlan(3)) })).toEqual(unnamed(sequence(['plan'], 3)));
+    const fromPlan = rig(flowSpec(SLICES_INPUT_FORM, ['plan']), 'plan');
+    fromPlan.flow.start(fromPlan.repo);
+    expect.soft(await playNamed(fromPlan, 'plan', { plan: always(exampleSlicePlan(3)) })).toEqual(namedRun(['plan'], PLAN_TITLES));
+  });
+
+  it('in the count_input form, a persisted slices input that differs from the recorded list names no entry and keeps its count, beside one that matches', () => {
+    const record = 'repeat_list:\n  count: 2\n  titles:\n    - First\n    - Second\n';
+    const plant = (slices: string): Rig => {
+      const r = rig(flowSpec(SLICES_INPUT_FORM, ['design']), 'steps');
+      writeFileSync(join(r.repo, '.agent-terminal', 'flow-state.yaml'), `step: build\nstatus: in_progress\ninputs:\n  slices: '${slices}'\n${record}`);
+      return r;
+    };
+    expect.soft(relaunchedEntriesAcross(plant('3'))).toEqual([null, null, null]);
+    expect.soft(relaunchedEntriesAcross(plant('2'))).toEqual([entry(1, 2, 'First'), entry(2, 2, 'Second')]);
+  });
+});
+
+describe('No list, no entry line', () => {
+  it('before any source approve a group step names no entry, beside a twin run whose source approve does name one', async () => {
+    const unsourced = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    unsourced.flow.start(unsourced.repo);
+    unsourced.flow.advance(unsourced.repo);
+    const sourced = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(sourced, list(3));
+    expect({ unsourced: unsourced.flow.entryFor(unsourced.repo, 'build'), sourced: sourced.flow.entryFor(sourced.repo, 'build') }).toEqual({
+      unsourced: null,
+      sourced: entry(1, 3, distinctTitles(3)[0]),
+    });
+  });
+
+  it('a count_input value a person supplies names no entry, after the plan source approve had named one', async () => {
+    const r = rig(flowSpec(SLICES_INPUT_FORM, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    leave(r.driver.outputPath('plan', 'plan'), exampleSlicePlan(3));
+    await r.driver.approve('plan');
+    const fromPlan = r.flow.entryFor(r.repo, 'build');
+    r.flow.provideInput(r.repo, { slices: '3' });
+    expect({ fromPlan, byPerson: r.flow.entryFor(r.repo, 'build') }).toEqual({ fromPlan: entry(1, 3, PLAN_TITLES[0]), byPerson: null });
+  });
+
+  const toDone = (r: Rig): void => {
+    for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).status !== 'done'; i++) r.flow.advance(r.repo);
+  };
+  const CLEARINGS: readonly (readonly [string, (r: Rig) => void])[] = [
+    [
+      'a restart',
+      (r) => {
+        toDone(r);
+        r.flow.restart(r.repo);
+      },
+    ],
+    [
+      'a terminate',
+      (r) => {
+        r.flow.terminate(r.repo);
+        r.flow.start(r.repo);
+      },
+    ],
+    [
+      'a revert to not-started',
+      (r) => {
+        r.flow.revertStep(r.repo, 'build');
+        r.flow.revertStep(r.repo, 'design');
+        r.flow.start(r.repo);
+      },
+    ],
+  ];
+
+  it.each(CLEARINGS)('after %s, a group step names no entry until the next source approve, though it named one before', async (_name, clear) => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, list(3));
+    const before = r.flow.entryFor(r.repo, 'build');
+    clear(r);
+    r.flow.advance(r.repo);
+    expect({ before, after: [r.flow.state(r.repo).stepName, r.flow.entryFor(r.repo, 'build')] }).toEqual({ before: entry(1, 3, distinctTitles(3)[0]), after: ['build', null] });
+  });
+
+  it('a revert to an earlier step keeps the entry', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, list(3));
+    r.flow.revertStep(r.repo, 'build');
+    r.flow.advance(r.repo);
+    expect([r.flow.state(r.repo).stepName, r.flow.entryFor(r.repo, 'build')]).toEqual(['build', entry(1, 3, distinctTitles(3)[0])]);
+  });
+});
+
+describe('Steps outside the group get no entry line', () => {
+  it('the steps before back_to and the finish loop step after the repeat name no entry, while the group steps of the same run name the latest source approve\'s titles', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design', 'redesign']), 'steps');
+    r.flow.start(r.repo);
+    const named = await playNamed(r, 'steps', { design: always(list(2)), redesign: always(jsonListText(['Re 1', 'Re 2'])) });
+    expect(named.filter(([step]) => step !== 'done')).toEqual(namedRun(['design', 'redesign'], ['Re 1', 'Re 2']).filter(([step]) => step !== 'done'));
+  });
+});
+
+describe('A relaunch resumes the iteration', () => {
+  it('a relaunched manager mid-iteration 2 of 3 resumes on iteration 2 and names entry 2 of 3 with the same title', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, list(3));
+    await r.driver.approve('build');
+    await r.driver.approve('check');
+    const fresh = relaunched();
+    expect({ slice: fresh.currentSlice(r.repo), at: fresh.state(r.repo).stepName, entry: fresh.entryFor(r.repo, 'build') }).toEqual({
+      slice: 2,
+      at: 'build',
+      entry: entry(2, 3, distinctTitles(3)[1]),
+    });
+  });
+
+  it('a 60-entry list resumes with count 50 and a title for each of positions 1 to 50', async () => {
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
+    await sourcedAtBuild(r, list(60));
+    expect(relaunchedEntriesAcross(r)).toEqual(distinctTitles(50).map((t, i) => entry(i + 1, 50, t)));
+  });
+});
+
+describe('Runs started before this change resume', () => {
+  it('a pre-change flow-state document resumes on its iteration with its count and no entry, and the next source approve names that list', async () => {
+    const r = rig(flowSpec(SLICES_INPUT_FORM, ['plan'], true), 'plan');
+    writeFileSync(join(r.repo, '.agent-terminal', 'flow-state.yaml'), "step: build\nstatus: in_progress\ninputs:\n  slices: '3'\nrepeat_counts:\n  check: 2\n");
+    const resumed = { slice: r.flow.currentSlice(r.repo), entry: r.flow.entryFor(r.repo, 'build') };
+    leave(r.driver.outputPath('build', 'plan'), exampleSlicePlan(3));
+    await r.driver.approve('build');
+    const afterSource = r.flow.entryFor(r.repo, 'check');
+    const rest = await play(r, 'plan', {});
+    expect({ resumed, afterSource, rest }).toEqual({
+      resumed: { slice: 2, entry: null },
+      afterSource: entry(2, 3, PLAN_TITLES[1]),
+      rest: ['check', 'build', 'check', 'finish', 'done'],
+    });
   });
 });

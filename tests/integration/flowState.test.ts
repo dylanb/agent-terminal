@@ -131,6 +131,15 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'refactor', status: 'in_progress' });
   });
 
+  it('reads a document written before the sourced list existed with its inputs and repeat counts, and writes it back the same (#278)', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), "step: build\nstatus: in_progress\ninputs:\n  slices: '3'\nrepeat_counts:\n  check: 2\n");
+    const resumed = { step: 'build', status: 'in_progress', inputs: { slices: '3' }, repeatCounts: { check: 2 } };
+    expect.soft(createFlowStateStore(dir).read()).toEqual(resumed);
+    createFlowStateStore(dir).write(resumed as Parameters<ReturnType<typeof createFlowStateStore>['write']>[0]);
+    expect.soft(createFlowStateStore(dir).read()).toEqual(resumed);
+  });
+
   describe('the worktree name, independent of the flow progression', () => {
     it('names a directory that has no progression at all', () => {
       createFlowStateStore(dir).writeTitle('Spike the parser');

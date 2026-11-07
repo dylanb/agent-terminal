@@ -254,6 +254,7 @@ export class AppLoopEngineHarness {
       sliceBrief: () => this.sliceBriefResult,
       reopenStep: () => this.reopenStepResult,
       currentSlice: () => this.currentSliceResult,
+      repeatEntry: () => null,
       artifactCheckCommand: (check) =>
         check.kind === 'report'
           ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`

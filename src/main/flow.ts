@@ -10,6 +10,7 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore, type RepeatListRecord } from './flowState';
+import type { RepeatEntry } from '../shared/repeatList';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
@@ -755,6 +756,9 @@ export interface FlowManager {
   /** §28.4.1 — record the list a source approve sourced a repo's repeat count from, WITHOUT re-entering the
    *  current step. Delegates to the machine keyed by `repoKey`. */
   sourceRepeatList(repoKey: string, list: RepeatListRecord): FlowStateView;
+  /** §28.4.1 — the entry a work turn of `stepId` is on, or null when the step is outside the group or no list
+   *  names it. */
+  entryFor(repoKey: string, stepId: string): RepeatEntry | null;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -935,6 +939,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
     resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
     sourceRepeatList: (k, list) => viewOf(k, (m) => m.sourceRepeatList(list)),
+    entryFor: () => null,
     setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }
