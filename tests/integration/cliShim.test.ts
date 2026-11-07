@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { generateShim, resolveLaunchInvocation, type LaunchInvocation } from '../../src/main/cliShim';
@@ -336,5 +336,29 @@ describe('shim for an AppImage launch (#306)', () => {
     expect.soft(run.status).not.toBe(0);
     expect.soft(run.stderr).toContain(appImage);
     expect.soft(run.launched).toBe(false);
+  });
+
+  it('--controller still launches an executable controller sibling when the terminal AppImage is not executable', async () => {
+    const apps = join(work, 'apps');
+    const appImage = join(apps, 'agent-terminal-1.4.0.AppImage');
+    writeShim(appImageInvocation(appImage).invocation);
+    standIn(join(apps, 'agent-terminal-controller-1.4.0.AppImage'), 'controller');
+    chmodSync(appImage, 0o644);
+    const run = await runFailing(['--controller']);
+    expect.soft(run.status).toBe(0);
+    expect(await readWhenReady(recOut, 3000).catch(() => '')).toMatch(/^controller\|/);
+  });
+
+  it('treats the running binary as inside the AppImage mount when the mount path reaches it through a symlink', () => {
+    const appImage = join(work, 'apps', 'agent-terminal.AppImage');
+    const binary = join(work, 'realtmp', '.mount_agentX', 'usr', 'bin', 'agent-terminal');
+    standIn(appImage, 'appimage');
+    standIn(binary, 'mount');
+    symlinkSync(join(work, 'realtmp'), join(work, 'linktmp'));
+    const invocation = resolveLaunchInvocation(realpathSync(binary), false, undefined, work, {
+      appImage,
+      mountDir: join(work, 'linktmp', '.mount_agentX'),
+    });
+    expect(invocation).toEqual({ appImage });
   });
 });
