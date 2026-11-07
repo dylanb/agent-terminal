@@ -123,17 +123,18 @@ function appImageFolderRefusal(appImage: string): string | undefined {
   const writable = (what: string): string =>
     `Not installing the command: ${what} can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
   try {
-    fs.realpathSync(folder);
+    const ownFolder = fs.realpathSync(folder);
     const realFile = fs.realpathSync(appImage);
-    if ((fs.statSync(realFile).mode & 0o022) !== 0) return writable(appImage);
-    const walk = walkOwnerOnly(path.dirname(realFile));
-    if (walk.ok) return undefined;
-    if (walk.error === undefined) {
-      return writable(
-        path.dirname(realFile) === folder ? `${folder} (or a folder above it)` : `${appImage}, or a folder above ${realFile},`,
-      );
+    const targetFolder = path.dirname(realFile);
+    const walks: [string, string][] = [[ownFolder, `${folder} (or a folder above it)`]];
+    if (targetFolder !== ownFolder) walks.push([targetFolder, `${appImage}, or a folder above ${realFile},`]);
+    for (const [start, what] of walks) {
+      const walk = walkOwnerOnly(start);
+      if (walk.ok) continue;
+      if (walk.error !== undefined) throw walk.error;
+      return writable(what);
     }
-    throw walk.error;
+    return undefined;
   } catch (e) {
     return `Not installing the command: could not check who can write ${folder}: ${errMsg(e)}`;
   }
