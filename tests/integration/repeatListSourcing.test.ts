@@ -621,6 +621,13 @@ describe('Each repeated work turn names its entry', () => {
     expect(await playNamed(r, 'plan', { plan: always(text) })).toEqual(namedRun(['plan'], titles));
   });
 
+  it("today's count_input form sourced from a 60-slice plan names entries 1 to 50 of 50", async () => {
+    const r = rig(flowSpec(SLICES_INPUT_FORM, ['plan']), 'plan');
+    r.flow.start(r.repo);
+    const titles = Array.from({ length: 60 }, (_, i) => `Slice ${i + 1} of the feature`);
+    expect(await playNamed(r, 'plan', { plan: always(exampleSlicePlan(60)) })).toEqual(namedRun(['plan'], titles, 50));
+  });
+
   it('a title is named with each control character, line or paragraph separator, bidi override and zero-width character turned into a space, ZWJ and ZWNJ kept, and its spaces untrimmed', async () => {
     const fromJson = rig(flowSpec(STEPS_LIST, ['design']), 'steps');
     fromJson.flow.start(fromJson.repo);
