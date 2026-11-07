@@ -2743,10 +2743,10 @@ test('after install, the active step offers its bundled todo template as the pic
   await expect(toggle).toBeVisible({ timeout: 10_000 });
   await toggle.click();
   await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('polish'); // the step's bundled default
-  await expect(page.locator('.todo')).toHaveCount(0);
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0);
   await page.locator('#todo-list .tmpl-add').click();
   // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
-  await expect(page.locator('.todo')).not.toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('#todo-list .todo')).not.toHaveCount(0, { timeout: 10_000 });
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
