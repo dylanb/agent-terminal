@@ -142,6 +142,38 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
     });
   });
 
+  test.describe('a count_from repeat whose artifact no step\'s loop outputs', () => {
+    const REPEAT_STEP = 'repeat-here';
+    /** A repository catalog flow whose `design` loop outputs `steps`, and whose repeat counts from `artifact`. */
+    const repeatFlow = (repo: string, artifact: string): { folder: string; flowFile: string } => {
+      writeLoopDef(operatorLoops(), 'design-loop', { outputs: { steps: 'steps.json' }, artifact: 'steps' });
+      writeLoopDef(operatorLoops(), 'work-loop');
+      const folder = flowLocations.repoCatalogEntry(repo, 'f');
+      const flowFile = writeFlow(folder, {
+        name: 'f',
+        steps: [
+          { id: 'design', kind: 'loop', loop: 'design-loop' },
+          { id: 'build', kind: 'loop', loop: 'work-loop' },
+          { id: REPEAT_STEP, kind: 'loop', loop: 'work-loop', repeat: { backTo: 'build', countFrom: { artifact, format: 'json-list', list: 'steps' } } },
+        ],
+      });
+      return { folder, flowFile };
+    };
+
+    test('fails on one flow.yaml line naming the repeat step and the artifact', async () => {
+      const repo = runtime.world().dir('repo');
+      const { folder, flowFile } = repeatFlow(repo, 'nowhere');
+      const outcome = problemOutcome(await validateIn(folder, repo), realpathSync(flowFile));
+      const facts = { namesStep: outcome.problem.includes(REPEAT_STEP), namesArtifact: outcome.problem.includes('nowhere') };
+      expect({ ...outcome, problem: facts }).toEqual(problemLine({ namesStep: true, namesArtifact: true }));
+    });
+
+    test('passes once a step\'s loop outputs the artifact', async () => {
+      const repo = runtime.world().dir('repo');
+      expect(passOutcome(await validateIn(repeatFlow(repo, 'steps').folder, repo))).toEqual(PASSED);
+    });
+  });
+
   test.describe('a flow\'s loops resolve in the tier its folder sits in', () => {
     /** Runs `folder` once naming only `positive`, then again naming `positive` and `mustFail`, from each of `cwds`.
      *  The first run must pass and the second must print exactly `mustFail`'s flow.yaml line. */

@@ -280,6 +280,8 @@ function makeRig(opts: RigOpts = {}): Rig {
       return run;
     },
     start: (repoKey, o) => start(repoKey, o),
+    countSourceRefusal: () => null,
+    state: (k) => flow.state(k),
     now: opts.startClock ?? (() => T0),
     record: composeRecordFlowTransition(recorder, gate),
   });

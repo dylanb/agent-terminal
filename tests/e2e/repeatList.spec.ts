@@ -120,6 +120,15 @@ function bothKeysYaml(): string {
   return yaml.dump({ ...doc, name: 'repeat-list-both' });
 }
 
+/** The fixture flow with its repeat's `count_from.artifact` renamed to `artifact`, an id no step's loop outputs. */
+function unsourcedYaml(artifact: string): string {
+  const doc = yaml.load(repeatListFlowYaml()) as { name: string; steps: { id: string; repeat?: { count_from?: Record<string, unknown> } }[] };
+  const countFrom = doc.steps.find((s) => s.repeat?.count_from !== undefined)?.repeat?.count_from;
+  if (countFrom === undefined) throw new Error('unsourcedYaml(): the fixture flow has no count_from repeat');
+  countFrom.artifact = artifact;
+  return yaml.dump({ ...doc, name: 'repeat-list-unsourced' });
+}
+
 test('the count_from fixture flow loads, and runs its group once when its design writes no list', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 3 * UI_MS + 4 * LOOP_TURN_MS);
   const prefix = 'agent-term-e2e-278-once-';
@@ -193,4 +202,18 @@ test("a work turn retried after a relaunch names the iteration's entry it was on
     .toContain('work-build');
   const retried = workTurnEntries(injectedLog(repo, beforeQuit)).find((t) => t.turn === 'work-build');
   expect(retried?.entry).toBe(`entry 2 of 3: ${repeatListTitles()[1]}`);
+});
+
+test("pressing Start on a flow whose count_from artifact no step's loop outputs leaves it not started, with a notice naming the repeat step and the artifact", { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 5 * UI_MS);
+  const prefix = 'agent-term-e2e-278-unsourced-';
+  const { home, repo } = seedRun(prefix, 'repeat-list-unsourced', unsourcedYaml('nowhere'));
+  await launchInto(prefix, home, repo, null);
+
+  await startControl().click();
+  const notice = page.locator('#flow-strip .flow-notice');
+  await expect.soft(notice).toContainText('check', { timeout: UI_MS });
+  await expect.soft(notice).toContainText('nowhere');
+  await expect.soft(startControl()).toHaveCount(1);
+  expect.soft(flowState(repo)).not.toMatch(/^status: in_progress$/m);
 });

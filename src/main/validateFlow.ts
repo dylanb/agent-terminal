@@ -13,6 +13,7 @@ import { loadTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isReadableRegularFile } from './regularFile';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { stripDisplayControlChars } from '../shared/controlChars';
+import { countSourceRefusal } from './repeatSourceCheck';
 import { DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine } from '../shared/loopNamespace';
 
 export interface ValidateFlowDeps {
@@ -70,6 +71,7 @@ function validate(folder: string, deps: ValidateFlowDeps): Problem | null {
 
 function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Lookup): Problem | null {
   const templatesDir = todoTemplatesDir(flowDir);
+  const outputIds = new Map<string, readonly string[]>();
   for (const step of definition.steps) {
     if (step.loop !== undefined && bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) {
       return { file: flowFile, text: `step ${step.id}: ${MARKED_BINDING_REASON}` };
@@ -83,8 +85,10 @@ function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: stri
     if (!resolved.ok) return { file: resolved.defFile ?? flowFile, text: resolved.reason };
     const missing = unreadableReference(resolved.def, path.dirname(resolved.defFile));
     if (missing !== null) return { file: resolved.defFile, text: missing };
+    outputIds.set(step.id, resolved.def.outputs.map((o) => o.id));
   }
-  return null;
+  const refusal = countSourceRefusal(definition, (step) => outputIds.get(step.id) ?? null);
+  return refusal === null ? null : { file: flowFile, text: refusal };
 }
 
 /** The first file reference of `def` that names no readable regular file. */

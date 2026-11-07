@@ -104,6 +104,8 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
         return { definition: load.definition };
       },
       start: (repoKey, opts) => mgr.start(repoKey, opts),
+      countSourceRefusal: () => null,
+      state: (repoKey) => mgr.state(repoKey),
       now: () => startedAt,
       record: composeRecordFlowTransition(audit, gate),
     });

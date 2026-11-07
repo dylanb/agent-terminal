@@ -273,3 +273,40 @@ describe('a count_from repeat declaration the flow loader refuses', () => {
     expect.soft(passOutcome(validateIn(fixed.folder, repo))).toEqual(PASSED);
   });
 });
+
+// #278 — a list-form repeat whose `count_from.artifact` no step's loop outputs loads, but fails `--validate-flow`
+// with one flow.yaml line naming the repeat step and the artifact; once a loop outputs it, the flow passes.
+describe('a count_from artifact that no step\'s loop outputs', () => {
+  const REPEAT_STEP = 'repeat-here';
+
+  const repeatFlow = (repo: string, artifact: string, sourceAfterGroup = false): { folder: string; flowFile: string } => {
+    writeLoopDef(operatorLoops(), 'design-loop', { outputs: { steps: 'steps.json' }, artifact: 'steps' });
+    writeLoopDef(operatorLoops(), 'work-loop');
+    const folder = flowLocations.repoCatalogEntry(repo, 'f');
+    const design = { id: 'design', kind: 'loop' as const, loop: 'design-loop' };
+    const flowFile = writeFlow(folder, {
+      name: 'f',
+      steps: [
+        ...(sourceAfterGroup ? [] : [design]),
+        { id: 'build', kind: 'loop', loop: 'work-loop' },
+        { id: REPEAT_STEP, kind: 'loop', loop: 'work-loop', repeat: { backTo: 'build', countFrom: { artifact, format: 'json-list', list: 'steps' } } },
+        ...(sourceAfterGroup ? [design] : []),
+      ],
+    });
+    return { folder, flowFile };
+  };
+
+  it('exits 1 with one flow.yaml line naming the repeat step and the artifact', () => {
+    const repo = dir('repo');
+    const { folder, flowFile } = repeatFlow(repo, 'nowhere');
+    const outcome = problemOutcome(validateIn(folder, repo), realpathSync(flowFile));
+    const facts = { namesStep: outcome.problem.includes(REPEAT_STEP), namesArtifact: outcome.problem.includes('nowhere') };
+    expect({ ...outcome, problem: facts }).toEqual({ status: 1, oneLine: true, prefixed: true, problem: { namesStep: true, namesArtifact: true }, output: expect.any(String) });
+  });
+
+  it('exits 0 once a step before or after the group outputs the artifact (R10)', () => {
+    const repo = dir('repo');
+    expect.soft(passOutcome(validateIn(repeatFlow(repo, 'steps').folder, repo))).toEqual(PASSED);
+    expect.soft(passOutcome(validateIn(repeatFlow(repo, 'steps', true).folder, repo))).toEqual(PASSED);
+  });
+});

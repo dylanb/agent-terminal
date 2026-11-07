@@ -162,6 +162,8 @@ import {
   composeRecordFlowTransition,
   composeRunInProgressAt,
   composeStartTransition,
+  composeCountSourceRefusal,
+  loopLookupContext,
 } from './autoGateComposition';
 import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
 import {
@@ -433,11 +435,7 @@ async function createWindow(): Promise<void> {
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => {
     const load = resolveActiveDefinition(repoDir);
-    return {
-      tiers: resolveAppLoopDefTiers(iconLoc),
-      repoDir,
-      ...(load.ok ? { flow: load.definition.name } : {}),
-    };
+    return loopLookupContext(resolveAppLoopDefTiers(iconLoc), repoDir, load.ok ? load.definition.name : undefined);
   };
   // Report reconstruction can run while the loop view is being restored; resolve only its definition.
   const assembleFlowReport = (repoDir: string, report: SectionedReport): void => {
@@ -1231,6 +1229,8 @@ async function createWindow(): Promise<void> {
       return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
     start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
+    countSourceRefusal: composeCountSourceRefusal(resolveAppLoopDefTiers(iconLoc)),
+    state: (repoKey) => flow.state(repoKey),
     now: () => Date.now(),
     record: recordFlowTransition,
   });
