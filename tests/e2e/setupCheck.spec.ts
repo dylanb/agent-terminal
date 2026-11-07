@@ -700,8 +700,13 @@ const loopTone = (page: Page): Locator => page.locator('#flow-strip .loopstat .s
  *  settled (its turn done, the step held at its human gate), and how many dialogs are open. */
 async function setupRunSeen(page: Page, repo: string, injectedLog: () => string) {
   const tone = loopTone(page);
+  const popup = popupFor(page, repo);
+  const open = (await popup.count()) === 1;
   return {
-    popupOpen: await popupFor(page, repo).count(),
+    popupOpen: await popup.count(),
+    popupEntries: open ? await entriesOf(popup).count() : 0,
+    popupOffersInstall: open ? await popup.getByRole('button', { name: INSTALL }).count() : 0,
+    focusInPopup: open ? await focusIsInside(popup) : false,
     firstTurnRan: injectedLog().includes(`turn-done:work-${FX_SETUP}`),
     activeStation: await activeStation(page).allTextContents(),
     settledAtGate: (await tone.count()) === 1 && /\bsettle\b/.test((await tone.getAttribute('class')) ?? ''),
@@ -709,7 +714,16 @@ async function setupRunSeen(page: Page, repo: string, injectedLog: () => string)
   };
 }
 
-const AT_FIRST_GATE = { popupOpen: 0, firstTurnRan: true, activeStation: [FX_SETUP], settledAtGate: true, dialogsOpen: 0 };
+const AT_FIRST_GATE = {
+  popupOpen: 1,
+  popupEntries: 1,
+  popupOffersInstall: 1,
+  focusInPopup: true,
+  firstTurnRan: true,
+  activeStation: [FX_SETUP],
+  settledAtGate: true,
+  dialogsOpen: 1,
+};
 
 test("Run setup loop starts the installed repo-setup flow in the popup's repository with no ticket prompt, and its first step reaches its gate (AC18)", { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(2));
@@ -720,10 +734,12 @@ test("Run setup loop starts the installed repo-setup flow in the popup's reposit
   const popup = popupFor(page, repo);
   await expect(popup).toBeVisible();
   await hostFakeAgent(page);
+  const maxModals = await recordMaxModals(page);
 
   await popup.getByRole('button', { name: RUN_SETUP }).click();
 
   await expect.poll(() => setupRunSeen(page, repo, agent.injectedLog), { timeout: 40_000 }).toEqual(AT_FIRST_GATE);
+  expect.soft(await maxModals()).toBeLessThanOrEqual(1);
 });
 
 test("at the setup flow's first gate nothing is committed, pushed or filed, and the next step's turn has not run (AC20)", { tag: '@ownapp' }, async () => {
@@ -735,11 +751,13 @@ test("at the setup flow's first gate nothing is committed, pushed or filed, and 
   const popup = popupFor(page, repo);
   await expect(popup).toBeVisible();
   await hostFakeAgent(page);
+  const maxModals = await recordMaxModals(page);
   const soft = expect.configure({ soft: true });
 
   await popup.getByRole('button', { name: RUN_SETUP }).click();
 
   await soft.poll(() => setupRunSeen(page, repo, agent.injectedLog), { timeout: 40_000 }).toEqual(AT_FIRST_GATE);
+  soft(await maxModals()).toBeLessThanOrEqual(1);
   soft(agent.injectedLog()).not.toContain(`turn-done:work-${FX_PUBLISH}`);
   soft(agent.toolLog().split('\n').filter((line) => /^(git (commit|push)|gh (pr|issue) create)\b/.test(line))).toEqual([]);
 });
@@ -747,7 +765,7 @@ test("at the setup flow's first gate nothing is committed, pushed or filed, and 
 const BEGUN_STATES = ['in_progress', 'done'] as const;
 
 for (const status of BEGUN_STATES) {
-  test(`with the repository's run ${status === 'done' ? 'done and not reset' : 'in progress'}, Run setup loop is refused with a visible alert and changes nothing about the run (AC19)`, { tag: '@ownapp' }, async () => {
+  test(`with the repository's run ${status === 'done' ? 'done and not reset' : 'in progress'}, Run setup loop is refused with the reason inside the still-open popup and changes nothing about the run (AC19)`, { tag: '@ownapp' }, async () => {
     const repo = repoIn({ ignored: false, capabilities: 'absent' });
     installFixtureSetupFlow();
     writeCatalogEntry(machine.appHome, 'operator-flow', 'name: operator-flow\nsteps:\n  - id: operator-step\n    kind: manual\n');
@@ -757,19 +775,25 @@ for (const status of BEGUN_STATES) {
     const popup = popupFor(page, repo);
     await expect(popup).toBeVisible();
     const before = snapshotTree(repo);
+    const entriesBefore = await entriesOf(popup).count();
+    const maxModals = await recordMaxModals(page);
     const soft = expect.configure({ soft: true });
 
     await popup.getByRole('button', { name: RUN_SETUP }).click();
 
-    await soft(popup).toHaveCount(0);
+    await soft(popup).toHaveCount(1);
+    await soft(page.getByRole('dialog')).toHaveCount(1);
+    await soft(page.getByRole('alertdialog')).toHaveCount(0);
+    await soft(entriesOf(popup)).toHaveCount(entriesBefore);
     const gate = await page.evaluate(({ repoKey, id }) => window.flow.setActiveFlow(repoKey, id), { repoKey: repo, id: REPO_SETUP_FLOW_ID });
     soft(gate, "the selection gate still refuses the repository's begun run").toMatchObject({ ok: false });
-    await soft(page.getByRole('alertdialog').filter({ hasText: gate.ok ? '' : gate.reason })).toBeVisible();
+    await soft(popup.getByRole('alert').filter({ hasText: gate.ok ? '' : gate.reason })).toBeVisible();
+    soft(await maxModals()).toBeLessThanOrEqual(1);
     expect(snapshotTree(repo)).toEqual(before);
   });
 }
 
-test('a repo-setup flow that fails to load is selected, the popup closes, and the flow strip shows its load error', { tag: '@ownapp' }, async () => {
+test('a repo-setup flow that fails to load is selected, the popup stays open listing only the examples entry, and the flow strip shows its load error', { tag: '@ownapp' }, async () => {
   const repo = repoIn({ ignored: false, capabilities: 'absent' });
   installFixtureSetupFlow(`name: ${REPO_SETUP_FLOW_ID}\nsteps: not-a-list\n`);
   const page = await launchIn(repo);
@@ -782,8 +806,9 @@ test('a repo-setup flow that fails to load is selected, the popup closes, and th
 
   await soft.poll(async () => ({
     popupOpen: await popupFor(page, repo).count(),
+    popupEntries: await entriesOf(popupFor(page, repo)).count(),
     newLoadError: await flowError(page).allTextContents().then((now) => now.length === 1 && now[0] !== errorBefore[0]),
-  })).toEqual({ popupOpen: 0, newLoadError: true });
+  })).toEqual({ popupOpen: 1, popupEntries: 1, newLoadError: true });
   soft(readActiveFlow(repo)).toEqual({ kind: 'value', id: REPO_SETUP_FLOW_ID });
 });
 
@@ -826,10 +851,12 @@ test('on a fresh machine, Install/update examples then a relaunch offers Run set
   expect.soft(reply).toMatchObject({ ok: true, setupFlowInstalled: true });
   expect.soft(reply.ok && reply.entries.some((entry) => entry.condition === 'examples')).toBe(false);
   await hostFakeAgent(page);
+  const maxModals = await recordMaxModals(page);
 
   await popup.getByRole('button', { name: RUN_SETUP }).click();
 
   await expect.poll(agent.injectedLog, { timeout: 40_000 }).toContain('turn-done:work-');
+  expect.soft(await maxModals()).toBeLessThanOrEqual(1);
   await expect.soft(page.getByRole('dialog')).toHaveCount(0);
   await expect.soft(flowError(page)).toHaveCount(0);
   expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: REPO_SETUP_FLOW_ID });

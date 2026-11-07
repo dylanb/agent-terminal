@@ -15,6 +15,7 @@ import {
   retiredPreview,
 } from '../helpers/setupCheckFixtures';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
+import { accessibleName, everyByRole } from '../helpers/byRole';
 import { openModalDialogs, recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
 import { createSetupFlowRun, type SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
@@ -1241,10 +1242,32 @@ describe('Run setup loop is offered only for the entries the setup flow fixes, w
   }
 });
 
-describe('pressing Run setup loop (AC18, AC19)', () => {
+/** The text each `role="alert"` element inside `host` is given after the host already holds it, read from the
+ *  mutation records so a line written before its card entered the page is not counted. Call the returned function
+ *  to read it. */
+function alertTextsWrittenIn(host: HTMLElement): () => string[] {
+  const written: string[] = [];
+  const isAlert = (node: Node | null): boolean => node instanceof Element && node.getAttribute('role') === 'alert';
+  const take = (records: MutationRecord[]): void => {
+    for (const record of records) {
+      if (record.type === 'characterData' && isAlert(record.target.parentNode)) written.push(record.target.textContent ?? '');
+      if (record.type === 'childList' && isAlert(record.target)) written.push(record.target.textContent ?? '');
+    }
+  };
+  const observer = new MutationObserver(take);
+  observer.observe(host, { childList: true, subtree: true, characterData: true });
+  return () => {
+    take(observer.takeRecords());
+    return [...written];
+  };
+}
+
+describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
+  const FIXED_AND_EXAMPLES = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+
   /** A popup for alpha offering Run setup loop, with the terminal already moved on to bravo, whose check waits. */
-  async function runSetupOffered(fake: ReturnType<typeof fakeSetupDeps>) {
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true));
+  async function runSetupOffered(fake: ReturnType<typeof fakeSetupDeps>, entries: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent]) {
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, entries, true));
     fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
     const mountedDialog = mountDialog(fake);
     void mountedDialog.dialog.check(REPO.alpha);
@@ -1262,44 +1285,71 @@ describe('pressing Run setup loop (AC18, AC19)', () => {
     await vi.waitFor(() => expect(fake.setupFlow.runs()).toEqual([REPO.alpha]));
   });
 
-  it('closes the popup once the start has run, and announces nothing itself', async () => {
+  it('steps aside while the start runs, then comes back listing only the examples entry, with focus on one of its controls (AC6)', async () => {
+    const expected = await messagesOf([ENTRY.examplesStale]);
     const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const release = fake.setupFlow.hold();
     const { dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
     await shownFor(screen, REPO.alpha);
 
     screen.control(RUN_SETUP).click();
+    await settle();
+    expect.soft(fake.setupFlow.runs(), 'the start asked for the popup repository').toEqual([REPO.alpha]);
+    expect.soft(screen.isOpen(), 'the popup has stepped aside while the start runs').toBe(false);
+    release();
+    await settle();
 
-    await vi.waitFor(() =>
-      expect({ open: screen.isOpen(), runs: fake.setupFlow.runs(), announced: fake.announcements() }).toEqual({
-        open: false,
-        runs: [REPO.alpha],
-        announced: [],
-      }),
-    );
+    const read = reading(screen);
+    expect.soft(read?.entries, 'the popup came back listing only the examples entry').toEqual(expected);
+    expect.soft(read !== null && focusedControl(screen) !== null, 'focus is on one of its controls').toBe(true);
+    expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
   });
 
-  it('when the setup flow could not run, closes the popup and announces why', async () => {
+  it('ends once the start has run when only entries the setup flow fixes were listed, and does not come back (AC7)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
+    const { host, dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+    const seen = recordSetupDialogs(host);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+
+    expect({ open: screen.isOpen(), runs: fake.setupFlow.runs(), returned: seen() }).toEqual({
+      open: false,
+      runs: [REPO.alpha],
+      returned: [],
+    });
+  });
+
+  it('when the setup flow could not run, the popup comes back with every entry and the reason in its error line (AC8)', async () => {
     const reason = 'scripted begun-run refusal';
     const fake = fakeSetupDeps();
     fake.setupFlow.answer({ ok: false, reason });
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
-    const { dialog, screen } = mountDialog(fake);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const { host, dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
     await shownFor(screen, REPO.alpha);
+    const before = reading(screen);
+    const writtenToAlerts = alertTextsWrittenIn(host);
 
     screen.control(RUN_SETUP).click();
+    await settle();
 
-    await vi.waitFor(() =>
-      expect({
-        open: screen.isOpen(),
-        announcedReason: fake.announcements().some(({ message }) => message.includes(reason)),
-      }).toEqual({ open: false, announcedReason: true }),
-    );
+    const read = reading(screen);
+    expect.soft(read?.entries, 'every entry it listed before is listed').toEqual(before?.entries);
+    expect.soft(read?.controls, 'every control it offered before is offered, so the operator can retry').toEqual(before?.controls);
+    expect.soft(read?.alert?.includes(reason), 'the reason is in its error line').toBe(true);
+    expect.soft(writtenToAlerts().some((text) => text.includes(reason)), 'the reason was written to the alert after the card was in the page').toBe(true);
+    expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+    expect.soft(openModalDialogs(document.body), 'no other dialog is open').toBe(1);
   });
 
-  it("announces nothing when the setup flow's refusal lands after the dialog was disposed", async () => {
+  it("draws nothing in the host when the setup flow's refusal lands after the dialog was disposed", async () => {
+    const reason = 'scripted begun-run refusal';
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
     let refuse: (run: SetupFlowRun) => void = () => {};
@@ -1309,21 +1359,25 @@ describe('pressing Run setup loop (AC18, AC19)', () => {
       asked = true;
       return started;
     };
-    const { dialog, screen } = mountDialog(fake);
+    const { host, dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
     await shownFor(screen, REPO.alpha);
     screen.control(RUN_SETUP).click();
     await vi.waitFor(() => expect(asked).toBe(true));
 
     dialog.dispose();
-    refuse({ ok: false, reason: 'scripted begun-run refusal' });
+    refuse({ ok: false, reason });
     await started;
     await nextTask();
 
-    expect(fake.announcements()).toEqual([]);
+    expect({
+      open: screen.isOpen(),
+      focusInHost: host.contains(document.activeElement),
+      drewReason: (host.textContent ?? '').includes(reason),
+    }).toEqual({ open: false, focusInHost: false, drewReason: false });
   });
 
-  it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
+  it('with only entries the setup flow fixes listed, the queued check raises its popup once the start has run (AC7, AC11)', async () => {
     const fake = fakeSetupDeps();
     const { screen } = await runSetupOffered(fake);
 
@@ -1331,10 +1385,76 @@ describe('pressing Run setup loop (AC18, AC19)', () => {
 
     await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
   });
+
+  it('with the examples entry listed, the queued check raises its popup only once the operator closes this one (AC6, AC11)', async () => {
+    const fake = fakeSetupDeps();
+    const { screen } = await runSetupOffered(fake, FIXED_AND_EXAMPLES);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+
+    expect.soft(openFor(screen), 'the popup that is still open names its own repository').toBe(REPO.alpha);
+    if (openFor(screen) === REPO.alpha) screen.control('Close').click();
+    await settle();
+    expect.soft(openFor(screen), 'the queued check raised its popup after this one was closed').toBe(REPO.bravo);
+  });
+
+  it('keeps the entries the setup flow fixed off the list after a later Install/update examples re-read, and does not offer Run setup loop again (AC6)', async () => {
+    const expectedAfterStart = await messagesOf([ENTRY.examplesStale, ENTRY.malformed]);
+    const expectedAfterInstall = await messagesOf([ENTRY.malformed]);
+    const fake = fakeSetupDeps();
+    fake.answer(
+      REPO.alpha,
+      repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale, ENTRY.malformed], true),
+      repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent, ENTRY.malformed], true),
+    );
+    fake.examples.preview(cleanPreview('pv-after-start'));
+    fake.examples.install(installSucceeded());
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+    expect.soft(reading(screen)?.entries, 'the start left the examples entry and the entry it does not fix').toEqual(expectedAfterStart);
+    expect.soft(pressIfShown(screen, INSTALL), 'the popup offers Install/update examples after the start').toBe(true);
+    await settle();
+
+    const read = reading(screen);
+    expect.soft(read?.entries, 'the re-read entries the setup flow fixes stay off the list').toEqual(expectedAfterInstall);
+    expect.soft(read?.controls.includes(RUN_SETUP), 'Run setup loop is not offered again').toBe(false);
+  });
+
+  it('keeps naming and acting on its own repository when the terminal checks another one while the start is pending (AC11)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale], true));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    const release = fake.setupFlow.hold();
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+    void dialog.check(REPO.bravo);
+    await settle();
+    release();
+    await settle();
+
+    const namedWhenBack = openFor(screen);
+    expect.soft(namedWhenBack, 'the popup that came back names its original repository').toBe(REPO.alpha);
+    if (namedWhenBack === REPO.alpha) pressIfShown(screen, UNTIL_UPDATE);
+    await settle();
+    expect.soft(fake.dismissals(), "its Don't show again until the app updates sends its dismissal").toEqual([
+      { kind: 'examples', appVersion: APP_VERSION },
+    ]);
+    expect.soft(openFor(screen), 'the other repository opened once this one ended').toBe(REPO.bravo);
+  });
 });
 
-describe('Run setup loop over the real flow strip (AC18)', () => {
-  it('opens the step-entry input modal only once the popup has gone, so two modal dialogs are never open, and focus ends in it', async () => {
+describe('Run setup loop over the real flow strip (AC6, AC10, AC18)', () => {
+  it('opens the step-entry input modal with no other modal open, and the popup comes back listing only the examples entry once it has gone', async () => {
+    const expected = await messagesOf([ENTRY.examplesStale]);
     const promptView: FlowStateView = {
       stepName: 'setup-entry',
       runStarted: 'started',
@@ -1348,7 +1468,11 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
     const stripHost = document.body.appendChild(document.createElement('div'));
     const inputHost = document.body.appendChild(document.createElement('div'));
     const inputModal = createFlowInputModal(inputHost);
+    const fake = fakeSetupDeps();
+    const popupHost = document.body.appendChild(document.createElement('div'));
+    const popupScreen = setupCheckScreen(popupHost);
     const modalsOpenWhenInputOpened: number[] = [];
+    const popupOpenWhenInputOpened: boolean[] = [];
     const strip = createFlowStrip(stripHost, {
       state: async () => idle,
       start: async () => promptView,
@@ -1360,28 +1484,45 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
       onStateChanged: () => () => {},
       onStatusBar: () => {},
       onPrompt: (prompt, stepName, submit) => {
-        if (prompt) modalsOpenWhenInputOpened.push(openModalDialogs(document.body));
+        if (prompt) {
+          modalsOpenWhenInputOpened.push(openModalDialogs(document.body));
+          popupOpenWhenInputOpened.push(popupScreen.isOpen());
+        }
         inputModal.render(prompt, stepName, submit);
       },
     });
     strip.onRepoChanged(REPO.alpha);
-    const fake = fakeSetupDeps();
     fake.deps.runSetupFlow = createSetupFlowRun({ setActiveFlow: async () => ({ ok: true }), start: (repoKey) => strip.start(repoKey) });
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
-    const { dialog, screen } = mountDialog(fake);
+    fake.deps.blockingDialogOpen = () => openModalDialogs(inputHost) > 0;
+    const inputModalWatcher = new MutationObserver(() => {
+      if (openModalDialogs(inputHost) === 0) fake.otherDialog.replace();
+    });
+    inputModalWatcher.observe(inputHost, { childList: true, subtree: true });
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale], true));
+    const dialog = createSetupCheckDialog(popupHost, fake.deps);
+    mounted.push(dialog);
     void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(RUN_SETUP).click();
+    await shownFor(popupScreen, REPO.alpha);
 
     try {
-      await vi.waitFor(() =>
-        expect({ modalsOpenWhenInputOpened, focusInInputModal: inputHost.contains(document.activeElement) }).toEqual({
-          modalsOpenWhenInputOpened: [0],
-          focusInInputModal: true,
-        }),
-      );
+      popupScreen.control(RUN_SETUP).click();
+      await settle();
+      expect.soft(modalsOpenWhenInputOpened, 'no other modal was open when the input modal opened').toEqual([0]);
+      expect.soft(popupOpenWhenInputOpened, 'the popup was not open when the input modal opened').toEqual([false]);
+      expect.soft(popupScreen.isOpen(), 'the popup stays away while the input modal is open').toBe(false);
+      expect.soft(inputHost.contains(document.activeElement), 'focus is in the input modal').toBe(true);
+
+      const cancel = everyByRole(inputHost, 'button').find((button) => accessibleName(button) === 'Cancel');
+      expect.soft(cancel, 'the input modal offers Cancel').toBeDefined();
+      cancel?.click();
+      await settle();
+
+      const read = reading(popupScreen);
+      expect.soft(read?.entries, 'the popup came back listing only the examples entry').toEqual(expected);
+      expect.soft(read !== null && focusedControl(popupScreen) !== null, 'focus is on one of its controls').toBe(true);
+      expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
     } finally {
+      inputModalWatcher.disconnect();
       strip.dispose();
       inputModal.dispose();
     }

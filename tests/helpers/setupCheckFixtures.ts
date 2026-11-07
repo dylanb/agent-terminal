@@ -126,6 +126,7 @@ export function fakeSetupDeps() {
   const dismissReplies: ScriptedDismiss[] = [];
   const setupRuns: string[] = [];
   const setupRunReplies: SetupFlowRun[] = [];
+  let setupRunHold: Promise<void> | null = null;
   const announcements: Array<{ title: string; message: string }> = [];
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
@@ -164,6 +165,9 @@ export function fakeSetupDeps() {
     },
     runSetupFlow: async (repoKey) => {
       setupRuns.push(repoKey);
+      const held = setupRunHold;
+      setupRunHold = null;
+      if (held !== null) await held;
       return setupRunReplies.shift() ?? { ok: true };
     },
     announce: (title, message) => {
@@ -226,6 +230,12 @@ export function fakeSetupDeps() {
       /** Queue the results the next `runSetupFlow` calls get, in order. */
       answer(...results: SetupFlowRun[]): void {
         setupRunReplies.push(...results);
+      },
+      /** Keeps the next `runSetupFlow` pending until the returned release runs. */
+      hold(): () => void {
+        let release!: () => void;
+        setupRunHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
       },
       /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
       runs: (): string[] => [...setupRuns],
