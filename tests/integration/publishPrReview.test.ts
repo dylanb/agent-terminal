@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { appendFileSync, mkdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -16,6 +16,9 @@ import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { AdoptionGhState, StandInComment, StandInPull } from '../helpers/adoptionGh';
 import { createAdoptionWorld, type AdoptionWorld, type AdoptionWorldOptions } from '../helpers/adoptionWorld';
 import { forcePushes, gitSubcommand, outwardWrites } from '../helpers/outwardWrites';
+
+// Each row drives real git against a bare remote, which a loaded parallel run slows well past vitest's default.
+vi.setConfig({ testTimeout: 30_000 });
 
 // #304 slice 4 — approving an adopting run's gate with `publish-pr-review` publishes exactly one outcome (a draft fix
 // PR into the reviewed PR's head branch plus a linking run comment, a report comment, or a report-and-patch comment),
