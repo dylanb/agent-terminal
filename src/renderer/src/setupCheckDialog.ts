@@ -19,8 +19,6 @@ export interface SetupCheckDialogDeps {
   installExamples(previewId: InstallPreviewId, replace: InstallDestinationId[], removeRetired: boolean): Promise<InstallExamplesResult>;
   /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
   runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
-  /** Shows a message that must outlive the closed dialog. */
-  announce(title: string, message: string): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
   onFocusLost(): void;
   /** Whether another app dialog is open, so this one waits instead of opening over it. */
@@ -57,7 +55,6 @@ const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
 const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
   (entry.condition === 'ignore' && entry.failure === 'not-ignored') || (entry.condition === 'capabilities' && entry.failure === 'absent');
 
-const SETUP_REFUSED_TITLE = 'The setup loop could not run';
 const DISMISSAL_NOT_SAVED = 'The dismissal could not be saved:';
 
 type StatusOk = Extract<SetupStatusReply, { ok: true }>;
@@ -117,6 +114,9 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     const { repoKey, isRepository, appVersion } = first;
     const shown = new Promise<void>((resolve) => (closed = resolve));
     let alertLine: HTMLElement;
+    let setupStarted = false;
+    const unfixed = (entries: SetupConditionEntry[]): SetupConditionEntry[] =>
+      setupStarted ? entries.filter((entry) => !fixedBySetupFlow(entry)) : entries;
 
     async function installAndReread(reply: StatusOk, confirm: () => void, previewId: InstallPreviewId, choice: InstallChoice): Promise<void> {
       const installFailure = await deps
@@ -129,7 +129,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         alertLine.textContent = installFailure ?? reread.reason;
         return;
       }
-      if (reread.entries.length === 0) {
+      if (unfixed(reread.entries).length === 0) {
         confirm();
         settle();
         return;
@@ -171,7 +171,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
 
     const renderList = (reply: StatusOk, focusFirstAction: boolean): void => {
-      const entries = reply.entries;
+      const entries = unfixed(reply.entries);
       shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
         const card = doc.createElement('div');
         card.className = 'card';
@@ -227,15 +227,15 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
         const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
         if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
-        const runSetupLoop = (): Promise<void> => {
+        const runSetupLoop = async (): Promise<void> => {
           confirm();
-          // The queue waits for the start, so a queued popup never opens over the step-entry input modal it raises.
-          return deps
-            .runSetupFlow(repoKey)
-            .then((run) => {
-              if (!disposed && !run.ok) deps.announce(SETUP_REFUSED_TITLE, run.reason);
-            })
-            .finally(settle);
+          const run = await deps.runSetupFlow(repoKey).catch((e: unknown): SetupFlowRun => ({ ok: false, reason: reasonOf(e) }));
+          await otherDialogsClosed();
+          if (disposed) return;
+          setupStarted ||= run.ok;
+          if (unfixed(reply.entries).length === 0) return settle();
+          renderList(reply, true);
+          if (!run.ok) alertLine.textContent = run.reason;
         };
         if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);

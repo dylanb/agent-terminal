@@ -1348,6 +1348,23 @@ describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
     expect.soft(openModalDialogs(document.body), 'no other dialog is open').toBe(1);
   });
 
+  it('when the start call rejects, the popup comes back with its entries and the reason in its error line', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    fake.deps.runSetupFlow = () => Promise.reject(new Error('scripted start rejection'));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+    const before = reading(screen);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+
+    const read = reading(screen);
+    expect.soft(read?.entries).toEqual(before?.entries);
+    expect.soft(read?.alert?.includes('scripted start rejection')).toBe(true);
+  });
+
   it("draws nothing in the host when the setup flow's refusal lands after the dialog was disposed", async () => {
     const reason = 'scripted begun-run refusal';
     const fake = fakeSetupDeps();

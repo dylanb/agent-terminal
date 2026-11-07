@@ -363,7 +363,6 @@ if (setupCheckHost) {
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
     }),
-    announce: (title, message) => showError({ title, message }),
     onFocusLost: landFocus,
     blockingDialogOpen: () => shell.modalIsOpen(),
     onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),

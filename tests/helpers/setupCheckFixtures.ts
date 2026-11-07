@@ -107,8 +107,7 @@ type ScriptedDismiss = SetupDismissReply | { reject: string };
  *  whatever `landFocusOn` names, as the composition root's fallback does. Every status request is
  *  recorded by repository; `examples` scripts the preview and install replies and records each install request. Each `dismiss` call is recorded, and answers the
  *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
- *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued;
- *  each `announce` is recorded. */
+ *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -127,7 +126,6 @@ export function fakeSetupDeps() {
   const setupRuns: string[] = [];
   const setupRunReplies: SetupFlowRun[] = [];
   let setupRunHold: Promise<void> | null = null;
-  const announcements: Array<{ title: string; message: string }> = [];
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       statusRequests.push(repoKey);
@@ -169,9 +167,6 @@ export function fakeSetupDeps() {
       setupRunHold = null;
       if (held !== null) await held;
       return setupRunReplies.shift() ?? { ok: true };
-    },
-    announce: (title, message) => {
-      announcements.push({ title, message });
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -240,8 +235,6 @@ export function fakeSetupDeps() {
       /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
       runs: (): string[] => [...setupRuns],
     },
-    /** Every message `announce` showed, in order. */
-    announcements: (): Array<{ title: string; message: string }> => [...announcements],
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {
       landing = el;
