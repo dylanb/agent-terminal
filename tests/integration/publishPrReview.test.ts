@@ -412,6 +412,23 @@ describe('a fix branch that appeared on GitHub after the start writes nothing an
     expect.soft(await expectHeld(run)).toContain(run.pickup.fixBranch);
     expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(theirs);
   });
+
+  it('holds a run with no fix commit, posting no report comment', async () => {
+    const run = await adoptedRun();
+    const theirs = run.w.pushAs(run.pickup.fixBranch, 'other.txt', 'someone else\n', 'Someone else’s commit', run.w.startHeadOid);
+
+    expect.soft(await expectHeld(run)).toContain(run.pickup.fixBranch);
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(theirs);
+  });
+
+  it('holds a run that cannot push, posting no patch comment', async () => {
+    const run = await adoptedRun({ viewerPermission: 'READ' });
+    commitFix(run, 'change.txt', 'the fixed change\n', 'Fix the reviewed change');
+    const theirs = run.w.pushAs(run.pickup.fixBranch, 'other.txt', 'someone else\n', 'Someone else’s commit', run.w.startHeadOid);
+
+    expect.soft(await expectHeld(run)).toContain(run.pickup.fixBranch);
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBe(theirs);
+  });
 });
 
 describe('a body over the size limit writes nothing and holds, naming the body and its size (#304 AC 20)', () => {

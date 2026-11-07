@@ -51,16 +51,27 @@ export function createRealAppGatePush(repoDir: string): RunAppGatePush {
   };
 }
 
+const takenReason = (branch: string, remote: string, oid: string): string =>
+  `the branch ${branch} is already on GitHub at ${remote}, not at this run's ${oid}; nothing was pushed or overwritten. Remove that branch from GitHub if it is not this run's, then approve again, or terminate the run`;
+
+/** Why publishing `branch` to origin would overwrite a commit that is not the local head, or null when it would
+ *  not: the branch is absent there, or already at the local head. */
+export type FindAppGateBranchTaken = (branch: string) => Promise<string | null>;
+
+export function createRealAppGateBranchTaken(repoDir: string): FindAppGateBranchTaken {
+  return async (branch) => {
+    const t = await pushTarget(repoDir, branch);
+    const remote = await t.remote.readRef(t.url, t.ref);
+    return remote !== null && remote !== t.oid ? takenReason(branch, remote, t.oid) : null;
+  };
+}
+
 export function createRealAppGateBranchCreate(repoDir: string): RunAppGateBranchCreate {
   return async (branch) => {
     const t = await pushTarget(repoDir, branch);
     const remote = await t.remote.readRef(t.url, t.ref);
     if (remote === null) await t.remote.createRef(t.url, t.oid, t.ref);
-    else if (remote !== t.oid) {
-      throw new Error(
-        `the branch ${branch} is already on GitHub at ${remote}, not at this run's ${t.oid}; nothing was pushed or overwritten. Remove that branch from GitHub if it is not this run's, then approve again, or terminate the run`,
-      );
-    }
+    else if (remote !== t.oid) throw new Error(takenReason(branch, remote, t.oid));
     await trackRemote(t, branch);
   };
 }

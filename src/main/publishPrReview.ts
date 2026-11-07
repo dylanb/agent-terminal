@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CommandFailure, run } from './appBootstrapCommand';
 import { parseAppGitObjectId, runAppCommand } from './appCommand';
 import { bootstrapProtectedArgs } from './appBootstrapGit';
-import { createRealAppGateBranchCreate } from './appGatePush';
+import { createRealAppGateBranchCreate, createRealAppGateBranchTaken } from './appGatePush';
 import { createRealAdoptionGitHub } from './adoptionPorts';
 import { acceptableTickets, type AdoptionGitHub } from './adoptionStart';
 import { confinedRealPathResult } from './confinedPath';
@@ -38,6 +38,8 @@ export interface PublishPrReviewPorts {
   /** `git format-patch` output for `base..branch`, stating `base`; one combined commit titled `title` when
    *  `combine` is set. */
   patch(base: string, branch: string, combine: boolean, title: string): Promise<string>;
+  /** Why the fix branch cannot be published without overwriting another commit on GitHub, or null. */
+  fixBranchTaken(branch: string): Promise<string | null>;
   pushFixBranch(branch: string): Promise<void>;
   /** The open same-repository PR from `head` into `base`, the only one a run may take as its own. */
   fixPullRequest(head: string, base: string): Promise<FixPullRequest | null>;
@@ -130,6 +132,8 @@ export async function publishPrReview(ports: PublishPrReviewPorts, request: Publ
   const origin = await ports.github.origin();
   const mismatch = recordedPrMismatch(pickup, await ports.github.pullRequest(pickup.pr), origin);
   if (mismatch !== null) throw new Error(`${mismatch}; nothing was written`);
+  const taken = await ports.fixBranchTaken(pickup.fixBranch);
+  if (taken !== null) throw new Error(taken);
 
   const fixes = await ports.fixCommits(pickup.headOid, pickup.fixBranch);
   const pushable = fixes.count > 0 && !pickup.crossRepository && (await ports.canPush(pickup.headRepo));
@@ -246,6 +250,7 @@ export function createRealPublishPrReviewPorts(repoDir: string): PublishPrReview
         throw e;
       }
     },
+    fixBranchTaken: createRealAppGateBranchTaken(repoDir),
     pushFixBranch: createRealAppGateBranchCreate(repoDir),
     async fixPullRequest(head, base) {
       const origin = await github.origin();
