@@ -18,7 +18,7 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
+import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy, SelfCheck } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
@@ -53,6 +53,10 @@ const REVIEW_TURN_PREFIX = 'review-';
 const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
+
+const SELF_CHECK_ARTIFACT_CHECK: Record<SelfCheck, ArtifactCheck> = {
+  'loop-capabilities': { kind: 'capabilities' },
+};
 /** The route-out reason a relaunch gives a turn the persisted state left mid-flight (`working`): its PTY is
  *  gone and resume never re-drives it, so it is stopped and the human must retry/terminate it (§27.12/CWE-703). */
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
@@ -290,6 +294,8 @@ type ActiveAppTurn =
       verdictReason?: string;
       /** §27.3 — where an unresolved goal turn had reached, so a later resolvable Retry re-runs it. */
       heldGoal?: GoalPlace;
+      /** §29 */
+      selfCheck?: SelfCheck;
     }
   | {
       phase: 'review';
@@ -527,6 +533,7 @@ function activeTurnFor(
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
     ...(sectionedOf(def.outputs).length > 0 ? { reportSections: sectionedOf(def.outputs) } : {}),
+    ...(def.work.selfCheck !== undefined ? { selfCheck: def.work.selfCheck } : {}),
   };
 }
 
@@ -1241,6 +1248,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...(active.reportSections !== undefined ? { reportSections: sectionTargets(active, active.reportSections) } : {}),
+        ...(active.selfCheck !== undefined ? { selfCheck: { kind: active.selfCheck, checkCommand: deps.artifactCheckCommand(SELF_CHECK_ARTIFACT_CHECK[active.selfCheck]) } } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
         ...(active.run.kind === 'goal'

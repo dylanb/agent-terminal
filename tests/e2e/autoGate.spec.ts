@@ -22,6 +22,7 @@ import {
   b64,
   exampleConfigDir,
   goalBlockedCmd,
+  FAKE_AGENT_READY,
   goalProgressCmd,
   seedFakeAgentSteps,
   seedFakeAgentV2,
@@ -154,6 +155,7 @@ async function launchInto(
   await typeCommand(`cd ${shellQuote(repo)}`);
   if (control !== null) await expect(flowControl()).toHaveText(control, { timeout: UI_MS });
   await typeCommand('fake-agent');
+  await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY, { timeout: UI_MS });
   return { home, repo, logFile };
 }
 

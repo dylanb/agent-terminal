@@ -1612,9 +1612,13 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted — survives a renderer reload (§20.2).
+  // Persisted — survives a renderer reload (§20.2). A chord pressed before the reloaded renderer installs its
+  // key handler is dropped, so the press repeats until the view it selects is showing.
   await page.reload();
-  await page.keyboard.press('Control+2');
+  await expect(async () => {
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect.poll(() => treeW()).toBe('318px');
 
   // Reset to default so the persisted width doesn't leak into later runs.

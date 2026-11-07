@@ -453,6 +453,12 @@ interface InstallAuthorization {
   retired: RetiredExample[];
 }
 
+/** What installing would do to one planned file, the one verdict the consent preview and the setup warning share. */
+function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | 'identical' {
+  if (file.targetHash === null) return 'create';
+  return file.targetHash === file.sourceHash ? 'identical' : 'replace';
+}
+
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
   destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
 
@@ -573,12 +579,7 @@ function prepareInstallExamples(
     const conflicts = new Set<InstallDestinationId>();
     const previews = resolution.destinations.map((destination) => {
       const differing = files
-        .filter(
-          (file) =>
-            file.destination === destination.id &&
-            file.targetHash !== null &&
-            file.targetHash !== file.sourceHash,
-        )
+        .filter((file) => file.destination === destination.id && installFileVerdict(file) === 'replace')
         .map((file) => file.rel);
       if (differing.length === 0) {
         return {
@@ -631,6 +632,24 @@ export function previewInstallExamples(
     retired: preparation.prepared.retired,
     retiredFallback: preparation.prepared.retiredFallback,
   };
+}
+
+export type ExamplesCurrency = { ok: true; current: boolean } | { ok: false; error: string };
+
+/** Whether installing the bundled examples would change anything: create or replace a file, or offer to remove a
+ *  retired example. */
+export function inspectExamplesCurrency(destinations: InstallDestination[]): ExamplesCurrency {
+  const fail = (error: unknown): ExamplesCurrency => ({ ok: false, error: `Could not check the installed examples: ${errMsg(error)}` });
+  try {
+    const resolution = resolveAll(destinations);
+    if (!resolution.ok) return resolution;
+    const files = captureInstallSnapshot(resolution.destinations);
+    const current =
+      files.every((file) => installFileVerdict(file) === 'identical') && retiredOf(resolution.destinations).length === 0;
+    return { ok: true, current };
+  } catch (error) {
+    return fail(error);
+  }
 }
 
 export interface ApplyOptions {
