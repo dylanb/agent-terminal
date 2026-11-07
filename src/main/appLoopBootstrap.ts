@@ -102,12 +102,13 @@ export function resolvePickupBranch(
   trustedBootstrap: RunPickup | null,
   flowTicket: number | null,
   flowPr: number | null = null,
+  runStartedAt: number | null = null,
 ): PickupBranch {
   if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
   if (trustedBootstrap !== null) return heldTo(trustedBootstrap);
   if (record.kind !== 'complete') return { kind: 'none' };
   const recorded = record.bootstrap;
-  const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flowPr : recorded.issue === flowTicket;
+  const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flowPr && recorded.startedAt === runStartedAt : recorded.issue === flowTicket;
   return forThisFlow ? heldTo(recorded) : { kind: 'none' };
 }
 

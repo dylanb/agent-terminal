@@ -1029,8 +1029,28 @@ describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s i
     const record = { kind: 'complete', bootstrap: adopted } as const;
 
     expect.soft(resolvePickupBranch({ kind: 'none' }, adopted, null, 41)).toEqual(held);
-    expect.soft(resolvePickupBranch(record, null, null, 41)).toEqual(held);
-    expect.soft(resolvePickupBranch(record, null, null, 42)).toEqual({ kind: 'none' });
+    expect.soft(resolvePickupBranch(record, null, null, 41, adopted.startedAt)).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, null, 42, adopted.startedAt)).toEqual({ kind: 'none' });
+  });
+
+  it("after a relaunch, does not hold an adopting run to an earlier run's fix branch on the same PR (#304 AC 13)", () => {
+    const earlier: AdoptedPickup = {
+      kind: 'adopted',
+      pr: 41,
+      host: 'github.com',
+      fixBranch: 'agent-terminal/review-pr-41-1700000000000',
+      startedAt: 1_700_000_000_000,
+      headRef: 'feature/reviewed-change',
+      baseRef: 'main',
+      headRepo: 'owner/repo',
+      crossRepository: false,
+      tickets: [{ repo: 'owner/repo', number: 176 }],
+      primary: { repo: 'owner/repo', number: 176 },
+      headOid: 'a'.repeat(40),
+      baseOid: 'b'.repeat(40),
+    };
+
+    expect(resolvePickupBranch({ kind: 'complete', bootstrap: earlier }, null, null, 41, 1_700_000_099_999)).toEqual({ kind: 'none' });
   });
 });
 

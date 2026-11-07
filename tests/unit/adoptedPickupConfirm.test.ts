@@ -57,7 +57,7 @@ const evidence = (over: Partial<PickupEvidence> = {}): PickupEvidence => ({
   branch: FIX_BRANCH,
   flowTicket: null,
   bootstrapRecord: { kind: 'complete', bootstrap: ADOPTED },
-  adopting: { pr: 41 },
+  adopting: { pr: 41, startedAt: RUN.startedAt },
   ...over,
 });
 
@@ -130,6 +130,13 @@ describe("the confirm of an adopting run's pickup", () => {
       /terminat/i,
     ],
     ['a run whose start record is missing too, saying the run must be terminated and started again', [REVIEWED], evidence({ bootstrapRecord: { kind: 'none' } }), 177, /terminat/i],
+    [
+      "an earlier run's start record on the same PR, saying the run must be terminated and started again (AC 13)",
+      [REVIEWED],
+      evidence({ bootstrapRecord: { kind: 'complete', bootstrap: { ...ADOPTED, startedAt: RUN.startedAt - 1, fixBranch: adoptedFixBranch(41, RUN.startedAt - 1) } }, branch: adoptedFixBranch(41, RUN.startedAt - 1) }),
+      177,
+      /terminat/i,
+    ],
   ])('refuses %s, saying why, and saves nothing', async (_name, prs, ev, ticket, reason) => {
     const h = harness(prs, ev);
     const result = await h.confirmations.confirm('/repo', RUN, 41, ticket);

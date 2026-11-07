@@ -61,8 +61,8 @@ export interface PickupEvidence {
   branch: string | null;
   flowTicket: number | null;
   bootstrapRecord: PickupRecord;
-  /** Present when the run's pickup step adopts a PR: the flow's PR ref. */
-  adopting?: { pr: number | null };
+  /** Present when the run's pickup step adopts a PR: the flow's PR ref and the held run's start. */
+  adopting?: { pr: number | null; startedAt: number | null };
 }
 
 export interface PickupProposal {
@@ -76,10 +76,15 @@ export interface PickupProposal {
 const unrecoverable = (pr: number | null): string =>
   `This run's primary ticket cannot be recovered: neither its saved pickup nor its start record names ${pr === null ? 'its pull request' : `pull request #${pr}`}. Terminate the run and start it again.`;
 
-/** The start's record of an adopting run, when it names the flow's PR. */
-function adoptedRecordOf(evidence: PickupEvidence & { adopting: { pr: number | null } }): AdoptedPickup | null {
+/** The start's record of an adopting run, when it names the flow's PR and was written by this run. */
+function adoptedRecordOf(evidence: PickupEvidence & { adopting: { pr: number | null; startedAt: number | null } }): AdoptedPickup | null {
   const record = evidence.bootstrapRecord;
-  return record.kind === 'complete' && isAdoptedPickup(record.bootstrap) && record.bootstrap.pr === evidence.adopting.pr ? record.bootstrap : null;
+  return record.kind === 'complete' &&
+    isAdoptedPickup(record.bootstrap) &&
+    record.bootstrap.pr === evidence.adopting.pr &&
+    record.bootstrap.startedAt === evidence.adopting.startedAt
+    ? record.bootstrap
+    : null;
 }
 
 /** Why the checkout or GitHub no longer backs an adopting run's recorded pickup, or null when they do. */
@@ -98,7 +103,7 @@ async function adoptedPickupProblem(record: AdoptedPickup, branch: string | null
   return null;
 }
 
-async function proposeAdoptedPickup(evidence: PickupEvidence & { adopting: { pr: number | null } }, lookup: PullRequestLookup): Promise<PickupProposal> {
+async function proposeAdoptedPickup(evidence: PickupEvidence & { adopting: { pr: number | null; startedAt: number | null } }, lookup: PullRequestLookup): Promise<PickupProposal> {
   const record = adoptedRecordOf(evidence);
   const { branch } = evidence;
   if (record === null) {
@@ -117,7 +122,7 @@ async function proposeAdoptedPickup(evidence: PickupEvidence & { adopting: { pr:
 
 /** The adopting run's recorded pickup, once the operator's numbers and GitHub back it; or why not. */
 async function verifyAdoptedPickup(
-  evidence: PickupEvidence & { adopting: { pr: number | null } },
+  evidence: PickupEvidence & { adopting: { pr: number | null; startedAt: number | null } },
   lookup: PullRequestLookup,
   pr: number,
   ticket: number,
@@ -132,7 +137,7 @@ async function verifyAdoptedPickup(
   return problem === null ? { ok: true, pickup: record } : { ok: false, reason: problem };
 }
 
-const isAdopting = (evidence: PickupEvidence): evidence is PickupEvidence & { adopting: { pr: number | null } } => evidence.adopting !== undefined;
+const isAdopting = (evidence: PickupEvidence): evidence is PickupEvidence & { adopting: { pr: number | null; startedAt: number | null } } => evidence.adopting !== undefined;
 
 export async function proposeRunPickup(evidence: PickupEvidence, lookup: PullRequestLookup): Promise<PickupProposal> {
   if (isAdopting(evidence)) return proposeAdoptedPickup(evidence, lookup);

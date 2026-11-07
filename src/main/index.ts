@@ -554,6 +554,7 @@ async function createWindow(): Promise<void> {
         trustedAppBootstraps.get(repoDir) ?? null,
         flow.state(repoDir).refs?.ticket ?? null,
         flow.state(repoDir).refs?.pr ?? null,
+        inProgressRunIdentity(repoDir)?.startedAt ?? null,
       ),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
@@ -854,7 +855,7 @@ async function createWindow(): Promise<void> {
         branch: branch.ok ? branch.branch : null,
         flowTicket: refs?.ticket ?? null,
         bootstrapRecord: readPickupRecord(repoKey),
-        ...(adoptingPickupStep(repoKey) ? { adopting: { pr: refs?.pr ?? null } } : {}),
+        ...(adoptingPickupStep(repoKey) ? { adopting: { pr: refs?.pr ?? null, startedAt: inProgressRunIdentity(repoKey)?.startedAt ?? null } } : {}),
       };
     },
     lookup: (repoKey) => createRealPullRequestLookup(repoKey, adoptingPickupStep(repoKey) ? 'ignore' : 'refuse'),

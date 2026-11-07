@@ -29,8 +29,8 @@ export interface PublishPrReviewPorts {
   github: AdoptionGitHub;
   /** The report at `file`, read inside the repository; throws with the reason it cannot be. */
   readReport(file: string): string;
-  /** Whether `text` is the content of the file at `file`'s place in commit `oid`. */
-  isCommittedFile(oid: string, file: string, text: string): Promise<boolean>;
+  /** Whether `file` is, as git would store it at its path, the file at that path in commit `oid`. */
+  isCommittedFile(oid: string, file: string): Promise<boolean>;
   /** Whether the operator can push to `repo` (`<owner>/<name>`). */
   canPush(repo: string): Promise<boolean>;
   /** The commits on `branch` past `base`: how many, and whether any is a merge. */
@@ -125,7 +125,7 @@ export async function publishPrReview(ports: PublishPrReviewPorts, request: Publ
   if (request.report === null) throw new Error('publish-pr-review names no report artifact of this step; nothing was written');
   const report = ports.readReport(request.report);
   if (report.trim().length === 0) throw new Error(`the report ${request.report} is empty; nothing was written`);
-  if (await ports.isCommittedFile(pickup.headOid, request.report, report)) {
+  if (await ports.isCommittedFile(pickup.headOid, request.report)) {
     throw new Error(`the report ${request.report} is the reviewed PR's own file, unchanged, so this run did not write it; nothing was written`);
   }
 
@@ -209,8 +209,9 @@ export function createRealPublishPrReviewPorts(repoDir: string): PublishPrReview
         throw new Error(`the report ${file} could not be read: ${errMsg(e)}; nothing was written`);
       }
     },
-    async isCommittedFile(oid, file, text) {
-      const rel = path.relative(root(), confined(file)).split(path.sep).join('/');
+    async isCommittedFile(oid, file) {
+      const real = confined(file);
+      const rel = path.relative(root(), real).split(path.sep).join('/');
       let committed: string;
       try {
         committed = await git(['rev-parse', '--verify', '--quiet', '--end-of-options', `${oid}:${rel}`], 'the reviewed PR head could not be read');
@@ -218,7 +219,7 @@ export function createRealPublishPrReviewPorts(repoDir: string): PublishPrReview
         if (e instanceof CommandFailure && e.exitCode === 1) return false;
         throw e;
       }
-      const ours = await runAppCommand('git', [...protectedArgs, 'hash-object', '--stdin'], repoDir, text);
+      const ours = await git(['hash-object', `--path=${rel}`, real], 'the report could not be hashed');
       return parseAppGitObjectId(committed, 'committed file') === parseAppGitObjectId(ours, 'report');
     },
     async canPush(repo) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { runAppGateDecision, type AppGateDecisionDeps } from '../../src/main/appGateDecision';
@@ -387,6 +387,17 @@ describe('a report that is not this run’s writes nothing and holds the gate (#
     const reason = await expectHeld(run, { reportPath: join(run.w.repo, 'change.txt') });
     expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBeNull();
     expect.soft(reason).toMatch(/change\.txt|report/i);
+    expect.soft(reason).toMatch(/unchanged|identical|same|reviewed PR's own|this run/i);
+  });
+
+  it("a report that is the reviewed PR's own file as checked out through an end-of-line filter", async () => {
+    const run = await adoptedRun();
+    commitFix(run, 'fix.txt', 'a fix\n', 'Fix the reviewed change');
+    const committed = readFileSync(join(run.w.repo, 'change.txt'), 'utf8');
+    writeFileSync(join(run.w.repo, '.gitattributes'), 'change.txt text eol=crlf\n');
+    writeFileSync(join(run.w.repo, 'change.txt'), committed.replace(/\r?\n/g, '\r\n'));
+    const reason = await expectHeld(run, { reportPath: join(run.w.repo, 'change.txt') });
+    expect.soft(run.w.remoteRef(`refs/heads/${run.pickup.fixBranch}`)).toBeNull();
     expect.soft(reason).toMatch(/unchanged|identical|same|reviewed PR's own|this run/i);
   });
 
