@@ -9,7 +9,8 @@ import { stopApp } from './stopApp';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { seedFakeAgentSteps, seedFakeGhGit, type StepScript } from './fakeTools';
-import { auditStepSequence, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
+import { auditGateEntries, auditStepSequence, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
+import { gateDecisionDecider, gateDecisionKind } from '../../src/shared/audit';
 import { NO_STEPS_JSON, STEPS_JSON, injectedLog, repeatListAgent, repeatListFlowYaml, repeatListTitles, seedRepeatListConfig } from './repeatListFixture';
 
 // #278 — a repeat whose count comes from a named list in an artifact (`count_from`), run in the app on the fixture
@@ -129,6 +130,15 @@ function unsourcedYaml(artifact: string): string {
   return yaml.dump({ ...doc, name: 'repeat-list-unsourced' });
 }
 
+/** The fixture flow with its `design` step's gate left to a person. */
+function humanDesignYaml(): string {
+  const doc = yaml.load(repeatListFlowYaml()) as { name: string; steps: { id: string; gate_authority?: string }[] };
+  const design = doc.steps.find((s) => s.id === 'design');
+  if (design === undefined) throw new Error('humanDesignYaml(): the fixture flow has no design step');
+  design.gate_authority = 'human';
+  return yaml.dump({ ...doc, name: 'repeat-list-human' });
+}
+
 test('the count_from fixture flow loads, and runs its group once when its design writes no list', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 3 * UI_MS + 4 * LOOP_TURN_MS);
   const prefix = 'agent-term-e2e-278-once-';
@@ -202,6 +212,26 @@ test("a work turn retried after a relaunch names the iteration's entry it was on
     .toContain('work-build');
   const retried = workTurnEntries(injectedLog(repo, beforeQuit)).find((t) => t.turn === 'work-build');
   expect(retried?.entry).toBe(`entry 2 of 3: ${repeatListTitles()[1]}`);
+});
+
+test("a person pressing Approve on design's gate sources the 3-entry list: build and check run three times, each turn naming its entry", { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 4 * UI_MS + 10 * LOOP_TURN_MS);
+  const prefix = 'agent-term-e2e-278-human-';
+  const { home, repo } = seedRun(prefix, 'repeat-list-human', humanDesignYaml());
+  await launchInto(prefix, home, repo, repeatListAgent(repo, { designSource: STEPS_JSON }));
+
+  await startControl().click();
+  const approve = page.locator('#loop-panel [data-gate-option="approve"]');
+  await expect(loopReadout()).toBeVisible({ timeout: LOOP_TURN_MS });
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await approve.click({ timeout: LOOP_TURN_MS });
+  await expect.poll(() => flowState(repo), { timeout: 9 * LOOP_TURN_MS }).toMatch(/^step: done$/m);
+
+  expect(stepSequence(home, repo)).toEqual(['design', 'build', 'check', 'build', 'check', 'build', 'check', 'finish', 'done']);
+  const decisions = auditGateEntries(home, repo, { step: 'design' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+  const builds = workTurnEntries(injectedLog(repo)).filter((t) => t.turn === 'work-build');
+  expect(builds.map((t) => t.entry)).toEqual(repeatListTitles().map((title, i) => `entry ${i + 1} of 3: ${title}`));
 });
 
 test("pressing Start on a flow whose count_from artifact no step's loop outputs leaves it not started, with a notice naming the repeat step and the artifact", { tag: '@ownapp' }, async () => {
