@@ -1336,7 +1336,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       persist('error', reason);
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       const errored = active;
-      hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, 'error'));
+      hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, stalled === true ? { resumableStall: { doneRelPath: APP_DONE_REL_PATH } } : 'error'));
       deps.emitError(reason);
     },
     resumeStalled: () => {

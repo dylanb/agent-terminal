@@ -800,6 +800,24 @@ describe('autoGate — a gate that stops for the operator asks the agent why (N9
     expect(rig.withdrawn()).toBe(before + 1);
   });
 
+  it('a halt on a resumable stall asks the agent to finish its turn by writing its done-file', () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, { resumableStall: { doneRelPath: '.agent-terminal/loop/turn-done' } });
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toContain('(b) loop error or accepted failed turn');
+    const line = rig.asked[0]!.split('\n').find((l) => l.includes('.agent-terminal/loop/turn-done'));
+    expect(line).toContain(TURN);
+  });
+
+  it('a halt on a turn error that is not a stall names no done-file', () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).not.toContain('turn-done');
+  });
+
   it('an agent question that throws never aborts the halt', async () => {
     const rig = makeRig();
     startTrusted(rig);

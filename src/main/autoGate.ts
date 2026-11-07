@@ -5,7 +5,7 @@ import type { FlowAutoGateView } from '../shared/ipc';
 import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
-import { composeGateQuestion, type GateStop } from '../shared/gateQuestion';
+import { composeGateQuestion, type GateStop, type StalledTurn } from '../shared/gateQuestion';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
@@ -30,7 +30,7 @@ export interface StartRun {
 }
 
 export type GateCause = 'verdict' | 'interrupt' | 'arm-unreadable';
-export type LoopRunEvent = 'error' | 'retried' | 'accepted' | { roundReport: string | null };
+export type LoopRunEvent = 'error' | { resumableStall: { doneRelPath: string } } | 'retried' | 'accepted' | { roundReport: string | null };
 export type EngineApprove = (repoDir: string, step: string, turnKey: string, decider: ApproveDecider) => Promise<GateApproveOutcome>;
 export interface AutoGateTimer {
   readonly id: number;
@@ -208,7 +208,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const withdrawQuestion = (): void => bestEffort(() => deps.withdrawAgentQuestion());
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
-  const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean; ask?: boolean } = { write: true }): void => {
+  const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean; ask?: boolean; resume?: StalledTurn } = { write: true }): void => {
     const failed = held.some((r) => r.reason === 'interrupt-armed') ? consume(repoDir) : null;
     const reasons = failed === null ? held : held.map((r) => (r.reason === 'interrupt-armed' ? { ...r, detail: failed } : r));
     const lr = run.loopRun;
@@ -217,7 +217,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     run.haltShown = { step: key.step, turnKey: key.turnKey, gateSeq: key.gateSeq, reasons };
     if (sameGate(run.deciding, key.step, key.turnKey, key.gateSeq)) clearDeciding(run);
     push(repoDir);
-    if (opts.ask !== false) askWhy(run, key, { kind: 'halted', step: key.step, reasons });
+    if (opts.ask !== false) askWhy(run, key, { kind: 'halted', step: key.step, reasons, ...(opts.resume === undefined ? {} : { resume: opts.resume }) });
   };
 
   const setFailedEffect = (repoDir: string, run: AutoRun, detail: string): void => {
@@ -671,16 +671,21 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const run = runFor(repoDir);
       const lr = run?.loopRun ?? null;
       if (run === undefined || lr === null || lr.step !== step) return;
-      const haltOnFailedLoopRun = (): void => {
+      const haltOnFailedLoopRun = (resume?: StalledTurn): void => {
         persist(repoDir, run);
         if (!honouredAuto(run, step)) return;
-        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'loop-error' }]);
+        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'loop-error' }], { write: true, ...(resume === undefined ? {} : { resume }) });
         lr.recorded.add('loop-error');
         persist(repoDir, run);
       };
       if (event === 'error') {
         lr.endedInError = true;
         haltOnFailedLoopRun();
+        return;
+      }
+      if (typeof event === 'object' && 'resumableStall' in event) {
+        lr.endedInError = true;
+        haltOnFailedLoopRun({ turnKey, doneRelPath: event.resumableStall.doneRelPath });
         return;
       }
       if (event === 'retried') {

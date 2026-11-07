@@ -54,6 +54,13 @@ podman machine start
   two checkouts running the harness at the same time would collide installing into one; the first run in a new
   checkout installs from scratch. `E2E_NODE_MODULES_VOLUME=<name> ./scripts/e2e-podman.sh` names the volume
   instead.
+- `out/` is a container-local **tmpfs**, so the app reads its build, including the example trees the build copies
+  into `out/main/example/`, from the VM rather than through the macOS file share. Parallel install-examples tests
+  listing them through the share intermittently failed with `ENOMEM` (`scandir`). The container's build never
+  reaches the checkout's `out/`.
+- The entrypoint fetches the Electron binary once (`node node_modules/electron/install.js`) before the tests.
+  Electron downloads a missing binary on first `require`, so on a fresh `node_modules` volume every worker downloaded
+  it at once and launches failed with `ETXTBSY`.
 - The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
   `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
   exits and mask the result (see `e2e/entrypoint.sh`).

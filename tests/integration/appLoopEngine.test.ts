@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writePhaseResult } from '../helpers/phaseResults';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
@@ -746,6 +746,28 @@ describe('§27 engine — stall (AC6)', () => {
     expect(state?.turnKey).not.toBe(TURN_KEY); // advanced to the review round
     expect(engine.liveErrorFor(h.repo)).toBeNull();
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a stall after injection tells the gate it is resumable, naming the done-file the turn was told to write', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    const event = loopRunEvent.mock.calls.at(-1)?.[3] as { resumableStall?: { doneRelPath: string } } | undefined;
+    const doneRelPath = event?.resumableStall?.doneRelPath;
+    expect(doneRelPath).toEqual(expect.any(String));
+    expect(h.injected.join('\n')).toContain(doneRelPath);
+  });
+
+  it('a turn error that is not a stall reaches the gate as a plain error', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(loopRunEvent).toHaveBeenLastCalledWith(h.repo, STEP, TURN_KEY, 'error');
   });
 
   it('a done file after the operator accepted a stalled turn does not advance it a second time', () => {
