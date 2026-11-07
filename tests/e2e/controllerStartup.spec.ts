@@ -105,7 +105,7 @@ test('the installed agent-terminal command launches the AppImage the app runs fr
       const left = pidsCarrying(owner);
       if (left.length) cleanupErrors.push(new Error(`processes still carry ${owner}: ${left.join(',')}`));
     } catch (e) { cleanupErrors.push(e); }
-    rmSync(fixtureDir, { recursive: true, force: true });
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch (e) { cleanupErrors.push(e); }
     try { await h.dispose(); } catch (e) { cleanupErrors.push(e); }
     if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'cleanup failed');
   }

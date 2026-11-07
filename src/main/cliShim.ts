@@ -113,11 +113,21 @@ export function generateShim(invocation: LaunchInvocation): string {
           'fi',
         ]
       : [];
+  const appImageNotExecutable =
+    'appImage' in invocation
+      ? [
+          `if [ ! -x ${shellQuote(invocation.appImage)} ]; then`,
+          `  printf '%s\\n' ${shellQuote(`${CLI_COMMAND_NAME}: ${invocation.appImage} is not executable; make it executable (chmod +x ${shellQuote(invocation.appImage)}) and run the command again`)} >&2`,
+          '  exit 1',
+          'fi',
+        ]
+      : [];
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
     ...appImageGone,
     ...controllerBranch(invocation),
+    ...appImageNotExecutable,
     'CWD=$(pwd)',
     'if [ "$#" -ge 1 ]; then',
     '  case "$1" in',

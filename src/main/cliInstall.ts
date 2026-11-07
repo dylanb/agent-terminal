@@ -97,31 +97,46 @@ function isSafeReuseDir(dir: string, home: string): boolean {
   return ancestorsOwnerOnly(path.dirname(real), realHome);
 }
 
+type OwnerOnlyWalk = { ok: true } | { ok: false; error: unknown };
+
 /** Whether `start` and every ancestor above it, up to but excluding `stopAt` (default: through `/`),
- *  is free of group/other write. `start` must already be symlink-resolved; a stat failure is a no. */
-function ancestorsOwnerOnly(start: string, stopAt?: string): boolean {
+ *  is free of group/other write. `start` must already be symlink-resolved; a stat failure is
+ *  reported with its cause. */
+function walkOwnerOnly(start: string, stopAt?: string): OwnerOnlyWalk {
   for (let cur = start; cur !== stopAt; cur = path.dirname(cur)) {
     try {
-      if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
-    } catch {
-      return false;
+      if ((fs.statSync(cur).mode & 0o022) !== 0) return { ok: false, error: undefined };
+    } catch (e) {
+      return { ok: false, error: e };
     }
     if (cur === path.dirname(cur)) break;
   }
-  return true;
+  return { ok: true };
+}
+
+function ancestorsOwnerOnly(start: string, stopAt?: string): boolean {
+  return walkOwnerOnly(start, stopAt).ok;
 }
 
 function appImageFolderRefusal(appImage: string): string | undefined {
   const folder = path.dirname(appImage);
-  let owned = false;
+  const writable = (what: string): string =>
+    `Not installing the command: ${what} can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
   try {
-    owned = ancestorsOwnerOnly(fs.realpathSync(folder));
-  } catch {
-    owned = false;
+    fs.realpathSync(folder);
+    const realFile = fs.realpathSync(appImage);
+    if ((fs.statSync(realFile).mode & 0o022) !== 0) return writable(appImage);
+    const walk = walkOwnerOnly(path.dirname(realFile));
+    if (walk.ok) return undefined;
+    if (walk.error === undefined) {
+      return writable(
+        path.dirname(realFile) === folder ? `${folder} (or a folder above it)` : `${appImage}, or a folder above ${realFile},`,
+      );
+    }
+    throw walk.error;
+  } catch (e) {
+    return `Not installing the command: could not check who can write ${folder}: ${errMsg(e)}`;
   }
-  return owned
-    ? undefined
-    : `Not installing the command: ${folder} (or a folder above it) can be written by other users, who could swap the app. Keep the AppImage somewhere only you can write, then install again.`;
 }
 
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
