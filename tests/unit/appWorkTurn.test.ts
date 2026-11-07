@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   artifactWellFormed,
   boundaryCommand,
-  completionArtifact,
   sliceArtifact,
   outputLocation,
   composeAppWorkPrompt,
@@ -77,17 +76,15 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
   });
 });
 
-describe('completionArtifact (§27.12 — file-producing vs commit-producing, data-driven)', () => {
+describe('outputLocation on the first iteration (§27.12 — file-producing vs commit-producing, data-driven)', () => {
   it('resolves the confined output path whose id matches the work artifact (file-producing)', () => {
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'plan' } });
-    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toMatchObject(artifactOf('plan.md'));
   });
 
   it('returns null when the work artifact id has no matching output binding (commit-producing)', () => {
-    // A loop whose product is commits declares no output file for its work artifact → advance on the
-    // done-signal alone. Read from the def, never a hard-coded loop name.
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'commits' }, outputs: [] });
-    expect(completionArtifact(d)).toBeNull();
+    expect(outputLocation(d, d.work.artifact, 1)).toBeNull();
   });
 
   it('resolves by artifact id, not list position, when the matching output is not first', () => {
@@ -98,7 +95,7 @@ describe('completionArtifact (§27.12 — file-producing vs commit-producing, da
         binding('plan', 'plan.md'),
       ],
     });
-    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toEqual(locationOf('plan.md'));
   });
 });
 

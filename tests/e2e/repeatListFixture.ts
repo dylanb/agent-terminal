@@ -4,7 +4,7 @@
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { completionArtifact } from '../../src/main/appWorkTurn';
+import { outputLocation } from '../../src/main/appWorkTurn';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { flowLocations } from '../helpers/flowFixtures';
 import { exampleConfigDir, type HoldSpec, type StepScript } from './fakeTools';
@@ -37,12 +37,12 @@ export function seedRepeatListConfig(): string {
   return config;
 }
 
-/** Where, relative to `repo`, the app puts `loop`'s work artifact: the path its work turn writes, from the
- *  definition the app resolves and the binding its completion check reads. */
+/** Where, relative to `repo`, the app puts `loop`'s work artifact on its first iteration: the path its work turn
+ *  writes, from the definition the app resolves and the location its completion check reads. */
 function outputRel(repo: string, loop: string): string {
   const r = resolveLoopDefV2(loop, { tiers: { operator: LOOPS_DIR, appBundled: LOOPS_DIR, retired: null }, repoDir: repo });
   if (!r.ok) throw new Error(`outputRel(): ${loop} does not resolve in ${repo}: ${r.reason}`);
-  const artifact = completionArtifact(r.def);
+  const artifact = outputLocation(r.def, r.def.work.artifact, 1);
   if (artifact === null) throw new Error(`outputRel(): ${loop}'s work artifact names no output`);
   return artifact.rel;
 }

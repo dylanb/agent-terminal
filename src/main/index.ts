@@ -1140,8 +1140,6 @@ async function createWindow(): Promise<void> {
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
-    // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, and every
-    // approve whose def outputs a list-form repeat's `count_from.artifact` re-sources its list, the last one winning.
     sourceSliceCount: createRepeatSourcer({
       flow,
       readArtifact: readLoopArtifact,

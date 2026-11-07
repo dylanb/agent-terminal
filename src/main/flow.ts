@@ -462,7 +462,6 @@ export function createFlowMachine(
   // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
   // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
   let repeatCounts: Record<string, number> = Object.create(null);
-  // §28.4.1 — the repeat's sourced list: its count and entry titles.
   let repeatList: RepeatListRecord | null = null;
   // §22.3.1.
   let userTitle: string | null = null;
@@ -733,7 +732,8 @@ export function createFlowMachine(
       const at = names.indexOf(stepId);
       if (at < names.indexOf(repeat.backTo) || at > repeatIndex) return null;
       const { source } = repeat;
-      if (source.kind === 'input' && !(Object.prototype.hasOwnProperty.call(inputs, source.countInput) && inputs[source.countInput] === String(repeatList.count))) return null;
+      const listSetsCount = source.kind === 'list' || (Object.prototype.hasOwnProperty.call(inputs, source.countInput) && inputs[source.countInput] === String(repeatList.count));
+      if (!listSetsCount) return null;
       const position = repeatCounts[steps[repeatIndex].id] ?? 1;
       const title = repeatList.titles[position - 1];
       return title === undefined ? null : { position, count: slicesFor(source), title };

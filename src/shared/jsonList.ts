@@ -1,5 +1,5 @@
 // The `json-list` artifact contract (§28.4.1): a JSON object whose named key holds a non-empty array of entries,
-// each an object with a `title`. One predicate, read by the engine's sourcer and by `--check-repeat-list`.
+// each an object with a `title`.
 
 /** The rules the document as a whole can break, in the order they are checked. */
 export const JSON_LIST_DOCUMENT_RULES = ['parses', 'top-level-object', 'key-present', 'value-array', 'at-least-one-entry'] as const;
@@ -9,11 +9,9 @@ export type JsonListDocumentRule = (typeof JSON_LIST_DOCUMENT_RULES)[number];
 export const JSON_LIST_ENTRY_RULES = ['entry-object', 'title-string', 'title-not-blank', 'title-no-control-character'] as const;
 export type JsonListEntryRule = (typeof JSON_LIST_ENTRY_RULES)[number];
 
-/** The `json-list` shape: the key each entry carries its title under, and the rules a file is checked against. */
+/** The `json-list` shape: the key each entry carries its title under. */
 export const JSON_LIST_SHAPE = {
   entryTitleKey: 'title',
-  documentRules: JSON_LIST_DOCUMENT_RULES,
-  entryRules: JSON_LIST_ENTRY_RULES,
 } as const;
 
 /** The entry titles in order, or the first rule broken, with the entry's position counted from 1 for an entry rule. */

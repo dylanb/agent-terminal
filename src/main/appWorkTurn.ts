@@ -28,14 +28,6 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
   return policy.mode === 'compact' ? `/compact ${(policy.message ?? '').replace(/[\r\n]+/g, ' ')}` : '/clear';
 }
 
-/** The completion artifact the work turn must produce, resolved from the def (§27.12): the confined output
- *  binding whose id matches `work.artifact`. Null when no output backs that id — a commit-producing loop
- *  whose product is commits, which advances on the done-signal alone. Data-driven: never a loop-name check. */
-export function completionArtifact(def: LoopDefV2): { path: string; rel: string } | null {
-  const binding = def.outputs.find((o) => o.id === def.work.artifact);
-  return binding ? { path: binding.path, rel: binding.rel } : null;
-}
-
 /** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.json` →
  *  `.../red-result.slice-2.json`. Only the basename is rewritten (the directory is untouched), and `slice` is a
  *  positive integer, so nothing traversal-shaped can reach the string — the already-confined location stays in
@@ -60,7 +52,8 @@ export function sliceArtifact(artifact: { path: string; rel: string }, slice: nu
 }
 
 /** Where `def`'s work turn on iteration `slice` writes its output `id`: the work artifact under its per-slice name,
- *  any other output at its binding. Null when `def` declares no output `id`. */
+ *  any other output at its binding. Null when `def` declares no output `id`; for `def.work.artifact`, that is a
+ *  commit-producing loop, which advances on the done-signal alone (§27.12). */
 export function outputLocation(def: LoopDefV2, id: string, slice: number): { path: string; rel: string; leafPath: string | null } | null {
   const binding = def.outputs.find((o) => o.id === id);
   if (binding === undefined) return null;
@@ -116,7 +109,6 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
-  /** §28.4.1 — the list entry this turn of a repeated step is on. */
   entry?: RepeatEntry;
 }
 
