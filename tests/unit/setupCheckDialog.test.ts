@@ -1520,6 +1520,65 @@ describe('pressing Run setup loop (AC6, AC7, AC8, AC10, AC11)', () => {
     expect.soft(read?.controls.includes(RUN_SETUP), 'Run setup loop is not offered again').toBe(false);
   });
 
+  it('ends the popup when an install after an accepted start re-reads only entries the setup flow fixes, so a queued check raises its popup (AC6, AC11)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(
+      REPO.alpha,
+      repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale], true),
+      repoStatus(REPO.alpha, [ENTRY.absent], true),
+    );
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    fake.examples.preview(cleanPreview('pv-after-start'));
+    fake.examples.install(installSucceeded());
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+    expect.soft(pressIfShown(screen, INSTALL), 'the popup offers Install/update examples after the start').toBe(true);
+    await settle();
+
+    expect.soft(openFor(screen), 'the alpha popup ended and the queued check raised its popup').toBe(REPO.bravo);
+  });
+
+  describe('a start that did not run, when only entries the setup flow fixes were listed', () => {
+    const FIXED_ONLY = [ENTRY.notIgnored, ENTRY.absent];
+    const FAILURES: Array<{ how: string; arrange: (fake: ReturnType<typeof fakeSetupDeps>, reason: string) => void }> = [
+      { how: 'is refused', arrange: (fake, reason) => fake.setupFlow.answer({ ok: false, reason }) },
+      {
+        how: 'is rejected',
+        arrange: (fake, reason) => {
+          fake.deps.runSetupFlow = () => Promise.reject(new Error(reason));
+        },
+      },
+    ];
+
+    for (const { how, arrange } of FAILURES) {
+      it(`a start that ${how} brings the popup back with every entry, Run setup loop offered again, and the reason`, async () => {
+        const reason = `scripted fixed-only start failure (${how})`;
+        const fake = fakeSetupDeps();
+        arrange(fake, reason);
+        fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_ONLY, true));
+        const { dialog, screen } = mountDialog(fake);
+        void dialog.check(REPO.alpha);
+        await shownFor(screen, REPO.alpha);
+        const before = reading(screen);
+
+        screen.control(RUN_SETUP).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(read?.entries, 'every entry it listed before is listed').toEqual(before?.entries);
+        expect.soft(read?.controls.includes(RUN_SETUP), 'Run setup loop is offered again').toBe(true);
+        expect.soft(read?.alert?.includes(reason), 'the reason is in its error line').toBe(true);
+        expect.soft(read?.description.includes(reason), 'the reason is in the dialog description').toBe(true);
+        expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+      });
+    }
+  });
+
   it('keeps naming and acting on its own repository when the terminal checks another one while the start is pending (AC11)', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale], true));
