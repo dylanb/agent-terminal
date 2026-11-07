@@ -1,5 +1,5 @@
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { STATUS_CASES, type StatusCaseKey, type SummaryLabel } from './controllerStatusFixture';
+import { STATUS_CASES, type SortMode, type StatusCaseKey, type SummaryLabel } from './controllerStatusFixture';
 
 /** The `STATUS_CASES` terminal for `status`, moved to a launch directory of its own (`/order/<name>/worktree`), so a
  *  test can put several cards in one status group and tell each apart by directory. */
@@ -147,5 +147,32 @@ export const ORDER_EXAMPLES: Readonly<Record<string, OrderExample>> = {
       { at: 2 * MINUTE, terminals: [t('x', 'disconnected'), t('y', 'flow-error')] },
     ],
     list: [heading('errors', 2), d('x'), d('y')],
+  },
+};
+
+/** The heading Recently used order shows above every card, read as the list helper reads it: no count. */
+export const RECENTLY_USED_HEADING = 'Recently used';
+
+/** The sentence beneath the window header for each order, in the ticket's words (AC 9). */
+export const SORT_SENTENCES: Readonly<Record<SortMode, string>> = {
+  attention: 'Sorted by attention: errors first, then needs a human, idle & unassigned, and working, each longest in its state first.',
+  'recently-used': 'Sorted by your most recent use of each card in this controller; cards you have not used yet follow in attention order.',
+};
+
+/** Snapshots, as in `ORDER_EXAMPLES`, and the Recently used list after the last when no card has been used yet. */
+export const RECENT_EXAMPLES: Readonly<Record<string, OrderExample>> = {
+  'with nothing used yet, one Recently used heading, then every card in Attention order without group headings': {
+    steps: [{ at: 0, terminals: [
+      t('w1', 'working'), t('i1', 'idle'), t('e1', 'flow-error'), t('h1', 'needs-human'), t('i2', 'unassigned'),
+      t('w2', 'needs-human-working'), t('e2', 'disconnected'),
+    ] }],
+    list: [RECENTLY_USED_HEADING, d('e1'), d('e2'), d('h1'), d('i1'), d('i2'), d('w1'), d('w2')],
+  },
+  'with nothing used yet, the card longer in its group still comes first within the Attention order beneath the heading': {
+    steps: [
+      { at: 0, terminals: [t('a', 'idle'), t('b', 'flow-error'), t('c', 'working')] },
+      { at: 5 * MINUTE, terminals: [t('a', 'flow-error'), t('b', 'flow-error'), t('c', 'working'), t('d', 'working')] },
+    ],
+    list: [RECENTLY_USED_HEADING, d('b'), d('a'), d('c'), d('d')],
   },
 };

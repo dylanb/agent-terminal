@@ -1,5 +1,6 @@
 import { SUMMARY_LABELS, cardStatus, type SummaryLabel } from '../../shared/controllerCardClassification';
 import type { ControllerDirectoryCard } from '../../shared/controllerCards';
+import type { ControllerSortMode } from '../../shared/ipc';
 
 interface Observation {
   readonly group: SummaryLabel;
@@ -50,7 +51,7 @@ function observationOf(card: ControllerDirectoryCard, observations: CardObservat
   return observation;
 }
 
-export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations): CardListEntry[] {
+export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, _sortMode: ControllerSortMode): CardListEntry[] {
   const observed = cards.map(card => ({ card, observation: observationOf(card, observations) }));
   return SUMMARY_LABELS.flatMap((group): CardListEntry[] => {
     const members = observed

@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { directoryCards } from '../../src/shared/controllerCards';
 import { cardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from '../../src/renderer/src/controllerCardOrder';
-import type { ControllerTerminal } from '../../src/shared/ipc';
-import { DURATION_TEXTS, ORDER_EXAMPLES, TIME_VERBS, orderTerminal, type OrderStep } from '../helpers/controllerCardOrderFixture';
+import type { ControllerSortMode, ControllerTerminal } from '../../src/shared/ipc';
+import { DURATION_TEXTS, ORDER_EXAMPLES, RECENT_EXAMPLES, TIME_VERBS, orderTerminal, type OrderStep } from '../helpers/controllerCardOrderFixture';
 
 const START = 1_000_000_000;
 
-/** The Attention list after the controller has seen `steps`, read as the list helper reads the screen. */
-function attentionListAfter(steps: readonly OrderStep[]): string[] {
+/** The list in `sortMode` after the controller has seen `steps`, read as the list helper reads the screen. */
+function listAfter(steps: readonly OrderStep[], sortMode: ControllerSortMode): string[] {
   let observations: CardObservations | undefined;
   let cards = directoryCards([]);
   for (const { at, terminals } of steps) {
     cards = directoryCards(terminals);
     observations = observeCards(observations, cards, START + at);
   }
-  return cardList(cards, observations!).map((entry: CardListEntry) =>
-    entry.kind === 'heading' ? `${entry.name} ${entry.count}` : entry.card.launchDirectory);
+  return cardList(cards, observations!, sortMode).map((entry: CardListEntry) =>
+    entry.kind === 'heading' ? [entry.name, entry.count].filter(part => part !== undefined).join(' ') : entry.card.launchDirectory);
 }
 
 /** The time-in-state text of the one card `terminal` makes, first seen at START and read `elapsed` ms later. */
@@ -26,7 +26,13 @@ function textAfter(terminal: ControllerTerminal, elapsed: number): string {
 
 describe('the Attention list', () => {
   it.each(Object.entries(ORDER_EXAMPLES))('%s', (_, { steps, list }) => {
-    expect(attentionListAfter(steps)).toEqual(list);
+    expect(listAfter(steps, 'attention')).toEqual(list);
+  });
+});
+
+describe('the Recently used list', () => {
+  it.each(Object.entries(RECENT_EXAMPLES))('%s', (_, { steps, list }) => {
+    expect(listAfter(steps, 'recently-used')).toEqual(list);
   });
 });
 

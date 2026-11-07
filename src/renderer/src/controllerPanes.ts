@@ -8,6 +8,7 @@ import { cardList, observeCards, timeInStateText, type CardListEntry, type CardO
 import type { ControllerClock, ControllerLayout } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
 import { createThemeToggle } from './themeToggle';
+import { createSortModeControl } from './sortModeControl';
 
 export interface ControllerPanesDeps {
   controller: ControllerApi;
@@ -80,8 +81,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   };
   const alwaysOnTopSlot = controlSlot();
   const themeSlot = controlSlot();
-  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot);
+  const sortSlot = controlSlot();
+  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot, ' ', sortSlot);
   const alwaysOnTopControl = createAlwaysOnTopControl(alwaysOnTopSlot, { controller: deps.controller });
+  const sortControl = createSortModeControl(sortSlot, { mode: 'attention', onChange() {} });
   let themeToggle: { dispose(): void } | undefined;
   void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
     if (disposed) return;
@@ -204,7 +207,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     cards.forEach(({ card }) => card.dispose());
     list.replaceChildren();
     cards = [];
-    for (const entry of cardList(directories, observed)) {
+    for (const entry of cardList(directories, observed, 'attention')) {
       if (entry.kind === 'heading') list.append(groupHeading(entry));
       else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
     }
@@ -224,6 +227,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       unsubscribeClock();
       alwaysOnTopControl.dispose();
       themeToggle?.dispose();
+      sortControl.dispose();
       cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();
       host.classList.remove('controller-panes');
