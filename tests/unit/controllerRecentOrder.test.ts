@@ -8,7 +8,7 @@ import {
 import { RECENTLY_USED_HEADING, SORT_SENTENCES, heading, orderDirectory as d, orderPeer, orderTerminal as t } from '../helpers/controllerCardOrderFixture';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { SORT_MODES, type SortMode, type StatusCaseKey } from '../helpers/controllerStatusFixture';
+import { SORT_MODES, statusService, type SortMode, type StatusCaseKey } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -310,5 +310,95 @@ describe('recency from a card\'s own controls', () => {
       expect.soft(await listSettled(host, USE_DIRECTORIES, recentlyUsed(d('i2')))).toEqual(recentlyUsed(d('i2')));
       expect(changes()).toEqual([]);
     } finally { dispose(); }
+  });
+});
+
+/** A promise the test settles by hand. */
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(settle => { resolve = settle; });
+  return { promise, resolve };
+}
+
+describe('the saved sort choice', () => {
+  it('starts in the saved Recently used order, with every card in Attention order beneath the Recently used heading', async () => {
+    const { host, dispose } = mountControllerPanes({ terminals: TERMINALS, sortMode: 'recently-used' });
+    try {
+      expect(await settled(host, TERMINALS, { list: RECENTLY_USED, selected: 'Recently used', sentence: 'recently-used' }))
+        .toEqual({ list: RECENTLY_USED, selected: ['Recently used'], sentences: ['recently-used'] });
+    } finally { dispose(); }
+  });
+
+  it('lists the cards in Attention order until the saved choice is read, then in the saved order', async () => {
+    const service = statusService(TERMINALS);
+    const read = deferred<SortMode>();
+    const controller = { ...service.api, getSortMode: () => read.promise };
+    const { host, dispose } = mountControllerPanes({ controller });
+    try {
+      const beforeRead = listOf(host, TERMINALS);
+      read.resolve('recently-used');
+      const afterRead = await settled(host, TERMINALS, { list: RECENTLY_USED, selected: 'Recently used', sentence: 'recently-used' });
+      expect({ beforeRead, afterRead }).toEqual({
+        beforeRead: ATTENTION,
+        afterRead: { list: RECENTLY_USED, selected: ['Recently used'], sentences: ['recently-used'] },
+      });
+    } finally { dispose(); }
+  });
+
+  it('starts in Attention order when the saved choice cannot be read, still loads the saved theme, and saves the next choice', async () => {
+    const { host, service, applied, dispose } = mountControllerPanes({ terminals: TERMINALS, sortMode: 'unreadable', theme: 'dark' });
+    try {
+      const start = await settled(host, TERMINALS, { list: ATTENTION, selected: 'Attention', sentence: 'attention' });
+      (await sortOption(host, 'Recently used')).click();
+      await vi.waitFor(() => expect(service.savedSortModes).toEqual(['recently-used'])).catch(() => undefined);
+      expect.soft(service.savedSortModes, 'the choice made after the failed read is saved').toEqual(['recently-used']);
+      expect({ start, applied }).toEqual({ start: { list: ATTENTION, selected: ['Attention'], sentences: ['attention'] }, applied: ['dark'] });
+    } finally { dispose(); }
+  });
+
+  it('saves each order the operator selects, in order', async () => {
+    const { host, service, dispose } = mountControllerPanes({ terminals: TERMINALS });
+    try {
+      (await sortOption(host, 'Recently used')).click();
+      await settled(host, TERMINALS, { list: RECENTLY_USED, selected: 'Recently used', sentence: 'recently-used' });
+      (await sortOption(host, 'Attention')).click();
+      await vi.waitFor(() => expect(service.savedSortModes).toEqual(['recently-used', 'attention'])).catch(() => undefined);
+      expect(service.savedSortModes).toEqual(['recently-used', 'attention']);
+    } finally { dispose(); }
+  });
+
+  it('takes no other order, by pointer or arrow key, while a save is still pending', async () => {
+    const service = statusService(TERMINALS);
+    const save = deferred<void>();
+    const asked: SortMode[] = [];
+    const controller = { ...service.api, setSortMode: (sortMode: SortMode) => { asked.push(sortMode); return save.promise; } };
+    const { host, dispose } = mountControllerPanes({ controller });
+    try {
+      (await sortOption(host, 'Recently used')).click();
+      await vi.waitFor(() => expect(asked).toEqual(['recently-used'])).catch(() => undefined);
+      (await sortOption(host, 'Attention')).click();
+      const recent = await sortOption(host, 'Recently used');
+      recent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }));
+      const pending = { asked: [...asked], selected: selectedSortOptionsIn(host), list: listOf(host, TERMINALS) };
+      save.resolve();
+      expect(pending).toEqual({ asked: ['recently-used'], selected: ['Recently used'], list: RECENTLY_USED });
+    } finally { dispose(); }
+  });
+
+  it('keeps the selected order and logs the reason when main fails to save it', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { host, service, dispose } = mountControllerPanes({ terminals: TERMINALS, sortModeSave: 'rejected' });
+    try {
+      (await sortOption(host, 'Recently used')).click();
+      await vi.waitFor(() => expect(logged).toHaveBeenCalled()).catch(() => undefined);
+      expect.soft(service.savedSortModes, 'the choice is sent to main to save').toEqual(['recently-used']);
+      expect({
+        screen: await settled(host, TERMINALS, { list: RECENTLY_USED, selected: 'Recently used', sentence: 'recently-used' }),
+        reasonLogged: logged.mock.calls.some(call => call.map(String).join(' ').includes('sort mode not saved')),
+      }).toEqual({ screen: { list: RECENTLY_USED, selected: ['Recently used'], sentences: ['recently-used'] }, reasonLogged: true });
+    } finally {
+      dispose();
+      logged.mockRestore();
+    }
   });
 });

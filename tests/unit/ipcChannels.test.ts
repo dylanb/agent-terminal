@@ -81,6 +81,8 @@ const CONTROLLER_WIRE_NAMES = {
   dismissLoopMessage: 'controller:dismissLoopMessage',
   getTheme: 'controller:getTheme',
   setTheme: 'controller:setTheme',
+  getSortMode: 'controller:getSortMode',
+  setSortMode: 'controller:setSortMode',
   getAlwaysOnTop: 'controller:getAlwaysOnTop',
   setAlwaysOnTop: 'controller:setAlwaysOnTop',
   alwaysOnTop: 'controller:alwaysOnTop',
@@ -131,6 +133,7 @@ describe('IPC channel contract', () => {
       'INSTALL_DESTINATION_IDS',
       'SESSION_ID',
       'hasFlowRefs',
+      'isControllerSortMode',
       'isTheme',
     ]);
   });

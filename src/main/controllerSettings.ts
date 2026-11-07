@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CONTROLLER_DEFAULT_THEME, isTheme, type Theme } from '../shared/ipc';
+import { CONTROLLER_DEFAULT_SORT_MODE, CONTROLLER_DEFAULT_THEME, isTheme, type ControllerSortMode, type Theme } from '../shared/ipc';
 import { atomicWriteFileSync } from './atomicFile';
 import { errMsg } from './errno';
 import { isRecord } from './yamlRecord';
@@ -8,6 +8,8 @@ import { isRecord } from './yamlRecord';
 export interface ControllerSettingsStore {
   theme(): Theme;
   saveTheme(theme: Theme): void;
+  sortMode(): ControllerSortMode;
+  saveSortMode(sortMode: ControllerSortMode): void;
 }
 
 export function createControllerSettingsStore(userDataDir: string): ControllerSettingsStore {
@@ -28,5 +30,9 @@ export function createControllerSettingsStore(userDataDir: string): ControllerSe
         console.error(`Controller theme not saved: ${errMsg(error)}`);
       }
     },
+    sortMode() {
+      return CONTROLLER_DEFAULT_SORT_MODE;
+    },
+    saveSortMode() {},
   };
 }
