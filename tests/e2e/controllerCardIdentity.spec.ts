@@ -5,7 +5,7 @@ import { basename, join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { seedTrustedFlow } from './autoGateHarness';
 import { STATUS_BUDGET_MS } from './controllerStatusObservation';
-import { cardHeaderElementLocator, cardHeaderLocator, cardLocator, directoryPattern, headerRemainder } from '../helpers/controllerCards';
+import { cardHeaderElementLocator, cardHeaderLocator, cardLocator, directoryPattern, headerRemainder, TIME_TEXT } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -45,7 +45,7 @@ async function launchPair(h: Harness, directory: string, terminalEnv: Record<str
 
 async function headerLeftover(header: Locator, directory: string, shown: readonly string[]): Promise<string> {
   const text = await header.innerText();
-  return headerRemainder(text.replace(new RegExp(STATUS_WORD_SOURCE, 'g'), ' '), [directory, basename(directory), ...shown]);
+  return headerRemainder(text.replace(TIME_TEXT, ' ').replace(new RegExp(STATUS_WORD_SOURCE, 'g'), ' '), [directory, basename(directory), ...shown]);
 }
 
 test('the card header shows the title the user gave the work in the terminal status bar, collapsed and expanded', { tag: '@ownapp' }, async () => {

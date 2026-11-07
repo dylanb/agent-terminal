@@ -8,7 +8,7 @@ export const ACTIVITY_WORDS: Readonly<Record<ControllerWorkStatus['activity'], s
   active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable',
 };
 
-const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
+export const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
 
 const SUMMARY_CLASS: Readonly<Record<SummaryLabel, CardStatusClass>> = {
   errors: 'error', 'need a human': 'needs-human', idle: 'idle', working: 'working',

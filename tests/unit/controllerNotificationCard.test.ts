@@ -16,7 +16,7 @@ it('shows a received message and receipt time separately from the current human-
   const card: ControllerDirectoryCard = directoryCards([terminal])[0];
   const host = document.createElement('main');
   document.body.append(host);
-  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {}, onDismissLoopMessage() {} });
+  const component = createControllerCard(host, { card, expandedByDefault: true, timeText: 'for 3m', onAction() {}, onDismissLoopMessage() {} });
   try {
     const pane = cardIn(host, terminal.launchDirectory)!;
     const [received] = timelineEntriesIn(pane);

@@ -91,6 +91,7 @@ const CARD_ORDER_TESTS = [
   'tests/unit/controllerRecentOrder.test.ts',
   'tests/unit/sortModeControl.test.ts',
   'tests/browser/controllerHold.test.ts',
+  'tests/browser/controllerAttentionReading.test.ts',
   'tests/e2e/controllerAttentionOrder.spec.ts',
   'tests/e2e/controllerRecentOrder.spec.ts',
   'tests/e2e/controllerRecency.spec.ts',

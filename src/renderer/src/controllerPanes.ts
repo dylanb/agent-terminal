@@ -3,14 +3,16 @@ import { directoryCards, type ControllerDirectoryCard } from '../../shared/contr
 import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
-import { createControllerCard, type ControllerCard } from './controllerCard';
-import type { ControllerLayout } from './controllerFrame';
+import { createControllerCard, type CardState, type ControllerCard } from './controllerCard';
+import { cardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from './controllerCardOrder';
+import type { ControllerClock, ControllerLayout } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
 import { createThemeToggle } from './themeToggle';
 
 export interface ControllerPanesDeps {
   controller: ControllerApi;
   layout: ControllerLayout;
+  clock: ControllerClock;
   applyTheme(theme: Theme): void;
 }
 
@@ -69,6 +71,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   let previousAttention = new Map<string, string>();
   let previousNotifications = new Map<string, NotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
+  let observations: CardObservations | undefined;
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
     const slot = doc.createElement('span');
@@ -96,6 +99,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     !deps.layout.oneColumn() || EXPANDED_IN_ONE_COLUMN.has(cardStatus(directory).statusClass);
   const applyLayout = () => { host.dataset.layout = deps.layout.oneColumn() ? 'one-column' : 'multi-column'; };
   applyLayout();
+  const unsubscribeClock = deps.clock.onTick(() => {
+    if (!observations) return;
+    const now = deps.clock.now();
+    for (const { directory, card } of cards) card.setTimeText(timeInStateText(directory, observations, now));
+  });
   const unsubscribeLayout = deps.layout.onChange(() => {
     applyLayout();
     for (const { directory, card } of cards) card.setExpandedByDefault(expandedFor(directory));
@@ -138,18 +146,19 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     previousNotifications = currentNotifications;
   }
 
-  const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
-    const directories = directoryCards(snapshot);
-    announceAttention(directories);
-    header.render(directories);
-    const restoreFocus = captureSubtreeFocus(list);
-    const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
-    cards.forEach(({ card }) => card.dispose());
-    list.replaceChildren();
-    cards = directories.map(directory => ({ directory, card: createControllerCard(list, {
+  function groupHeading({ name, count }: Extract<CardListEntry, { kind: 'heading' }>): HTMLElement {
+    const heading = doc.createElement('h2');
+    heading.className = 'controller-group-heading';
+    heading.textContent = `${name} (${count})`;
+    return heading;
+  }
+
+  function mountCard(directory: ControllerDirectoryCard, timeText: string, from: CardState | undefined): ControllerCard {
+    return createControllerCard(list, {
       card: directory,
       expandedByDefault: expandedFor(directory),
-      from: handover.get(directory.launchDirectory),
+      timeText,
+      from,
       onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
         alert.replaceChildren();
         return deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
@@ -181,7 +190,24 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
         if (directory.kind !== 'single') return;
         return deps.controller.dismissLoopMessage(directory.activationTargets[0], id).catch(announce);
       },
-    }) }));
+    });
+  }
+
+  const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
+    const directories = directoryCards(snapshot);
+    const now = deps.clock.now();
+    const observed = observations = observeCards(observations, directories, now);
+    announceAttention(directories);
+    header.render(directories);
+    const restoreFocus = captureSubtreeFocus(list);
+    const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
+    cards.forEach(({ card }) => card.dispose());
+    list.replaceChildren();
+    cards = [];
+    for (const entry of cardList(directories, observed)) {
+      if (entry.kind === 'heading') list.append(groupHeading(entry));
+      else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
+    }
     if (!directories.length) {
       const empty = doc.createElement('p');
       empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
@@ -195,6 +221,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
+      unsubscribeClock();
       alwaysOnTopControl.dispose();
       themeToggle?.dispose();
       cards.forEach(({ card }) => card.dispose());

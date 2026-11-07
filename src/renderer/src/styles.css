@@ -597,6 +597,8 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-pane-list { display:grid; gap:var(--r); align-items:start; grid-template-columns:repeat(auto-fit, minmax(min(18rem, calc((100% - var(--r)) / 2)), 1fr)); }
 .controller-panes[data-layout="one-column"] .controller-pane-list { grid-template-columns:minmax(0, 1fr); }
 .controller-pane-list > p { margin:0; }
+.controller-group-heading { grid-column:1 / -1; margin:var(--r) 0 0; font-size:13px; font-weight:600; color:var(--text); }
+.controller-group-heading:first-child { margin-top:0; }
 .controller-panes [data-status="error"] { --card-accent:var(--status-error); --card-text:var(--status-error-text); }
 .controller-panes [data-status="needs-human"] { --card-accent:var(--status-needs-human); --card-text:var(--status-needs-human-text); }
 .controller-panes [data-status="working"] { --card-accent:var(--status-working); --card-text:var(--status-working-text); }

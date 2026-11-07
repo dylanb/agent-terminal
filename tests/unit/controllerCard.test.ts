@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
+import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardHeadingLevelsIn, cardIn, headerStatusIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
+
+const TIME_TEXT = 'for 3m';
 
 function mount(terminal: ControllerTerminal, expanded = true) {
   const host = document.createElement('div');
@@ -18,6 +20,7 @@ function mount(terminal: ControllerTerminal, expanded = true) {
   const deps = {
     card: directoryCards([terminal])[0],
     expandedByDefault: expanded,
+    timeText: TIME_TEXT,
     onAction() { calls[terminal.status === 'disconnected' ? 'dismiss' : 'bringForward'] += 1; },
     onDismissLoopMessage(id: string) { loopMessageDismissals.push(id); },
   };
@@ -48,12 +51,40 @@ describe('controller card header', () => {
 });
 
 describe('controller card header control', () => {
-  it.each([true, false])('exposes expanded=%s on a header control named with the directory, with the status in a collapsed header', expanded => {
+  it.each([true, false])('exposes expanded=%s on a header control named with the directory, its status then its time in state in the header', expanded => {
     const { terminal, text } = STATUS_CASES.working;
     const { element } = mount(terminal, expanded);
     const header = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
-    expect({ state: header?.getAttribute('aria-expanded'), label: expanded || (header?.textContent?.includes(text) ?? false) })
+    expect({ state: header?.getAttribute('aria-expanded'), label: element ? headerStatusIn(element, terminal.launchDirectory).endsWith(`${text} · ${TIME_TEXT}`) : false })
       .toEqual({ state: String(expanded), label: true });
+  });
+
+  it.each([true, false])('shows a duplicate-directory card\'s status, instance count and time in state in the header (expanded=%s)', expanded => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const [a, b] = [STATUS_CASES.idle.terminal, { ...STATUS_CASES.idle.terminal, id: 'peer' }];
+    createControllerCard(host, { card: directoryCards([a, b])[0], expandedByDefault: expanded, timeText: 'for 12m', onAction() {}, onDismissLoopMessage() {} });
+    const element = cardIn(host, a.launchDirectory);
+    expect(element ? headerStatusIn(element, a.launchDirectory) : 'no card').toMatch(/Duplicate directory · 2 instances · for 12m$/);
+  });
+
+  it('names the card with a level-3 heading', () => {
+    const { element } = mount(STATUS_CASES.idle.terminal);
+    expect(element ? cardHeadingLevelsIn(element) : 'no card').toEqual([3]);
+  });
+
+  it('shows a new time in state in place, keeping the card, its focus and its expanded state', () => {
+    const { terminal, text } = STATUS_CASES['needs-human'];
+    const { element, card } = mount(terminal, false);
+    const header = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    header?.focus();
+    card.setTimeText('waiting 1h 4m');
+    const now = cardIn(document.body, terminal.launchDirectory);
+    expect({
+      label: now ? headerStatusIn(now, terminal.launchDirectory).endsWith(`${text} · waiting 1h 4m`) : false,
+      focused: Boolean(header) && document.activeElement === header,
+      expanded: header?.getAttribute('aria-expanded'),
+    }).toEqual({ label: true, focused: true, expanded: 'false' });
   });
 
   it('collapses and expands the card on each header click, and never brings it forward', () => {
@@ -247,7 +278,7 @@ describe('controller card action while its work is being answered', () => {
   function mountPending(terminal: ControllerTerminal, host = document.body.appendChild(document.createElement('div'))) {
     const answers: Array<() => void> = [];
     const answer = () => new Promise<void>(done => { answers.push(done); });
-    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, onAction: answer, onDismissLoopMessage() {} });
+    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT, onAction: answer, onDismissLoopMessage() {} });
     return { host, card, answers };
   }
 
@@ -276,7 +307,7 @@ describe('controller card action while its work is being answered', () => {
     const state = old.state();
     old.dispose();
     const later: string[] = [];
-    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, from: state, onAction() { later.push('pressed'); }, onDismissLoopMessage() {} });
+    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT, from: state, onAction() { later.push('pressed'); }, onDismissLoopMessage() {} });
     const rebuilt = cardIn(host, terminal.launchDirectory);
     const control = rebuilt ? bringForwardIn(rebuilt) : undefined;
     control?.click();
@@ -291,14 +322,13 @@ describe('controller card action while its work is being answered', () => {
 describe('controller card identity', () => {
   const identity = { title: 'Reconcile the card identity', branch: 'feature/identity-slots' };
   const named = (terminal: ControllerTerminal, status: string) =>
-    [terminal.repositoryRoot?.split('/').at(-1) ?? '', terminal.launchDirectory, status];
+    [terminal.repositoryRoot?.split('/').at(-1) ?? '', terminal.launchDirectory, `${status} · ${TIME_TEXT}`];
 
   it.each([true, false])('shows the repository name, title, branch and status in the header, in that order (expanded=%s)', expanded => {
     const terminal = withWork({ ...identity, activity: 'quiet' });
     const { element } = mount(terminal, expanded);
     const header = element ? cardHeaderTextIn(element) : '';
-    const order = expanded ? ['repository', identity.title, identity.branch] : ['repository', identity.title, identity.branch, 'Idle'];
-    expect(missingInOrder(header, order)).toEqual([]);
+    expect(missingInOrder(header, ['repository', identity.title, identity.branch, `Idle · ${TIME_TEXT}`])).toEqual([]);
   });
 
   it.each([true, false])('shows neither a title slot nor a branch slot, and no placeholder, when the terminal has none (expanded=%s)', expanded => {
@@ -308,18 +338,18 @@ describe('controller card identity', () => {
     expect({
       leftover: headerRemainder(header, named(terminal, 'Idle')),
       name: header.includes('repository'),
-      status: expanded || header.includes('Idle'),
+      status: header.includes(`Idle · ${TIME_TEXT}`),
     }).toEqual({ leftover: '', name: true, status: true });
   });
 
-  it.each([true, false])('shows the name and status alone for a terminal that does not report title or branch (expanded=%s)', expanded => {
+  it.each([true, false])('shows the name, status and time in state alone for a terminal that does not report title or branch (expanded=%s)', expanded => {
     const terminal = withWork({ activity: 'quiet' });
     const { element } = mount(terminal, expanded);
     const header = element ? cardHeaderTextIn(element) : '';
     expect({
       leftover: headerRemainder(header, named(terminal, 'Idle')),
       name: header.includes('repository'),
-      status: expanded || header.includes('Idle'),
+      status: header.includes(`Idle · ${TIME_TEXT}`),
     }).toEqual({ leftover: '', name: true, status: true });
   });
 
@@ -356,7 +386,7 @@ describe('controller card timeline', () => {
     document.body.append(host);
     let cleared = 0;
     const card = createControllerCard(host, {
-      card: directoryCards([terminal])[0], expandedByDefault: true,
+      card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT,
       onAction() {}, onDismissLoopMessage() {}, onClearHistory() { cleared += 1; },
     });
     return { card, element: cardIn(host, terminal.launchDirectory)!, cleared: () => cleared };
@@ -420,7 +450,7 @@ describe('controller card timeline', () => {
     const host = document.createElement('div');
     document.body.append(host);
     const [a, b] = [withTimeline(timeline), { ...withTimeline(timeline), id: 'peer' }];
-    const component = createControllerCard(host, { card: directoryCards([a, b])[0], expandedByDefault: true, onAction() {}, onDismissLoopMessage() {} });
+    const component = createControllerCard(host, { card: directoryCards([a, b])[0], expandedByDefault: true, timeText: TIME_TEXT, onAction() {}, onDismissLoopMessage() {} });
     try {
       expect(timelineEntriesIn(cardIn(host, a.launchDirectory)!)).toEqual([]);
     } finally { component.dispose(); }

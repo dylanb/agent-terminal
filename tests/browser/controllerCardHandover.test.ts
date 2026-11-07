@@ -21,7 +21,7 @@ function setup() {
   document.body.append(host);
   let current: ControllerCard | undefined;
   const build = (terminal: ControllerTerminal, from?: ReturnType<ControllerCard['state']>, expandedByDefault = true) => {
-    current = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault, onAction() {}, onDismissLoopMessage() {}, from });
+    current = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault, timeText: 'for 3m', onAction() {}, onDismissLoopMessage() {}, from });
     return current;
   };
   const replace = (terminal: ControllerTerminal, expandedByDefault = true) => {

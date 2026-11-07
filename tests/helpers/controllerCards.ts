@@ -230,9 +230,12 @@ function paintedStatus(card: Element, { classes, accentTestId, statusTestId }: P
       return matches.length === 1 ? matches[0] : `${matches.join(' or ') || 'no status class'} painted ${painted}`;
     };
     const row = card.querySelector(`[data-testid="${statusTestId}"]`);
-    const label = row?.checkVisibility()
-      ? row
-      : [...card.querySelectorAll('header *')].filter(element => element.textContent === row?.textContent).at(-1);
+    const written = row?.textContent ?? '';
+    const labels = (element: Element): boolean => {
+      const text = element.textContent ?? '';
+      return text.startsWith(written) && (text.length === written.length || text.startsWith(' · ', written.length));
+    };
+    const label = row?.checkVisibility() ? row : row && [...card.querySelectorAll('header *')].filter(labels).at(-1);
     return { accent: classOf(card.querySelector(`[data-testid="${accentTestId}"]`), 'backgroundColor', ''), text: classOf(label, 'color', '-text') };
   } finally {
     probe.remove();
@@ -262,7 +265,10 @@ export const cardHeadingLevelsIn = (card: ParentNode): number[] => roleMatches(c
 
 /** The status text a card header shows, with its time in state: `· <verb> <duration>`, then ` · position held`
  *  while the card is held. Matched against the end of the header toggle's text. */
-export const TIME_LABEL_FORMAT = / · (?:waiting|running|for) (?:under 1m|\d+m|\d+h \d+m|\d+d \d+h)(?: · position held)?$/;
+const TIME_TEXT_SOURCE = '(?:waiting|running|for) (?:under 1m|\\d+m|\\d+h \\d+m|\\d+d \\d+h)';
+export const TIME_LABEL_FORMAT = new RegExp(` · ${TIME_TEXT_SOURCE}(?: · position held)?$`);
+/** Every time-in-state text in a string (`waiting 41m`, `for under 1m`), for stripping it from header text. */
+export const TIME_TEXT = new RegExp(TIME_TEXT_SOURCE, 'g');
 /** The visible text of the card's header toggle — name, identity and status label — whitespace collapsed. */
 export function headerStatusIn(card: ParentNode, directory: string): string {
   const header = cardHeaderIn(card, directory);

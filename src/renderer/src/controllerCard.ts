@@ -9,6 +9,7 @@ import { createPressGroup, onPress, type PressGroup } from './pressable';
 export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
+  timeText: string;
   onAction(): void | Promise<unknown>;
   onClearHistory?(): void | Promise<unknown>;
   onDismissLoopMessage(id: string): void | Promise<unknown>;
@@ -25,6 +26,7 @@ export interface CardState {
 
 export interface ControllerCard {
   setExpandedByDefault(expanded: boolean): void;
+  setTimeText(text: string): void;
   state(): CardState;
   focusTarget(): HTMLElement | undefined;
   header(): HTMLElement;
@@ -82,7 +84,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const header = element('header', 'controller-card-header');
   const accent = element('span', 'controller-card-accent');
   accent.dataset.testid = 'card-accent';
-  const heading = element('h2', 'controller-card-heading');
+  const heading = element('h3', 'controller-card-heading');
   heading.id = headingId;
   const directory = element('p', 'controller-card-directory mono');
   directory.id = directoryId;
@@ -90,7 +92,9 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const directoryText = element('bdi', '', model.launchDirectory);
   directoryText.dir = 'ltr';
   directory.append(directoryText);
-  const statusLabel = element('span', 'controller-card-label', statusText);
+  const statusLabel = element('span', 'controller-card-label');
+  const showTime = (timeText: string) => { statusLabel.textContent = `${statusText} · ${timeText}`; };
+  showTime(deps.timeText);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
   toggle.id = toggleId;
@@ -101,6 +105,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   for (const text of model.kind === 'single' ? [work?.title, work?.branch] : []) {
     if (text) toggle.append(' · ', element('span', 'controller-card-identity', text));
   }
+  toggle.append(statusLabel);
   heading.append(toggle);
   header.append(accent, heading);
 
@@ -209,8 +214,6 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     expanded = next;
     toggle.setAttribute('aria-expanded', String(expanded));
     body.hidden = !expanded;
-    if (expanded) statusLabel.remove();
-    else toggle.append(statusLabel);
     if (held && !expanded) toggle.focus();
   }
   setExpanded(expanded);
@@ -243,6 +246,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
+    setTimeText: showTime,
     state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
