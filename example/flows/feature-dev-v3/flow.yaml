@@ -8,7 +8,6 @@ steps:
     gate_authority: auto
     loop: groom-intent-loop
     loop_namespace: app
-    todo_template: ticket-grooming
     inputs:
       - name: ticket
         type: github-ticket
