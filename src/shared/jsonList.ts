@@ -1,15 +1,11 @@
-// The `json-list` artifact contract (§28.4.1): a JSON object whose named key holds a non-empty array of entries,
-// each an object with a `title`.
-
-/** The rules the document as a whole can break, in the order they are checked. */
+/** The rules the document as a whole can break. */
 export const JSON_LIST_DOCUMENT_RULES = ['parses', 'top-level-object', 'key-present', 'value-array', 'at-least-one-entry'] as const;
 export type JsonListDocumentRule = (typeof JSON_LIST_DOCUMENT_RULES)[number];
 
-/** The rules one entry can break, in the order they are checked, after every document rule. */
+/** The rules one entry can break. */
 export const JSON_LIST_ENTRY_RULES = ['entry-object', 'title-string', 'title-not-blank', 'title-no-control-character'] as const;
 export type JsonListEntryRule = (typeof JSON_LIST_ENTRY_RULES)[number];
 
-/** The `json-list` shape: the key each entry carries its title under. */
 export const JSON_LIST_SHAPE = {
   entryTitleKey: 'title',
 } as const;

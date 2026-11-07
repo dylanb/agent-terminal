@@ -8,7 +8,6 @@ import { stripDisplayControlChars } from '../shared/controlChars';
 import { checkJsonList, type JsonListCheck, type JsonListDocumentRule, type JsonListEntryRule } from '../shared/jsonList';
 
 export interface CheckRepeatListDeps {
-  /** The caller's working directory, which a relative `<file>` resolves against. */
   cwd: () => string;
 }
 

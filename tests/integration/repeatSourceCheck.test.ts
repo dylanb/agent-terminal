@@ -122,10 +122,12 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     start: () => ReturnType<ReturnType<typeof composeStartTransition>>;
     persistedStatus: () => string | null;
     status: () => string;
+    autoBound: () => boolean;
   }
 
-  /** A repository whose active flow is `spec` (a catalog entry), with `work-loop` in the operator tier's shared
-   *  folder, and the production Start composed over the app-shaped loop tiers. */
+  /** A repository whose active flow is `spec` (a catalog entry) with every loop step's gate auto, so a run the auto
+   *  gate holds is observable, `work-loop` in the operator tier's shared folder, and the production Start composed
+   *  over the app-shaped loop tiers. */
   function rig(spec: FlowSpec): Rig {
     const repo = tmp('repeat-source-start-repo-');
     const globalDir = tmp('repeat-source-start-global-');
@@ -133,7 +135,8 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     const appBundled = tmp('repeat-source-start-bundled-');
     const tiers: LoopDefV2Tiers = { operator, appBundled, retired: null };
     writeLoopDef(operator, 'work-loop', { outputs: { result: 'result.md' } });
-    writeFlow(flowLocations.repoCatalogEntry(repo, FLOW_ID), spec);
+    const steps = spec.steps.map((s): FlowStepSpec => (s.kind === 'loop' ? { ...s, gateAuthority: 'auto' } : s));
+    writeFlow(flowLocations.repoCatalogEntry(repo, FLOW_ID), { ...spec, steps });
     writeActiveFlow(repo, FLOW_ID);
     const resolve = createRunResolver(globalDir);
     const flow = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
@@ -169,6 +172,7 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
       start: () => flowStart(repo),
       persistedStatus: () => createFlowStateStore(repo).read()?.status ?? null,
       status: () => flow.state(repo).status,
+      autoBound: () => gate.isAutoRun(repo),
     };
   }
 
@@ -182,15 +186,17 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
       noticeNamesArtifact: notice.includes(artifact),
       statusAfter: r.status(),
       persisted: r.persistedStatus(),
+      autoBound: r.autoBound(),
     };
   };
-  const REFUSED = { status: 'not_started', noticeNamesStep: true, noticeNamesArtifact: true, statusAfter: 'not_started', persisted: null };
+  const REFUSED = { status: 'not_started', noticeNamesStep: true, noticeNamesArtifact: true, statusAfter: 'not_started', persisted: null, autoBound: false };
 
   it('finds a source loop held only in the run\'s own flow folder, so Start goes ahead; with that loop gone, Start is refused and persists nothing', () => {
     const spec = flowSpec(FLOW_NAME, listForm('steps'), [['design', 'source-loop']]);
     const found = rig(spec);
     writeLoopDef(found.operator, 'source-loop', { artifact: 'steps', outputs: { steps: 'steps.json' } }, { flow: FLOW_NAME });
     expect.soft(found.start().status).toBe('in_progress');
+    expect.soft(found.autoBound()).toBe(true);
 
     const missing = rig(spec);
     writeLoopDef(missing.operator, 'other-loop', { artifact: 'steps', outputs: { steps: 'steps.json' } }, { flow: FLOW_NAME });
@@ -204,6 +210,7 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     const resolved = rig(spec);
     writeLoopDef(resolved.operator, 'source-loop', { artifact: 'steps', outputs: { steps: 'steps.json' } });
     expect.soft(resolved.start().status).toBe('in_progress');
+    expect.soft(resolved.autoBound()).toBe(true);
   });
 
   const RLO = String.fromCodePoint(0x202e);

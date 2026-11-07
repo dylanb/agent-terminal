@@ -12,6 +12,7 @@ import { isTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../sr
 import { LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from '../../src/main/appLoopPaths';
 import { flowLoopsDir, resolveLoopDefV2, type LoopDefV2Lookup } from '../../src/main/loopDefV2';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import type { GateAuthority } from '../../src/shared/gateAuthority';
 import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { APP_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
 import { LOOP_DEF_V2_VERSION } from '../../src/shared/engineCapabilities/loop';
@@ -55,6 +56,8 @@ export type FlowStepSpec =
       namespace?: string;
       todoTemplate?: string;
       repeat?: RepeatSpec;
+      /** Written as `gate_authority`. */
+      gateAuthority?: GateAuthority;
     };
 
 export interface FlowSpec {
@@ -81,6 +84,7 @@ function stepDoc(step: FlowStepSpec): Record<string, unknown> {
     loop_namespace: step.namespace ?? APP_LOOP_NAMESPACE,
     ...template,
     ...(step.repeat === undefined ? {} : { repeat: repeatDoc(step.repeat) }),
+    ...(step.gateAuthority === undefined ? {} : { gate_authority: step.gateAuthority }),
   };
 }
 

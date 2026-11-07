@@ -8,7 +8,6 @@ import { countToSource, repeatListTitles, type RepeatListSpec } from '../shared/
 export interface RepeatSourcerDeps {
   flow: FlowManager;
   readArtifact(path: string): string | null;
-  /** The repeat declaration of the run bound in `repoDir`, if its flow has one. */
   repeatOf(repoDir: string): FlowStepDef['repeat'];
 }
 

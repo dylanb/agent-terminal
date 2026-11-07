@@ -25,7 +25,6 @@ export interface StartTransitionDeps {
   start: (repoKey: string, opts: { startedAt: number; run?: StartRun }) => FlowStateView;
   /** §28.4.1 — why `run` may not start in `repoKey`, or null when it may. */
   countSourceRefusal: (repoKey: string, run: StartRun) => string | null;
-  /** The flow's view as it stands, which a refused Start returns. */
   state: (repoKey: string) => FlowStateView;
   now: () => number;
   record: RecordFlowTransition;
@@ -57,7 +56,6 @@ export function composeStartTransition(deps: StartTransitionDeps): (repoKey: str
   };
 }
 
-/** The Start check of a list-form repeat's count source, resolving each loop through the app's loop tiers. */
 export function composeCountSourceRefusal(tiers: LoopDefV2Tiers): StartTransitionDeps['countSourceRefusal'] {
   return (repoKey, run) =>
     countSourceRefusal(run.definition, (step) => {
@@ -67,7 +65,6 @@ export function composeCountSourceRefusal(tiers: LoopDefV2Tiers): StartTransitio
     });
 }
 
-/** The one loop lookup a run's steps resolve through: the app's tiers, the repository, and the run's flow name. */
 export function loopLookupContext(tiers: LoopDefV2Tiers, repoDir: string, flow: string | undefined): LoopDefV2Context {
   return { tiers, repoDir, ...(flow === undefined ? {} : { flow }) };
 }
