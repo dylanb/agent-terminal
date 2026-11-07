@@ -5,13 +5,19 @@ import {
   type GitHubRepositoryIdentity,
 } from './githubRepository';
 import { isRecord } from './yamlRecord';
-import { isGitObjectId } from '../shared/appBootstrap';
+import { isGitObjectId, type TicketRef } from '../shared/appBootstrap';
+import { acceptableTickets } from './adoptionStart';
+import { headRepositoryName } from './adoptionPorts';
 
 export interface PullRequest {
   number: number;
   branch: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
+  /** The numbers of the tickets it closes in origin. */
   closingIssues: number[];
+  /** The tickets it closes in origin or a fork's head repository, each with its repository; a ticket elsewhere is
+   *  left out. Absent when the source does not say which repository a ticket is in. */
+  closingTickets?: TicketRef[];
   crossRepository: boolean;
 }
 
@@ -31,17 +37,21 @@ export function pickupMismatch(pr: PullRequest, pickup: { pr: number; branch: st
   return null;
 }
 
-export function createRealPullRequestLookup(repoDir: string): PullRequestLookup {
+/** What a PR read does with a closing ticket outside origin and a fork's head repository: a ticket run's identity
+ *  check refuses the PR, as it always has; an adopting run ignores the ticket, as its start and publish do. */
+export type TicketsElsewhere = 'refuse' | 'ignore';
+
+export function createRealPullRequestLookup(repoDir: string, ticketsElsewhere: TicketsElsewhere = 'refuse'): PullRequestLookup {
   const repositorySource = createGitHubRepositorySource(repoDir);
   return {
     async pullRequest(number) {
       const identity = await repositorySource.resolve();
       const viewed = await runAppCommand(
         'gh',
-        ['pr', 'view', String(number), '--repo', identity.selector, '--json', 'number,url,headRefName,state,closingIssuesReferences,isCrossRepository'],
+        ['pr', 'view', String(number), '--repo', identity.selector, '--json', 'number,url,headRefName,state,closingIssuesReferences,isCrossRepository,headRepository,headRepositoryOwner'],
         repoDir,
       );
-      return parsePullRequest(parseJson(viewed, 'invalid GitHub pull request identity'), number, identity);
+      return parsePullRequest(parseJson(viewed, 'invalid GitHub pull request identity'), number, identity, ticketsElsewhere);
     },
     async openForBranch(branch) {
       const identity = await repositorySource.resolve();
@@ -107,7 +117,7 @@ function parseJson(text: string, invalid: string): unknown {
   }
 }
 
-function parsePullRequest(value: unknown, expectedNumber: number, repository: GitHubRepositoryIdentity): PullRequest {
+function parsePullRequest(value: unknown, expectedNumber: number, repository: GitHubRepositoryIdentity, ticketsElsewhere: TicketsElsewhere): PullRequest {
   if (
     !isRecord(value) ||
     value.number !== expectedNumber ||
@@ -120,17 +130,15 @@ function parsePullRequest(value: unknown, expectedNumber: number, repository: Gi
   ) {
     throw new Error('invalid GitHub pull request identity');
   }
-  const closingIssues = value.closingIssuesReferences.map((entry) => {
-    if (
-      !isRecord(entry) ||
-      !Number.isSafeInteger(entry.number) ||
-      (entry.number as number) <= 0 ||
-      typeof entry.url !== 'string' ||
-      !matchesGitHubRepositoryUrl(entry.url, repository, 'issues', entry.number as number)
-    ) {
+  const references = value.closingIssuesReferences.map((entry) => {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.number) || (entry.number as number) <= 0 || typeof entry.url !== 'string') {
       throw new Error('invalid GitHub closing issue identity');
     }
-    return entry.number as number;
+    return { url: entry.url, number: entry.number as number };
   });
-  return { number: expectedNumber, branch: value.headRefName, state: value.state, closingIssues, crossRepository: value.isCrossRepository };
+  const headRepo = value.isCrossRepository ? headRepositoryName(value.headRepository, value.headRepositoryOwner) : null;
+  const closingTickets = acceptableTickets({ headRepo, closingIssues: references }, repository);
+  if (ticketsElsewhere === 'refuse' && closingTickets.length !== references.length) throw new Error('invalid GitHub closing issue identity');
+  const closingIssues = references.filter((r) => matchesGitHubRepositoryUrl(r.url, repository, 'issues', r.number)).map((r) => r.number);
+  return { number: expectedNumber, branch: value.headRefName, state: value.state, closingIssues, closingTickets, crossRepository: value.isCrossRepository };
 }

@@ -19,7 +19,7 @@ import {
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from '../../src/main/bootstrapPorts';
-import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
+import type { AdoptedPickup, AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { BUSY_NOTICE } from '../../src/main/flowEntryActions';
 
 const PREEXISTING_OID = 'a'.repeat(40);
@@ -964,23 +964,23 @@ describe('resolveAppGateRefs — live bootstrap identity routing', () => {
   };
 
   it('supplies the generated PR to the matching ticket gate', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('keeps the accepted issue authoritative over mutable flow refs', () => {
-    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('keeps the accepted bootstrap PR authoritative over mutable flow state', () => {
-    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78, pickup: identity });
   });
 
   it('carries the accepted identity into the gate side-effect context', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, identity).bootstrap).toBe(identity);
+    expect(resolveAppGateRefs({ ticket: 78 }, identity).pickup).toBe(identity);
   });
 
   it('reports no identity to the gate when nothing was accepted', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, bootstrap: null });
+    expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, pickup: null });
   });
 });
 
@@ -1008,6 +1008,50 @@ describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s i
     expect(resolvePickupBranch(invalid, null, 77)).toEqual({ kind: 'unreadable', detail: invalid.detail });
     expect(resolvePickupBranch(invalid, accepted, 78)).toEqual({ kind: 'unreadable', detail: invalid.detail });
   });
+
+  it("holds an adopting run to its fix branch, naming the PR and the primary ticket with its repository, before and after a relaunch (#304 AC 5)", () => {
+    const adopted: AdoptedPickup = {
+      kind: 'adopted',
+      pr: 41,
+      host: 'github.com',
+      fixBranch: 'agent-terminal/review-pr-41-1700000000000',
+      startedAt: 1_700_000_000_000,
+      headRef: 'feature/reviewed-change',
+      baseRef: 'main',
+      headRepo: 'contributor/fork',
+      crossRepository: true,
+      tickets: [{ repo: 'owner/repo', number: 176 }],
+      primary: { repo: 'owner/repo', number: 176 },
+      headOid: 'a'.repeat(40),
+      baseOid: 'b'.repeat(40),
+    };
+    const held = { kind: 'fix-branch', branch: adopted.fixBranch, pr: 41, primary: { repo: 'owner/repo', number: 176 } };
+    const record = { kind: 'complete', bootstrap: adopted } as const;
+
+    expect.soft(resolvePickupBranch({ kind: 'none' }, adopted, null, 41)).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, null, 41, adopted.startedAt)).toEqual(held);
+    expect.soft(resolvePickupBranch(record, null, null, 42, adopted.startedAt)).toEqual({ kind: 'none' });
+  });
+
+  it("after a relaunch, does not hold an adopting run to an earlier run's fix branch on the same PR (#304 AC 13)", () => {
+    const earlier: AdoptedPickup = {
+      kind: 'adopted',
+      pr: 41,
+      host: 'github.com',
+      fixBranch: 'agent-terminal/review-pr-41-1700000000000',
+      startedAt: 1_700_000_000_000,
+      headRef: 'feature/reviewed-change',
+      baseRef: 'main',
+      headRepo: 'owner/repo',
+      crossRepository: false,
+      tickets: [{ repo: 'owner/repo', number: 176 }],
+      primary: { repo: 'owner/repo', number: 176 },
+      headOid: 'a'.repeat(40),
+      baseOid: 'b'.repeat(40),
+    };
+
+    expect(resolvePickupBranch({ kind: 'complete', bootstrap: earlier }, null, null, 41, 1_700_000_099_999)).toEqual({ kind: 'none' });
+  });
 });
 
 function job(over: Partial<AppLoopBootstrapJob> = {}): AppLoopBootstrapJob {
@@ -1034,6 +1078,9 @@ function deferDepDefaults() {
     triggerWork: vi.fn(),
     cancelWork: vi.fn(),
     armDeferDeadline: (_onLapse: () => void) => () => {},
+    adopt: async (): Promise<never> => {
+      throw new Error('a ticket-run pickup never adopts a pull request');
+    },
   };
 }
 
@@ -1077,6 +1124,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
     return {
@@ -1085,6 +1133,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
       acceptBootstrap,
       compensateBootstrap,
@@ -1139,6 +1188,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1177,6 +1227,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1226,6 +1277,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1294,6 +1346,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1323,6 +1376,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1346,6 +1400,96 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       reason: expect.stringMatching(/ticket|issue/i),
     });
     expect(x.enterWork).not.toHaveBeenCalled();
+  });
+
+  it('reuses an adopted pickup for the same PR without adopting it again', () => {
+    const enterWork = vi.fn(() => 'entered' as const);
+    const adopt = vi.fn(async (): Promise<never> => {
+      throw new Error('the adoption must not run again');
+    });
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt,
+      run: vi.fn(async () => success),
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: (candidate) => candidate.bootstrap !== null && 'adopt' in candidate.bootstrap && candidate.bootstrap.pr === 41,
+      isCurrentJob: () => true,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep: () => true,
+      enterWork,
+      emitError: vi.fn(),
+      emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
+      audit: vi.fn(),
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+
+    expect(adopt).not.toHaveBeenCalled();
+    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1);
+  });
+
+  it('rolls back an adopt-form step whose flow names no PR, naming the pr input', async () => {
+    const x = coordinator(success);
+    x.c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: null } }));
+    await vi.waitFor(() => expect(x.rollbackStep).toHaveBeenCalledWith(expect.objectContaining({ repoDir: '/repo', stepId: 'plan', entryToken: 1 })));
+    expect(x.emitError).toHaveBeenCalledWith({ repoDir: '/repo', stepId: 'plan', reason: expect.stringMatching(/\bpr input\b/) });
+    expect(x.enterWork).not.toHaveBeenCalled();
+  });
+
+  it('tells the operator a stale adoption removed its fix branch, never a draft PR', async () => {
+    const emitError = vi.fn();
+    const compensateBootstrap = vi.fn(async () => {});
+    let current = true;
+    const ownership = { kind: 'adopted' as const, fixBranch: 'agent-terminal/review-pr-41-1700000000000', headOid: 'a'.repeat(40) };
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt: async () => {
+        current = false;
+        return {
+          ok: true,
+          identity: {
+            kind: 'adopted',
+            pr: 41,
+            host: 'github.com',
+            fixBranch: ownership.fixBranch,
+            startedAt: 1_700_000_000_000,
+            headRef: 'feature/reviewed-change',
+            baseRef: 'main',
+            headRepo: 'owner/repo',
+            crossRepository: false,
+            tickets: [{ repo: 'owner/repo', number: 176 }],
+            primary: { repo: 'owner/repo', number: 176 },
+            headOid: ownership.headOid,
+            baseOid: 'b'.repeat(40),
+          },
+          ownership,
+        };
+      },
+      run: vi.fn(async () => success),
+      compensateBootstrap,
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => current,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep: () => true,
+      enterWork: vi.fn(() => 'entered' as const),
+      emitError,
+      emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
+      audit: vi.fn(),
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+
+    await vi.waitFor(() => expect(emitError).toHaveBeenCalled());
+    expect(compensateBootstrap).toHaveBeenCalledWith(expect.anything(), ownership);
+    const reason = String((emitError.mock.calls[0]?.[0] as { reason: string }).reason);
+    expect.soft(reason).toContain(ownership.fixBranch);
+    expect.soft(reason).not.toMatch(/draft PR/i);
   });
 
   it('compensates a stale success instead of entering work against a different step', async () => {
@@ -1396,6 +1540,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1436,6 +1581,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'busy' as const),
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1467,6 +1613,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1503,6 +1650,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1549,6 +1697,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: () => 'busy',
       emitError: vi.fn(),
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1590,6 +1739,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: () => 'busy',
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1624,6 +1774,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       },
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1685,6 +1836,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1763,6 +1915,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1800,6 +1953,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1833,6 +1987,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
     });
 
@@ -1882,6 +2037,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
       enterWork,
       emitError,
       emitConflict,
+      emitTicketChoice: vi.fn(),
       audit,
     });
     return {
@@ -2085,6 +2241,7 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (AC10)',
       enterWork,
       emitError,
       emitConflict: vi.fn(),
+      emitTicketChoice: vi.fn(),
       audit,
       inject: (text: string, onComplete: () => void) => {
         injected.push(text);
@@ -2172,5 +2329,125 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (AC10)',
     expect(x.injected).toEqual([]);
     expect(x.emitNotice).not.toHaveBeenCalled();
     expect(x.triggerWork).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAppLoopBootstrapCoordinator — the ticket choice of an adopting step (#304 AC 4)', () => {
+  it('refuses an answer once the step is no longer current, adopting nothing and rolling nothing back', async () => {
+    let current = true;
+    const emitTicketChoice = vi.fn();
+    const adopt = vi.fn(async () => ({ ok: false as const, kind: 'choose-ticket' as const, pr: 41, tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }] }));
+    const rollbackStep = vi.fn(() => true);
+    const audit = vi.fn();
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt,
+      run: vi.fn(async (): Promise<never> => {
+        throw new Error('an adopting step never runs a ticket pickup');
+      }),
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => current,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep,
+      enterWork: vi.fn(() => 'entered' as const),
+      emitError: vi.fn(),
+      emitConflict: vi.fn(),
+      emitTicketChoice,
+      audit,
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+    await vi.waitFor(() => expect(emitTicketChoice).toHaveBeenCalledTimes(1));
+    const { choiceId } = emitTicketChoice.mock.calls[0]?.[0] as { choiceId: string };
+    current = false;
+
+    expect.soft(c.resolveTicket('/repo', 'plan', choiceId, { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 177 } })).toMatchObject({ ok: false });
+    expect.soft(adopt).toHaveBeenCalledTimes(1);
+    expect.soft(rollbackStep).not.toHaveBeenCalled();
+    expect.soft(audit).toHaveBeenCalledWith('/repo', 'stale', 'plan');
+    expect.soft(audit.mock.calls.filter((call) => call[1] === 'rollback' || call[1] === 'rollback-failed')).toEqual([]);
+  });
+
+  it('Cancel rolls the step back and records the cancelled ticket choice, without an error', async () => {
+    const emitTicketChoice = vi.fn();
+    const emitError = vi.fn();
+    const audit = vi.fn();
+    const adopt = vi.fn(async () => ({ ok: false as const, kind: 'choose-ticket' as const, pr: 41, tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }] }));
+    const rollbackStep = vi.fn(() => true);
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt,
+      run: vi.fn(async (): Promise<never> => {
+        throw new Error('an adopting step never runs a ticket pickup');
+      }),
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => true,
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep,
+      enterWork: vi.fn(() => 'entered' as const),
+      emitError,
+      emitConflict: vi.fn(),
+      emitTicketChoice,
+      audit,
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+    await vi.waitFor(() => expect(emitTicketChoice).toHaveBeenCalledTimes(1));
+    const { choiceId } = emitTicketChoice.mock.calls[0]?.[0] as { choiceId: string };
+
+    expect.soft(c.resolveTicket('/repo', 'plan', choiceId, { kind: 'cancel' })).toEqual({ ok: true });
+    expect.soft(adopt).toHaveBeenCalledTimes(1);
+    expect.soft(rollbackStep).toHaveBeenCalledTimes(1);
+    expect.soft(audit).toHaveBeenCalledWith('/repo', 'rollback', 'plan', 'operator cancelled the ticket choice');
+    expect.soft(audit.mock.calls.filter((call) => call[1] === 'rollback-failed' || call[1] === 'stale')).toEqual([]);
+    expect.soft(emitError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a pick', { kind: 'ticket' as const, ticket: { repo: 'contributor/fork', number: 177 } }],
+    ['Cancel', { kind: 'cancel' as const }],
+  ])('rolls the step back with the reason when %s answers a step whose currency cannot be checked', async (_answer, answer) => {
+    let check: () => boolean = () => true;
+    const emitTicketChoice = vi.fn();
+    const emitError = vi.fn();
+    const adopt = vi.fn(async () => ({ ok: false as const, kind: 'choose-ticket' as const, pr: 41, tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }] }));
+    const rollbackStep = vi.fn(() => true);
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      adopt,
+      run: vi.fn(async (): Promise<never> => {
+        throw new Error('an adopting step never runs a ticket pickup');
+      }),
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => check(),
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep,
+      enterWork: vi.fn(() => 'entered' as const),
+      emitError,
+      emitConflict: vi.fn(),
+      emitTicketChoice,
+      audit: vi.fn(),
+    });
+
+    c.enter(job({ issue: null, bootstrap: { adopt: 'pr', pr: 41 } }));
+    await vi.waitFor(() => expect(emitTicketChoice).toHaveBeenCalledTimes(1));
+    const { choiceId } = emitTicketChoice.mock.calls[0]?.[0] as { choiceId: string };
+    check = () => {
+      throw new Error('the flow state could not be read');
+    };
+
+    expect.soft(c.resolveTicket('/repo', 'plan', choiceId, answer)).toEqual({ ok: true });
+    expect.soft(adopt).toHaveBeenCalledTimes(1);
+    expect.soft(rollbackStep).toHaveBeenCalledTimes(1);
+    expect.soft(emitError).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('the flow state could not be read') }));
   });
 });

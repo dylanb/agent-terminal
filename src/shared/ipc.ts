@@ -15,7 +15,7 @@ export { INSTALL_DESTINATION_IDS } from './ipc/install';
 export { CONTROLLER_CHANNELS, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, CONTROLLER_WINDOW_ARGUMENT } from './ipc/controller';
 
 import type { ControllerApi } from './ipc/controller';
-import type { FlowApi, FlowAppBootstrapConflictMsg, FlowBootstrapErrorMsg, FlowEpicPromotionPreviewMsg, FlowRevealLoopMsg, FlowStateChangedMsg } from './ipc/flow';
+import type { FlowAdoptTicketChoiceMsg, FlowApi, FlowAppBootstrapConflictMsg, FlowBootstrapErrorMsg, FlowEpicPromotionPreviewMsg, FlowRevealLoopMsg, FlowStateChangedMsg } from './ipc/flow';
 import type { CliApi, ExamplesApi } from './ipc/install';
 import type { CwdChangedMsg, MonitorApi, MonitorClearedMsg, MonitorEventMsg, MonitorEventRemovedMsg, MonitorUpdateMsg } from './ipc/monitor';
 import type { MenuEditMsg, PtyDataMsg, PtyExitMsg, TermApi } from './ipc/terminal';
@@ -62,6 +62,7 @@ export interface ChannelPayloads {
   'flow:revealLoop': FlowRevealLoopMsg;
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
   'flow:onAppBootstrapConflict': FlowAppBootstrapConflictMsg;
+  'flow:onAdoptTicketChoice': FlowAdoptTicketChoiceMsg;
   'flow:onEpicPromotionPreview': FlowEpicPromotionPreviewMsg;
 }
 

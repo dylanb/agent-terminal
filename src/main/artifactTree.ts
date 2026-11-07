@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import { originFetchGitHubRepository, originPushForkRepository } from './githubRepository';
 import { isUnderAppStateDir } from './appStateDirs';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import type {
@@ -54,16 +55,25 @@ function defaultGit(args: string[], cwd: string): string {
 const execFileAsync = promisify(execFile);
 
 /** The current branch's PR base branch name from GitHub, or null when there is no PR / gh is
- *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). */
+ *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). The PR is
+ *  looked up by the branch's name in origin's repository, so gh's own default repository never decides it. */
 async function defaultPrBaseName(root: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], {
+    const { selector } = await originFetchGitHubRepository(root);
+    const branch = defaultGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], root).trim();
+    if (branch.length === 0) return null;
+    // A branch origin pushes to a fork is that fork owner's PR head, which gh names as <owner>:<branch>.
+    const fork = await originPushForkRepository(root);
+    const head = fork === null ? branch : `${fork.owner}:${branch}`;
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', head, '--repo', selector, '--json', 'baseRefName'], {
       cwd: root,
       encoding: 'utf8',
       timeout: 5000,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return stdout.trim() || null;
+    const viewed: unknown = JSON.parse(stdout);
+    const name = typeof viewed === 'object' && viewed !== null ? (viewed as Record<string, unknown>).baseRefName : undefined;
+    return typeof name === 'string' && name.length > 0 ? name : null;
   } catch {
     return null;
   }

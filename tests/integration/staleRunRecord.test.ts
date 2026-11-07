@@ -6,6 +6,7 @@ import { createFlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import { MAX_ECHOED_LOCK_REASON_LENGTH } from '../../src/shared/controlChars';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) §18.7.2 / §18.7.4 — a Terminate resets the run and then removes its run record; when that removal fails
 // the record is left behind on a run that is no longer begun. Start is the way out the picker names, so Start
@@ -23,7 +24,7 @@ describe('Start after a reset that left its run record behind', () => {
     fx.writeFlowHome(home, { name: 'global-fallback', stepIds: ['f1', 'f2'] });
     const wt = fx.makeWorktree('a3-stale-wt');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l1', 'l2'] });
-    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home)(repoKey) });
+    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home, repoOnlyDefTiers())(repoKey) });
     return { wt, manager };
   }
 

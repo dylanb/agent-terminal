@@ -9,6 +9,7 @@ import { createRunResolver } from '../../src/main/runResolver';
 import { createActiveFlowGate } from '../../src/main/activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) §18.4 / §18.7.4 AC5 — after Terminate, switching the worktree to another flow and starting it
 // resolves that flow's own step-0 inputs: nothing carried from the terminated flow's inputs survives the switch.
@@ -43,7 +44,7 @@ describe('switching flows after Terminate resolves the new flow’s own step-0 i
     const home = fx.makeWorktree('a3-ac5-home');
     seedLoopEntry(home, 'flow-a', 'a-first', [input('ticket', 'github-ticket')]);
     seedLoopEntry(home, 'flow-b', 'b-first', [input('pr', 'pr')]);
-    const resolve = createRunResolver(home);
+    const resolve = createRunResolver(home, repoOnlyDefTiers());
     const enter = createFlowEntryActions({
       isShellBusy: () => false,
       inject: () => {},

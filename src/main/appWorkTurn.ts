@@ -10,7 +10,7 @@ import type { BoundaryPolicy, LoopDefV2, SelfCheck } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
@@ -102,6 +102,8 @@ export interface AppWorkPromptReq {
    *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
    *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
   sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
@@ -294,8 +296,9 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
-  if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
-  parts.push(...flowDocumentLines(), ...designCheckLines());
+  if (req.adoption !== undefined) parts.push(...adoptedRunLines(req.adoption));
+  else parts.push(...(req.ticket !== undefined ? ticketPromptLines(req.ticket) : []), ...flowDocumentLines());
+  parts.push(...designCheckLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {

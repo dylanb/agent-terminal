@@ -328,6 +328,21 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(reason).not.toContain('detached');
   });
 
+  it("an adopting run whose branch probe fails is held naming its fix branch, PR and primary ticket with its repository (#304 AC 5)", () => {
+    const fixBranch = 'agent-terminal/review-pr-41-1700000000000';
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => ({ kind: 'fix-branch', branch: fixBranch, pr: 41, primary: { repo: 'contributor/fork', number: 177 } }),
+      currentBranch: () => ({ ok: false, detail: 'fatal: not a git repository' }),
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    const reason = engine.liveErrorFor(h.repo)?.reason ?? '';
+    expect.soft(reason).toContain('fatal: not a git repository');
+    expect.soft(reason).toContain(fixBranch);
+    expect.soft(reason).toMatch(/#41(\D|$)/);
+    expect.soft(reason).toContain('contributor/fork#177');
+  });
+
   it('an unreadable pickup record refuses the turn with its read error instead of lifting the guard', () => {
     const engine = makeEngine(undefined, undefined, OTHER_BRANCH, {
       pickupBranch: () => ({ kind: 'unreadable', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' }),

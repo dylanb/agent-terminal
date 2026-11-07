@@ -16,6 +16,7 @@ import { listCatalog } from '../../src/main/flowCatalogList';
 import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) §18.7.3 / §18.7.4 AC12 / AC13 / AC15 — recovering a held run onto a flow that contains its current step
 // resumes it there: the step and status are unchanged, the selection is unchanged, the chosen flow is recorded as
@@ -59,7 +60,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const lock = opts.lock?.(lockRoot) ?? createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
     const deps = realDeps(home);
     const recovery = recoveryModule.createHeldRunRecovery({ lock, ...deps });
-    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home)(repoKey) });
+    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home, repoOnlyDefTiers())(repoKey) });
     const progressionFile = join(flowHomeDir(wt), 'flow-state.yaml');
     const unchanged = () => [bytes(progressionFile), bytes(activeFlowPointerFile(wt))];
     return { home, wt, lockRoot, deps, recovery, manager, unchanged };
@@ -153,7 +154,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     expect(recovery.rebind(wt, { origin: 'global', id: 'shared-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(manager().state(wt).steps).toEqual(['s1', 's2', 'global-shared-3']);
-    expect(createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) }).state(wt).steps).toEqual([
+    expect(createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home, repoOnlyDefTiers())(k) }).state(wt).steps).toEqual([
       's1',
       's2',
       'global-shared-3',

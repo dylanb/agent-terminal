@@ -63,8 +63,68 @@ describe('the open pull requests GitHub has for a branch', () => {
 describe('a pull request GitHub is asked about by number', () => {
   it('asks for every field the identity check reads, and reads them back', async () => {
     const { repo, argsLog } = seedRepoWithGh('[]');
-    expect(await createRealPullRequestLookup(repo).pullRequest(233)).toEqual({ number: 233, branch: 'plan-loop/issue-218', state: 'OPEN', closingIssues: [218], crossRepository: false });
+    expect(await createRealPullRequestLookup(repo).pullRequest(233)).toEqual({ number: 233, branch: 'plan-loop/issue-218', state: 'OPEN', closingIssues: [218], closingTickets: [{ repo: 'owner/repository', number: 218 }], crossRepository: false });
     const fields = /--json (\S+)/.exec(readFileSync(`${argsLog}.view`, 'utf8'))?.[1].split(',') ?? [];
-    expect(fields).toEqual(expect.arrayContaining(['number', 'url', 'headRefName', 'state', 'closingIssuesReferences', 'isCrossRepository']));
+    expect(fields).toEqual(expect.arrayContaining(['number', 'url', 'headRefName', 'state', 'closingIssuesReferences', 'isCrossRepository', 'headRepository', 'headRepositoryOwner']));
+  });
+});
+
+describe("a fork's pull request that also closes a ticket outside its base and head repositories (#304 AC 24)", () => {
+  it('reads back the tickets it closes in origin and in its head repository, leaving the other one out', async () => {
+    const { repo } = seedRepoWithGh('[]');
+    const view = JSON.stringify({
+      number: 41,
+      url: 'https://github.com/owner/repository/pull/41',
+      headRefName: 'feature/reviewed-change',
+      state: 'OPEN',
+      isCrossRepository: true,
+      headRepository: { name: 'Fork' },
+      headRepositoryOwner: { login: 'Contributor' },
+      closingIssuesReferences: [
+        { number: 176, url: 'https://github.com/owner/repository/issues/176' },
+        { number: 177, url: 'https://github.com/contributor/fork/issues/177' },
+        { number: 9, url: 'https://github.com/other-org/lib/issues/9' },
+      ],
+    });
+    const bin = mkdtempSync(join(tmpdir(), 'pr-lookup-fork-bin-'));
+    cleanup.push(bin);
+    writeFileSync(
+      join(bin, 'gh'),
+      `#!/usr/bin/env bash\nif [ "$1" = "repo" ]; then printf '%s\\n' '${REPO_VIEW}'; exit 0; fi\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf '%s\\n' '${view}'; exit 0; fi\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    const pr = await createRealPullRequestLookup(repo, 'ignore').pullRequest(41);
+    expect.soft(pr.closingIssues).toEqual([176]);
+    expect.soft(pr.closingTickets).toEqual([
+      { repo: 'owner/repository', number: 176 },
+      { repo: 'contributor/fork', number: 177 },
+    ]);
+  });
+});
+
+describe("a ticket run's pull request that also closes an issue in another repository", () => {
+  it('is refused as an invalid closing-issue identity, as before #304', async () => {
+    const { repo } = seedRepoWithGh('[]');
+    const view = JSON.stringify({
+      number: 233,
+      url: 'https://github.com/owner/repository/pull/233',
+      headRefName: 'plan-loop/issue-218',
+      state: 'OPEN',
+      isCrossRepository: false,
+      closingIssuesReferences: [
+        { number: 218, url: 'https://github.com/owner/repository/issues/218' },
+        { number: 9, url: 'https://github.com/other-org/lib/issues/9' },
+      ],
+    });
+    const bin = mkdtempSync(join(tmpdir(), 'pr-lookup-foreign-bin-'));
+    cleanup.push(bin);
+    writeFileSync(
+      join(bin, 'gh'),
+      `#!/usr/bin/env bash\nif [ "$1" = "repo" ]; then printf '%s\\n' '${REPO_VIEW}'; exit 0; fi\nif [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf '%s\\n' '${view}'; exit 0; fi\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    await expect(createRealPullRequestLookup(repo).pullRequest(233)).rejects.toThrow('invalid GitHub closing issue identity');
   });
 });
