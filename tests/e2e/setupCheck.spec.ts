@@ -311,22 +311,94 @@ test('on a fresh machine, a repository passing its own conditions lists the exam
   await expect.soft(popup.getByRole('button', { name: INSTALL })).toBeVisible();
 });
 
-test('Install/update examples closes the popup and runs the install; after accepting every change a relaunch lists no examples entry (AC17)', { tag: '@ownapp' }, async () => {
+/** From now on, the most `aria-modal` dialogs the page has had open at once. */
+async function recordMaxModals(page: Page): Promise<() => Promise<number>> {
+  await page.evaluate(() => {
+    const state = { max: document.querySelectorAll('[aria-modal="true"]').length };
+    new MutationObserver(() => {
+      state.max = Math.max(state.max, document.querySelectorAll('[aria-modal="true"]').length);
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-modal'] });
+    (window as unknown as { maxModals: { max: number } }).maxModals = state;
+  });
+  return () => page.evaluate(() => (window as unknown as { maxModals: { max: number } }).maxModals.max);
+}
+
+/** Resolves once the app's own status for `repoKey` lists no examples entry, whichever view or dialog is showing. */
+async function waitForExamplesInstalled(page: Page, repoKey: string): Promise<void> {
+  await expect
+    .poll(() => page.evaluate((key) => window.setup.status(key).then((r) => r.ok && !r.entries.some((e) => e.condition === 'examples')), repoKey))
+    .toBe(true);
+}
+
+test('Install/update examples installs from inside the popup: the Terminal view stays, the popup lists what still fails, offers Run setup loop, and focus stays in it (AC2, AC5, AC10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
   const repo = repoIn({ ignored: true, capabilities: 'absent' });
-  let page = await launchIn(repo);
+  const page = await launchIn(repo);
   const popup = popupFor(page, repo);
   await expect.soft(entriesOf(popup)).toHaveCount(2);
+  const maxModals = await recordMaxModals(page);
+  const soft = expect.configure({ soft: true });
 
   await popup.getByRole('button', { name: INSTALL }).click();
-  await expect.soft(popup).toBeHidden();
-  await expect.soft(installView(page)).toBeVisible();
-  await expect.soft(installView(page).getByRole('status')).toContainText('Installed examples');
-  await app?.close();
-  page = await launchIn(repo);
-  await expect(popupFor(page, repo)).toBeVisible();
+  await waitForExamplesInstalled(page, repo);
 
-  const reply = await page.evaluate((repoKey) => window.setup.status(repoKey), repo);
-  expect(reply).toMatchObject({ ok: true, entries: [{ condition: 'capabilities', failure: 'absent' }] });
+  await soft(popup).toBeVisible();
+  await soft(entriesOf(popup)).toHaveCount(1);
+  await soft(installView(page)).toBeHidden();
+  await soft(popup.getByRole('button', { name: INSTALL })).toHaveCount(0);
+  await soft(popup.getByRole('button', { name: UNTIL_UPDATE })).toHaveCount(0);
+  await soft(popup.getByRole('button', { name: RUN_SETUP })).toBeVisible();
+  await soft.poll(() => focusIsInside(popup)).toBe(true);
+  soft(await maxModals()).toBeLessThanOrEqual(1);
+});
+
+test('when an installed example differs, Install/update examples asks the replace question inside the same popup, and Install with nothing ticked keeps the file and the popup listing (AC3, AC10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  await installExamplesThroughApp();
+  const command = join(machine.claudeConfigDir, 'commands', 'groom-ticket.md');
+  const custom = '# my own groom-ticket\n';
+  writeFileSync(command, custom);
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect.soft(entriesOf(popup)).toHaveCount(3);
+  const maxModals = await recordMaxModals(page);
+  const soft = expect.configure({ soft: true });
+
+  await popup.getByRole('button', { name: INSTALL }).click();
+  await soft(popup.getByRole('checkbox').first()).toBeVisible();
+  await soft(popup.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
+  await soft(popup.getByRole('button', { name: 'Back to the list' })).toBeVisible();
+  await soft(installView(page)).toBeHidden();
+  await soft(page.locator('[aria-modal="true"]')).toHaveCount(1);
+  await popup.getByRole('button', { name: 'Install', exact: true }).click({ timeout: 2_000 }).catch(() => undefined);
+
+  await soft(popupFor(page, repo)).toBeVisible();
+  await soft(entriesOf(popupFor(page, repo))).toHaveCount(3);
+  await soft(popup.getByRole('checkbox')).toHaveCount(0);
+  soft(readFileSync(command, 'utf8')).toBe(custom);
+  soft(await maxModals()).toBeLessThanOrEqual(1);
+});
+
+test('Install/update examples in a popup that lists only the examples entry closes it, and the next repository entered gets its own popup (AC4, AC10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  const repo = repoIn({ ignored: true, capabilities: 'valid' });
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect.soft(entriesOf(popup)).toHaveCount(1);
+  const maxModals = await recordMaxModals(page);
+  const soft = expect.configure({ soft: true });
+
+  await popup.getByRole('button', { name: INSTALL }).click();
+  await waitForExamplesInstalled(page, repo);
+
+  await soft(installView(page)).toBeHidden();
+  await soft(page.locator('[aria-modal="true"]')).toHaveCount(0);
+  const seen = await recordDialogs(page);
+  await shellCd(page, failing, 'failing');
+  await soft.poll(namedAmong(seen, [repo, failing])).toEqual([failing]);
+  soft(await maxModals()).toBeLessThanOrEqual(1);
 });
 
 test('with the examples installed and every condition passing, no popup appears (AC8)', { tag: '@ownapp' }, async () => {
@@ -361,17 +433,6 @@ test('with the examples installed, a popup listing only repository entries offer
   await expect(entriesOf(popup)).toHaveCount(2);
 
   await expect(popup.getByRole('button', { name: INSTALL })).toHaveCount(0);
-});
-
-test('after Install/update examples, focus rests on the Settings view\'s Install examples button (WCAG 2.4.3)', { tag: '@ownapp' }, async () => {
-  const repo = repoIn({ ignored: true, capabilities: 'absent' });
-  const page = await launchIn(repo);
-  const popup = popupFor(page, repo);
-
-  await popup.getByRole('button', { name: INSTALL }).click();
-  await expect(installView(page).getByRole('status')).toContainText('Installed examples');
-
-  await expect(installView(page).getByRole('button', { name: /^Install examples/ })).toBeFocused();
 });
 
 const FOR_REPO = "Don't show again for this repo";
@@ -751,8 +812,11 @@ test('on a fresh machine, Install/update examples then a relaunch offers Run set
   const agent = seedLoggingAgent(repo);
   const env = { ...agent.env, APP_SETUP_CHECK: 'on' };
   let page = await launchIn(repo, env);
-  await popupFor(page, repo).getByRole('button', { name: INSTALL }).click();
-  await expect(installView(page).getByRole('status')).toContainText('Installed examples');
+  const first = popupFor(page, repo);
+  await first.getByRole('button', { name: INSTALL }).click();
+  await waitForExamplesInstalled(page, repo);
+  await expect.soft(first).toBeVisible();
+  await expect.soft(first.getByRole('button', { name: INSTALL })).toHaveCount(0);
   await app?.close();
   page = await launchIn(repo, env);
   const popup = popupFor(page, repo);

@@ -1,4 +1,13 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type {
+  DestRelativePath,
+  InstallDestinationId,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+  InstallPreviewId,
+  RetiredExample,
+  SetupDismissReply,
+  SetupStatusReply,
+} from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
@@ -45,13 +54,58 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
   entries,
 });
 
+const EMPTY_REPORT = { created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] };
+
+/** A preview that asks no question: nothing differs and nothing retired is left behind. */
+export const cleanPreview = (id: string): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: [{ destination: 'flow', conflict: false }],
+  retired: [],
+  retiredFallback: null,
+});
+
+/** A preview whose `differing` destinations each hold a file that differs from the bundled one. */
+export const differingPreview = (id: string, differing: InstallDestinationId[]): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: differing.map((destination) => ({
+    destination,
+    conflict: true as const,
+    files: [`${destination}-file.yaml` as DestRelativePath],
+  })),
+  retired: [],
+  retiredFallback: null,
+});
+
+/** A preview with no differing file but a retired example left behind. */
+export const retiredPreview = (id: string): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: [{ destination: 'flow', conflict: false }],
+  retired: [{ destination: 'flow', rel: 'old-flow' as DestRelativePath } satisfies RetiredExample],
+  retiredFallback: null,
+});
+
+export const installSucceeded = (): InstallExamplesResult => ({ ok: true, ...EMPTY_REPORT });
+export const installFailed = (error: string): InstallExamplesResult => ({ ok: false, error, ...EMPTY_REPORT });
+
+export interface InstallRequest {
+  previewId: string;
+  replace: InstallDestinationId[];
+  removeRetired: boolean;
+}
+
+type ScriptedPreview = InstallExamplesPreview | { reject: string };
+type ScriptedInstall = InstallExamplesResult | { reject: string };
+
 type Scripted = SetupStatusReply | { reject: string };
 type ScriptedDismiss = SetupDismissReply | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
- *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
- *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
+ *  whatever `landFocusOn` names, as the composition root's fallback does. Every status request is
+ *  recorded by repository; `examples` scripts the preview and install replies and records each install request. Each `dismiss` call is recorded, and answers the
  *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
  *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued;
  *  each `announce` is recorded. */
@@ -62,15 +116,23 @@ export function fakeSetupDeps() {
   let blocking = false;
   const closedListeners = new Set<() => void>();
   let landing: HTMLElement | null = null;
-  const installOpens: unknown[] = [];
-  let atInstallOpen: () => unknown = () => null;
+  const statusRequests: string[] = [];
+  const previewReplies: ScriptedPreview[] = [];
+  const installReplies: ScriptedInstall[] = [];
+  const installRequests: InstallRequest[] = [];
+  let previewCount = 0;
+  let installHold: Promise<void> | null = null;
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
   const setupRuns: string[] = [];
   const setupRunReplies: SetupFlowRun[] = [];
   const announcements: Array<{ title: string; message: string }> = [];
-  const deps: SetupCheckDialogDeps = {
+  const deps: SetupCheckDialogDeps & {
+    previewExamples(): Promise<InstallExamplesPreview>;
+    installExamples(previewId: InstallPreviewId, replace: InstallDestinationId[], removeRetired: boolean): Promise<InstallExamplesResult>;
+  } = {
     status: async (repoKey) => {
+      statusRequests.push(repoKey);
       const held = holds.get(repoKey);
       if (held !== undefined) {
         holds.delete(repoKey);
@@ -88,8 +150,21 @@ export function fakeSetupDeps() {
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
-    openInstallExamples: () => {
-      installOpens.push(atInstallOpen());
+    openInstallExamples: () => {},
+    previewExamples: async () => {
+      previewCount += 1;
+      const next = previewReplies.shift() ?? { ok: false as const, error: 'no preview scripted' };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
+    },
+    installExamples: async (previewId, replace, removeRetired) => {
+      installRequests.push({ previewId, replace: [...replace], removeRetired });
+      const held = installHold;
+      installHold = null;
+      if (held !== null) await held;
+      const next = installReplies.shift() ?? installFailed('no install scripted');
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
     },
     runSetupFlow: async (repoKey) => {
       setupRuns.push(repoKey);
@@ -129,12 +204,28 @@ export function fakeSetupDeps() {
     },
     /** Every dismissal the dialog asked to record, in order. */
     dismissals: (): SetupDismissal[] => [...dismissals],
-    /** What each `openInstallExamples` call records about the moment it was made. */
-    whenInstallOpens(probe: () => unknown): void {
-      atInstallOpen = probe;
+    /** Every repository a status request named, in order. */
+    statusRequests: (): string[] => [...statusRequests],
+    examples: {
+      /** Queue the replies the next preview requests get, in order. */
+      preview(...replies: ScriptedPreview[]): void {
+        previewReplies.push(...replies);
+      },
+      /** Queue the replies the next install requests get, in order. */
+      install(...replies: ScriptedInstall[]): void {
+        installReplies.push(...replies);
+      },
+      /** Keeps the next install reply pending until the returned release runs. */
+      holdInstall(): () => void {
+        let release!: () => void;
+        installHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
+      },
+      /** Every install request, in order. */
+      requests: (): InstallRequest[] => installRequests.map((r) => ({ ...r, replace: [...r.replace] })),
+      /** How many previews were requested. */
+      previews: (): number => previewCount,
     },
-    /** One record per `openInstallExamples` call, in order. */
-    installOpens: (): unknown[] => [...installOpens],
     setupFlow: {
       /** Queue the results the next `runSetupFlow` calls get, in order. */
       answer(...results: SetupFlowRun[]): void {

@@ -1,13 +1,25 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/renderer/src/setupCheckDialog';
-import { APP_VERSION, ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
+import {
+  APP_VERSION,
+  ENTRY,
+  REPO,
+  cleanPreview,
+  differingPreview,
+  fakeSetupDeps,
+  installFailed,
+  installSucceeded,
+  plainStatus,
+  repoStatus,
+  retiredPreview,
+} from '../helpers/setupCheckFixtures';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import { openModalDialogs, recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
 import { createSetupFlowRun, type SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
-import type { FlowStateView } from '../../src/shared/ipc';
+import type { FlowStateView, SetupStatusReply } from '../../src/shared/ipc';
 
 // The setup-check popup lists each condition the checked repository fails, in plain words, one message per
 // failure kind.
@@ -583,36 +595,364 @@ describe('the examples entry and Install/update examples (AC12, AC17)', () => {
     expect(screen.hasControl(INSTALL)).toBe(false);
   });
 
-  it('pressing it closes the popup, then opens the install-examples flow (AC17)', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale]));
-    const { dialog, screen } = mountDialog(fake);
-    fake.whenInstallOpens(() => ({ popupOpen: screen.isOpen() }));
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(INSTALL).click();
-
-    await vi.waitFor(() =>
-      expect({ open: screen.isOpen(), installOpens: fake.installOpens() }).toEqual({
-        open: false,
-        installOpens: [{ popupOpen: false }],
-      }),
-    );
-  });
-
   it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
     const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]), repoStatus(REPO.alpha, []));
     fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+    fake.examples.preview(cleanPreview('pv-queued'));
+    fake.examples.install(installSucceeded());
     const { dialog, screen } = mountDialog(fake);
     void dialog.check(REPO.alpha);
     void dialog.check(REPO.bravo);
     await shownFor(screen, REPO.alpha);
 
     screen.control(INSTALL).click();
+    await settle();
 
-    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
+    expect.soft(fake.examples.requests(), 'the install the press asked for').toEqual([
+      { previewId: 'pv-queued', replace: [], removeRetired: false },
+    ]);
+    expect.soft(fake.statusRequests(), 'alpha re-read before bravo is checked').toEqual([REPO.alpha, REPO.alpha, REPO.bravo]);
+    expect.soft(openFor(screen), 'the queued check raised its popup').toBe(REPO.bravo);
+  });
+});
+
+const REPLACE = 'Install';
+const BACK = 'Back to the list';
+
+/** Lets every reply the fake scripted run through the popup; they all settle within a task each. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 4; i++) await nextTask();
+}
+
+const reading = (screen: ReturnType<typeof setupCheckScreen>) =>
+  screen.isOpen()
+    ? {
+        entries: screen.entries(),
+        controls: screen.controls(),
+        alert: screen.alert(),
+        title: screen.title(),
+        description: screen.description(),
+        focusInside: screen.dialog().contains(document.activeElement),
+        checkboxes: screen.checkboxes(),
+      }
+    : null;
+
+/** Presses the control named `name` when the popup shows it; reports whether it did, never throws. */
+function pressIfShown(screen: ReturnType<typeof setupCheckScreen>, name: string): boolean {
+  if (!screen.isOpen() || !screen.hasControl(name)) return false;
+  screen.control(name).click();
+  return true;
+}
+
+describe('Install/update examples runs the install inside the popup (AC2, AC3, AC4, AC5, AC9, AC10, AC11)', () => {
+  const MIXED = [ENTRY.notIgnored, ENTRY.examplesStale];
+
+  /** An open popup for alpha listing `MIXED`, with what it listed read back. */
+  async function openMixed(fake: ReturnType<typeof fakeSetupDeps>, ...reads: Array<SetupStatusReply | { reject: string }>) {
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED), ...reads);
+    const mountedDialog = mountDialog(fake);
+    void mountedDialog.dialog.check(REPO.alpha);
+    await shownFor(mountedDialog.screen, REPO.alpha);
+    const before = {
+      entries: mountedDialog.screen.entries(),
+      title: mountedDialog.screen.title(),
+      description: mountedDialog.screen.description(),
+    };
+    return { ...mountedDialog, before };
+  }
+
+  it('installs a preview that needs no choice at once, then lists what the repository still fails (AC2)', async () => {
+    const fake = fakeSetupDeps();
+    fake.examples.preview(cleanPreview('pv-clean'));
+    fake.examples.install(installSucceeded());
+    const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+
+    screen.control(INSTALL).click();
+    await settle();
+
+    expect.soft(fake.examples.requests(), 'the install request').toEqual([
+      { previewId: 'pv-clean', replace: [], removeRetired: false },
+    ]);
+    expect.soft(fake.statusRequests(), 'the status re-read names the popup repository').toEqual([REPO.alpha, REPO.alpha]);
+    expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+    const read = reading(screen);
+    expect.soft(read?.entries, 'the re-read entries are listed').toEqual([before.entries[0]]);
+    expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is gone').toBe(false);
+    expect.soft(read?.controls.includes(UNTIL_UPDATE), "Don't show again until the app updates is gone").toBe(false);
+    expect.soft(read?.controls.includes(FOR_REPO), "Don't show again for this repo stays").toBe(true);
+    expect.soft(read !== null && screen.dialog().contains(document.activeElement), 'focus is inside the popup').toBe(true);
+  });
+
+  describe('a preview with differing files asks the replace question inside the popup (AC3)', () => {
+    const differing = differingPreview('pv-diff', ['flow', 'commands']);
+
+    it('switches the dialog to the question: another name and description, focus inside, nothing installed', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      const { screen, before } = await openMixed(fake);
+
+      screen.control(INSTALL).click();
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+      expect.soft(read?.title, 'the name comes from the question').not.toBe(before.title);
+      expect.soft(read?.title, 'the popup is open and named').toBeTruthy();
+      expect.soft(read?.description, 'the description comes from the question').not.toBe(before.description);
+      expect.soft(read?.description, 'the popup is open and described').toBeTruthy();
+      expect.soft(read?.focusInside, 'focus is inside the question').toBe(true);
+      expect.soft(read?.controls, 'the question offers Install, Back to the list and Close').toEqual(
+        expect.arrayContaining([REPLACE, BACK, 'Close']),
+      );
+      expect.soft(fake.examples.requests(), 'nothing is installed while the question shows').toEqual([]);
+    });
+
+    it('Back to the list installs nothing and shows the list it showed before', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      const { screen, before } = await openMixed(fake);
+      screen.control(INSTALL).click();
+      await settle();
+
+      expect.soft(pressIfShown(screen, BACK), 'the question offers Back to the list').toBe(true);
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(fake.examples.requests(), 'no install request').toEqual([]);
+      expect.soft(fake.statusRequests(), 'no re-read').toEqual([REPO.alpha]);
+      expect.soft(read?.entries, 'lists what it listed before').toEqual(before.entries);
+      expect.soft(read?.title, 'the name is the list name again').toBe(before.title);
+      expect.soft(read?.description, 'the description is the list description again').toBe(before.description);
+      expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+    });
+
+    it('ticking every replacement and pressing Install sends every differing destination, then lists the re-read', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      fake.examples.install(installSucceeded());
+      const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+
+      const boxes = reading(screen)?.checkboxes ?? [];
+      expect.soft(boxes.length, 'one checkbox per differing destination').toBe(2);
+      for (const box of boxes) box.click();
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests().map((r) => ({ ...r, replace: [...r.replace].sort() })), 'the install request').toEqual([
+        { previewId: 'pv-diff', replace: ['commands', 'flow'], removeRetired: false },
+      ]);
+      const read = reading(screen);
+      expect.soft(read?.entries, 'the re-read entries are listed').toEqual([before.entries[0]]);
+      expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is gone').toBe(false);
+      expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+    });
+
+    it('Install with nothing ticked sends no replacement; the examples entry the re-read keeps is listed beside the others', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      fake.examples.install(installSucceeded());
+      const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+      screen.control(INSTALL).click();
+      await settle();
+
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'the install request').toEqual([{ previewId: 'pv-diff', replace: [], removeRetired: false }]);
+      const read = reading(screen);
+      expect.soft(read?.entries, 'both entries are listed').toEqual(before.entries);
+      expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is offered again').toBe(true);
+      expect.soft(read?.title, 'the name is the list name again').toBe(before.title);
+      expect.soft(read?.description, 'the description is the list description again').toBe(before.description);
+      expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+    });
+
+    it('a retired example the operator ticks is sent as removeRetired', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(retiredPreview('pv-retired'));
+      fake.examples.install(installSucceeded());
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+
+      const boxes = reading(screen)?.checkboxes ?? [];
+      expect.soft(boxes.length, 'one checkbox for the retired examples').toBe(1);
+      boxes[0]?.click();
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'the install request').toEqual([
+        { previewId: 'pv-retired', replace: [], removeRetired: true },
+      ]);
+    });
+  });
+
+  describe('closing the question ends the popup for the session (AC9)', () => {
+    for (const { door, close } of DOORS) {
+      it(`${door} installs nothing, and a later check of the repository opens nothing`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(differingPreview('pv-door', ['flow']));
+        const { dialog, screen } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+        screen.control(INSTALL).click();
+        await settle();
+        expect.soft(screen.isOpen() && screen.hasControl(BACK), 'the replace question is showing').toBe(true);
+
+        if (screen.isOpen()) close(screen);
+        await settle();
+
+        expect.soft(screen.isOpen(), 'the popup ended').toBe(false);
+        expect.soft(fake.examples.requests(), 'no install request').toEqual([]);
+        void dialog.check(REPO.alpha);
+        await settle();
+        expect.soft(screen.isOpen(), 'nothing opens again this session').toBe(false);
+      });
+    }
+  });
+
+  describe('while an install request is pending', () => {
+    it('Escape and the scrim leave the popup open; once it answers, Escape closes it', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-pending'));
+      fake.examples.install(installSucceeded());
+      const release = fake.examples.holdInstall();
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.requests().length, 'the install is pending').toBe(1);
+
+      if (screen.isOpen()) screen.pressEscape();
+      await settle();
+      expect.soft(screen.isOpen(), 'Escape leaves it open').toBe(true);
+      if (screen.isOpen()) screen.pressScrim();
+      await settle();
+      expect.soft(screen.isOpen(), 'the scrim leaves it open').toBe(true);
+
+      release();
+      await settle();
+      expect.soft(screen.isOpen(), 'it lists the re-read once answered').toBe(true);
+      if (screen.isOpen()) screen.pressEscape();
+      await settle();
+      expect.soft(screen.isOpen(), 'Escape closes it once the install answered').toBe(false);
+    });
+  });
+
+  describe('Run setup loop follows the re-read (AC5)', () => {
+    for (const fixable of [ENTRY.absent, ENTRY.notIgnored]) {
+      it(`is offered when the re-read reports the setup flow installed and lists ${fixable.condition}/${fixable.failure}`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-run'));
+        fake.examples.install(installSucceeded());
+        fake.answer(REPO.alpha, repoStatus(REPO.alpha, [fixable, ENTRY.examplesStale], false), repoStatus(REPO.alpha, [fixable], true));
+        const { dialog, screen } = mountDialog(fake);
+        void dialog.check(REPO.alpha);
+        await shownFor(screen, REPO.alpha);
+        expect(screen.hasControl(RUN_SETUP), 'not offered before the install').toBe(false);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        expect.soft(reading(screen)?.controls.includes(RUN_SETUP), 'offered after the re-read').toBe(true);
+      });
+    }
+
+    it('is not offered when the re-read reports it installed but lists nothing it fixes', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-run-none'));
+      fake.examples.install(installSucceeded());
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.malformed, ENTRY.examplesStale], false), repoStatus(REPO.alpha, [ENTRY.malformed], true));
+      const { dialog, screen } = mountDialog(fake);
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      screen.control(INSTALL).click();
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(read?.entries.length, 'the re-read entry is listed').toBe(1);
+      expect.soft(read?.controls.includes(RUN_SETUP), 'not offered').toBe(false);
+    });
+  });
+
+  describe('failures keep the popup open with the reason (U6)', () => {
+    const REASON = 'scripted-reason-zq';
+
+    for (const reply of [{ ok: false as const, error: REASON }, { reject: REASON }]) {
+      it(`a failed preview (${'reject' in reply ? 'rejected' : 'refused'}) keeps the previous entries and shows why`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(reply);
+        const { screen, before } = await openMixed(fake);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.examples.previews(), 'a preview was requested').toBe(1);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+        expect.soft(fake.examples.requests(), 'nothing installed').toEqual([]);
+      });
+    }
+
+    for (const reply of [installFailed(REASON), { reject: REASON }]) {
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) still re-reads and lists what it reports, with the reason`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail'));
+        fake.examples.install(reply);
+        const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
+        expect.soft(read?.entries, 'what the re-read reports').toEqual([before.entries[1]]);
+        expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+      });
+    }
+
+    for (const reply of [{ ok: false as const, reason: REASON } as SetupStatusReply, { reject: REASON }]) {
+      it(`a failed re-read (${'reject' in reply ? 'rejected' : 'refused'}) keeps the previous entries and shows why`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-reread'));
+        fake.examples.install(installSucceeded());
+        const { screen, before } = await openMixed(fake, reply);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+      });
+    }
+  });
+
+  it('keeps the popup naming its own repository when the terminal checks another one meanwhile (AC11)', async () => {
+    const fake = fakeSetupDeps();
+    fake.examples.preview(cleanPreview('pv-eleven'));
+    fake.examples.install(installSucceeded());
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    const release = fake.examples.holdInstall();
+    const { dialog, screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    screen.control(INSTALL).click();
+    await settle();
+    void dialog.check(REPO.bravo);
+    await settle();
+    expect.soft(fake.examples.requests().length, 'the install is pending').toBe(1);
+
+    release();
+    await settle();
+
+    expect.soft(fake.statusRequests().slice(0, 2), 'the re-read names the popup repository').toEqual([REPO.alpha, REPO.alpha]);
+    expect.soft(openFor(screen), 'the popup still names its repository').toBe(REPO.alpha);
+    expect.soft(pressIfShown(screen, FOR_REPO), "the popup offers Don't show again for this repo").toBe(true);
+    await settle();
+    expect.soft(fake.dismissals(), "Don't show again for this repo sends the popup repository").toEqual([{ kind: 'repo', repoKey: REPO.alpha }]);
+    await vi.waitFor(() => expect(openFor(screen), 'the other repository opens once this one ended').toBe(REPO.bravo));
   });
 });
 
