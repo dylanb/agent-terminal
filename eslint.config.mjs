@@ -47,6 +47,11 @@ const SWITCH_DOM = [
   "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|locator)$/][arguments.0.value=/role=[\"']?switch\\b/]",
   "CallExpression[callee.property.name='getByRole'][arguments.0.value='switch']",
 ].map((selector) => ({ selector, message: SWITCH_HELPER_MESSAGE }));
+const SORT_CONTROL_HELPER_MESSAGE = 'Find the controller sort control through tests/helpers/controllerCards.ts.';
+const SORT_CONTROL_DOM = [
+  "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|locator)$/][arguments.0.value=/role=[\"']?radio(group)?\\b/]",
+  "CallExpression[callee.property.name='getByRole'][arguments.0.value=/^radio(group)?$/]",
+].map((selector) => ({ selector, message: SORT_CONTROL_HELPER_MESSAGE }));
 const NO_SLEEP_MESSAGE = 'Wait for an observed state (expect.poll, tests/e2e/controllerWindow.ts), never a fixed time.';
 const NO_SLEEP = { selector: "CallExpression[callee.property.name='waitForTimeout']", message: NO_SLEEP_MESSAGE };
 const NO_PROMISE_SLEEP = { selector: "NewExpression[callee.name='Promise'] CallExpression[callee.name='setTimeout']", message: NO_SLEEP_MESSAGE };
@@ -56,7 +61,42 @@ const CONTROLLER_PLATFORM_READS = [
   { object: 'os', property: 'platform', message: PLATFORM_MESSAGE },
 ];
 const CONTROLLER_PLATFORM_IMPORTS = ['os', 'node:os', 'process', 'node:process'].map((name) => ({ name, importNames: ['platform'], message: PLATFORM_MESSAGE }));
-const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts'];
+const TEST_WALL_CLOCK_MESSAGE = 'Drive time through the fake clock (tests/helpers/controllerMount.ts), never the wall clock.';
+const TEST_WALL_CLOCK_READS = [
+  { object: 'Date', property: 'now', message: TEST_WALL_CLOCK_MESSAGE },
+  { object: 'performance', property: 'now', message: TEST_WALL_CLOCK_MESSAGE },
+];
+const TEST_NEW_DATE = { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: TEST_WALL_CLOCK_MESSAGE };
+const CLOCK_SEAM_MESSAGE = 'Read time through the clock dependency the panes are given, never the wall clock or a timer of its own, so a test drives every time the controller shows (CLAUDE.md § Test-driven development, injection seams).';
+const WINDOW_FOCUS_SEAM_MESSAGE = 'Read whether the controller window has focus through the window focus dependency the panes are given, so a test drives it (CLAUDE.md § Test-driven development, injection seams).';
+const CLOCK_SEAM_READS = [
+  { object: 'Date', property: 'now', message: CLOCK_SEAM_MESSAGE },
+  { object: 'performance', property: 'now', message: CLOCK_SEAM_MESSAGE },
+  ...['setTimeout', 'setInterval'].map((property) => ({ object: 'window', property, message: CLOCK_SEAM_MESSAGE })),
+  { object: 'document', property: 'hasFocus', message: WINDOW_FOCUS_SEAM_MESSAGE },
+];
+const CLOCK_SEAM_GLOBALS = ['setTimeout', 'setInterval'].map((name) => ({ name, message: CLOCK_SEAM_MESSAGE }));
+const CLOCK_SEAM_SYNTAX = { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: CLOCK_SEAM_MESSAGE };
+const CARD_ORDER_CODE = ['src/renderer/src/controllerCardOrder.ts', 'src/renderer/src/controllerPanes.ts', 'src/renderer/src/controllerCard.ts', 'src/renderer/src/sortModeControl.ts'];
+const LIVE_REGION_MESSAGE = 'A card, the card order and the sort control add no live region: a re-sort, a hold or a time-label tick announces nothing, and the controller panes own the role="status" and role="alert" regions.';
+const LIVE_REGION = [
+  "Literal[value='aria-live']",
+  "MemberExpression[property.name='ariaLive']",
+  "CallExpression[callee.property.name='setAttribute'][arguments.0.value='role'][arguments.1.value=/^(status|alert|log|marquee|timer)$/]",
+].map((selector) => ({ selector, message: LIVE_REGION_MESSAGE }));
+const QUIET_CARD_CODE = ['src/renderer/src/controllerCard.ts', 'src/renderer/src/controllerCardOrder.ts', 'src/renderer/src/sortModeControl.ts'];
+const CARD_ORDER_TESTS = [
+  'tests/unit/controllerCardOrder.test.ts',
+  'tests/unit/controllerSortOrder.test.ts',
+  'tests/unit/controllerRecentOrder.test.ts',
+  'tests/unit/sortModeControl.test.ts',
+  'tests/browser/controllerHold.test.ts',
+  'tests/e2e/controllerAttentionOrder.spec.ts',
+  'tests/e2e/controllerRecentOrder.spec.ts',
+  'tests/e2e/controllerRecency.spec.ts',
+  'tests/e2e/controllerHold.spec.ts',
+];
+const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts', 'tests/**/sortModeControl.test.ts'];
 const CARD_HELPER = [
   'tests/helpers/controllerCards.ts',
   'tests/helpers/controllerCardsDom.ts',
@@ -77,7 +117,7 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
 
 const TEST_PROOF_CORE_MESSAGE = 'The test-proof core decides from its seam values only: it reaches processes, the filesystem, the network, git and gh through its injected ports (CLAUDE.md § Test-driven development, injection seams).';
 const TEST_PROOF_CORE_IMPORTS = [
@@ -104,7 +144,7 @@ export default [
   {
     files: CONTROLLER_TESTS,
     ignores: [...CARD_HELPER, ...WIRE_FORMAT_TESTS],
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...TYPED_IN_VERSION] },
+    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION] },
   },
   {
     files: CARD_HELPER,
@@ -117,13 +157,27 @@ export default [
     rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP] },
   },
   {
-    files: ['tests/e2e/controllerWindow*.ts'],
+    files: ['tests/e2e/controllerWindow*.ts', ...CARD_ORDER_TESTS],
     rules: {
-      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP, NO_PROMISE_SLEEP],
+      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, NO_SLEEP, NO_PROMISE_SLEEP],
       'no-restricted-imports': ['error', {
         paths: ['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: NO_SLEEP_MESSAGE })),
       }],
     },
+  },
+  {
+    files: [...CARD_ORDER_TESTS, 'tests/unit/controllerCard.test.ts'],
+    rules: { 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
+  },
+  {
+    files: CARD_ORDER_TESTS,
+    rules: {
+      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, NO_SLEEP, NO_PROMISE_SLEEP, TEST_NEW_DATE],
+    },
+  },
+  {
+    files: ['tests/unit/controllerCard.test.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, TEST_NEW_DATE] },
   },
   {
     files: ['src/main/controller*.ts'],
@@ -148,6 +202,18 @@ export default [
     files: ['src/renderer/**/*.ts'],
     ignores: ['src/renderer/src/pressable.ts'],
     rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
+  },
+  {
+    files: CARD_ORDER_CODE,
+    rules: {
+      'no-restricted-syntax': ['error', ...RAW_CLICK, CLOCK_SEAM_SYNTAX],
+      'no-restricted-properties': ['error', ...CLOCK_SEAM_READS],
+      'no-restricted-globals': ['error', ...CLOCK_SEAM_GLOBALS],
+    },
+  },
+  {
+    files: QUIET_CARD_CODE,
+    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK, CLOCK_SEAM_SYNTAX, ...LIVE_REGION] },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,
