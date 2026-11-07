@@ -10,7 +10,6 @@ export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
   timeText: string;
-  /** Whether the card is held in place, so its header status ends " · position held". */
   held?: boolean;
   onAction(): void | Promise<unknown>;
   onClearHistory?(): void | Promise<unknown>;
@@ -32,7 +31,6 @@ export interface ControllerCard {
   setExpandedByDefault(expanded: boolean): void;
   setTimeText(text: string): void;
   setHeld(held: boolean): void;
-  /** Whether `node` is part of this card, such as the element under the pointer or the one with focus. */
   contains(node: Node | null): boolean;
   state(): CardState;
   focusTarget(): HTMLElement | undefined;

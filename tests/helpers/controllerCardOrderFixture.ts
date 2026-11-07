@@ -15,7 +15,7 @@ export function orderTerminal(name: string, status: StatusCaseKey): ControllerTe
 /** The directory `orderTerminal(name, …)` launches in. */
 export const orderDirectory = (name: string): string => `/order/${name}/worktree`;
 
-/** The heading the ticket gives each status group, keyed by the window header's summary label, in group order. */
+/** Each status group's heading, keyed by the window header's summary label, in group order. */
 export const GROUP_HEADINGS: Readonly<Record<SummaryLabel, string>> = {
   errors: 'Errors', 'need a human': 'Needs a human', idle: 'Idle & unassigned', working: 'Working',
 };
@@ -153,7 +153,7 @@ export const ORDER_EXAMPLES: Readonly<Record<string, OrderExample>> = {
 /** The heading Recently used order shows above every card, read as the list helper reads it: no count. */
 export const RECENTLY_USED_HEADING = 'Recently used';
 
-/** The sentence beneath the window header for each order, in the ticket's words (AC 9). */
+/** The sentence beneath the window header for each order. */
 export const SORT_SENTENCES: Readonly<Record<SortMode, string>> = {
   attention: 'Sorted by attention: errors first, then needs a human, idle & unassigned, and working, each longest in its state first.',
   'recently-used': 'Sorted by your most recent use of each card in this controller; cards you have not used yet follow in attention order.',

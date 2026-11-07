@@ -82,7 +82,7 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
   Object.entries(CASES).map(([key, [terminal, text, statusClass, summary]]) => [key, { terminal, text, statusClass, summary }]),
 ) as Record<StatusCaseKey, StatusCase>;
 
-/** The two card orders the ticket names, written here independently of the production vocabulary. */
+/** The two card orders, written here independently of the production vocabulary. */
 export const SORT_MODES = ['attention', 'recently-used'] as const;
 export type SortMode = (typeof SORT_MODES)[number];
 

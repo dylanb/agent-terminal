@@ -187,10 +187,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     previousNotifications = currentNotifications;
   }
 
-  function groupHeading({ name, count }: Extract<CardListEntry, { kind: 'heading' }>): HTMLElement {
+  function groupHeading(entry: Exclude<CardListEntry, { kind: 'card' }>): HTMLElement {
     const heading = doc.createElement('h2');
     heading.className = 'controller-group-heading';
-    heading.textContent = count === undefined ? name : `${name} (${count})`;
+    heading.textContent = entry.kind === 'group' ? `${entry.name} (${entry.count})` : entry.name;
     return heading;
   }
 
@@ -250,7 +250,6 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     return order.length === cards.length && order.every((card, index) => card === cards[index].directory);
   }
 
-  /** The cards held in place: the one under the pointer, and the one with focus inside it while the window has focus. */
   function currentHolds(): Set<string> {
     const present = new Set(directories.map(({ launchDirectory }) => launchDirectory));
     const holds = new Set<string>();
@@ -302,7 +301,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       cards = [];
       shown = held.size ? frozenCardList(shown, directories, observed, sortMode, recency) : cardList(directories, observed, sortMode, recency);
       for (const entry of shown) {
-        if (entry.kind === 'heading') list.append(groupHeading(entry));
+        if (entry.kind !== 'card') list.append(groupHeading(entry));
         else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
       }
       if (!directories.length) {

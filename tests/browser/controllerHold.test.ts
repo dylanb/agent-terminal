@@ -195,3 +195,18 @@ it('ends a pointer hold when the pointer leaves the controller without passing o
     });
   } finally { dispose(); }
 });
+
+it('re-sorts at once when the card held by the pointer is removed while it is the only hold', async () => {
+  const { host, service, clock, dispose } = mount();
+  try {
+    await pointerAway(host);
+    await userEvent.hover(card(host, 'e'));
+    await settled();
+    const before = read(host);
+    await publishLater(service, clock, B_IN_ERRORS.filter(terminal => terminal.launchDirectory !== d('e')));
+    expect({ before, after: listSequenceIn(host, DIRECTORIES) }).toEqual({
+      before: { list: ATTENTION, held: [d('e')] },
+      after: [heading('errors', 1), d('b'), heading('idle', 1), d('a'), heading('working', 1), d('w')],
+    });
+  } finally { dispose(); }
+});

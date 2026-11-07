@@ -12,7 +12,6 @@ export interface ControllerSettingsStore {
   saveSortMode(sortMode: ControllerSortMode): void;
 }
 
-/** Reads `key` from the JSON record in `file`, or `fallback` when the file is missing, unreadable, damaged or holds no valid value. */
 function readSaved<T>(file: string, key: string, valid: (value: unknown) => value is T, fallback: T): T {
   try {
     const saved: unknown = JSON.parse(readFileSync(file, 'utf8'));

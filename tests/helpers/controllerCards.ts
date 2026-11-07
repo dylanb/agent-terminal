@@ -276,7 +276,7 @@ export function headerStatusIn(card: ParentNode, directory: string): string {
   return (header.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/** The end of a held card's header status (AC 15). */
+/** The end of a held card's header status. */
 export const POSITION_HELD = / · position held$/;
 /** The directories, of `directories`, whose card header shows " · position held"; a card not shown is left out. */
 export const heldCardsIn = (root: ParentNode, directories: readonly string[]): string[] => directories.filter(directory => {

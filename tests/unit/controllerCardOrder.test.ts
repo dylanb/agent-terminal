@@ -17,7 +17,7 @@ function listAfter(steps: readonly OrderStep[], sortMode: ControllerSortMode, us
     observations = observeCards(observations, cards, START + at);
   }
   return cardList(cards, observations!, sortMode, recency).map((entry: CardListEntry) =>
-    entry.kind === 'heading' ? [entry.name, entry.count].filter(part => part !== undefined).join(' ') : entry.card.launchDirectory);
+    entry.kind === 'card' ? entry.card.launchDirectory : entry.kind === 'group' ? `${entry.name} ${entry.count}` : entry.name);
 }
 
 /** The time-in-state text of the one card `terminal` makes, first seen at START and read `elapsed` ms later. */

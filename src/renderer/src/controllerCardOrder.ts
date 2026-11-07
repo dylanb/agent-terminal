@@ -15,7 +15,8 @@ export interface CardObservations {
 }
 
 export type CardListEntry =
-  | { readonly kind: 'heading'; readonly name: string; readonly group?: SummaryLabel; readonly count?: number }
+  | { readonly kind: 'group'; readonly name: string; readonly group: SummaryLabel; readonly count: number }
+  | { readonly kind: 'recent'; readonly name: string }
   | { readonly kind: 'card'; readonly card: ControllerDirectoryCard };
 
 const RECENTLY_USED_HEADING = 'Recently used';
@@ -72,13 +73,11 @@ export function cardList(cards: readonly ControllerDirectoryCard[], observations
     const used = attention.filter(card => recency.has(card.launchDirectory))
       .sort((a, b) => recency.get(b.launchDirectory)! - recency.get(a.launchDirectory)!);
     const untouched = attention.filter(card => !recency.has(card.launchDirectory));
-    return [{ kind: 'heading', name: RECENTLY_USED_HEADING }, ...[...used, ...untouched].map(entry)];
+    return [{ kind: 'recent', name: RECENTLY_USED_HEADING }, ...[...used, ...untouched].map(entry)];
   }
-  return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'heading', name: GROUP_HEADINGS[group], group, count: members.length }, ...members.map(entry)]);
+  return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'group', name: GROUP_HEADINGS[group], group, count: members.length }, ...members.map(entry)]);
 }
 
-/** `shown` kept in place: each card updated or dropped, each group heading recounted (0 once its group is empty), and
- *  every card not yet shown added at the end, in the order `cardList` gives them. */
 export function frozenCardList(shown: readonly CardListEntry[], cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
   const current = new Map(cards.map(card => [card.launchDirectory, card]));
   const counts = new Map<SummaryLabel, number>();
@@ -87,7 +86,8 @@ export function frozenCardList(shown: readonly CardListEntry[], cards: readonly 
     counts.set(group, (counts.get(group) ?? 0) + 1);
   }
   const kept = shown.flatMap((entry): CardListEntry[] => {
-    if (entry.kind === 'heading') return [entry.group ? { ...entry, count: counts.get(entry.group) ?? 0 } : entry];
+    if (entry.kind === 'group') return [{ ...entry, count: counts.get(entry.group) ?? 0 }];
+    if (entry.kind === 'recent') return [entry];
     const card = current.get(entry.card.launchDirectory);
     return card ? [{ kind: 'card', card }] : [];
   });
