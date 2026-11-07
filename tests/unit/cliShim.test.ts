@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config';
+import { effectiveLinuxExecutableName } from '../helpers/linuxExecutableName';
 import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUBDIR, CLI_COMMAND_NAME } from '../../src/main/cliShim';
 
 // The launch invocation a fresh instance is started with (§23.4 / #25): the dev-vs-packaged decision
@@ -52,13 +52,6 @@ describe('controller launch names match the packaged controller (§23.5)', () =>
       path.posix.join(terminal.directories?.output ?? '', CONTROLLER_OUTPUT_SUBDIR),
     );
   });
-
-  const effectiveLinuxExecutableName = (config: Awaited<ReturnType<typeof load>>): string => {
-    const configured = config.linux?.executableName ?? config.executableName;
-    if (configured != null) return configured;
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { name: string };
-    return (config.extraMetadata?.name ?? pkg.name).toLowerCase();
-  };
 
   it('installs the terminal under a Linux executable name that is not the installed command name', async () => {
     expect(effectiveLinuxExecutableName(await load('electron-builder.yml'))).not.toBe(CLI_COMMAND_NAME);
