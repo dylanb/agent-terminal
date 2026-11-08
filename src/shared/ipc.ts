@@ -14,10 +14,11 @@ export { APP_ROUTE_OUT_ACTIONS, CATALOG_ORIGINS, GATE_DECISION_OPTIONS, hasFlowR
 export { INSTALL_DESTINATION_IDS } from './ipc/install';
 export { CONTROLLER_CHANNELS, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, CONTROLLER_WINDOW_ARGUMENT } from './ipc/controller';
 
+import type { TodoChangedMsg } from './ipc/todo';
 import type { ControllerApi } from './ipc/controller';
 import type { FlowApi, FlowAppBootstrapConflictMsg, FlowBootstrapErrorMsg, FlowEpicPromotionPreviewMsg, FlowRevealLoopMsg, FlowStateChangedMsg } from './ipc/flow';
 import type { ClaudeCodeApi, CliApi, ExamplesApi } from './ipc/install';
-import type { CwdChangedMsg, MonitorApi, MonitorClearedMsg, MonitorEventMsg, MonitorEventRemovedMsg, MonitorUpdateMsg } from './ipc/monitor';
+import type { CaptureChangedMsg, CwdChangedMsg, MonitorApi, MonitorClearedMsg, MonitorEventMsg, MonitorEventRemovedMsg, MonitorUpdateMsg } from './ipc/monitor';
 import type { MenuEditMsg, PtyDataMsg, PtyExitMsg, TermApi } from './ipc/terminal';
 import type { ViewerApi, ViewerChangedMsg } from './ipc/viewer';
 import type { SetupApi } from './ipc/setup';
@@ -55,6 +56,8 @@ export interface ChannelPayloads {
   'monitor:eventRemoved': MonitorEventRemovedMsg;
   'monitor:update': MonitorUpdateMsg;
   'monitor:cleared': MonitorClearedMsg;
+  'capture:changed': CaptureChangedMsg;
+  'todo:changed': TodoChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'viewer:onChanged': ViewerChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;

@@ -11,6 +11,7 @@ type ArgumentSchema =
   | { type: 'string'; description: string }
   | { anyOf: [{ type: 'string' }, { type: 'null' }]; description: string }
   | { type: 'integer'; minimum: number; maximum: number; description: string }
+  | { type: 'array'; items: { type: 'string' }; description: string }
   | { type: 'object'; additionalProperties: { type: 'string' }; description: string };
 
 export interface McpToolDefinition {
@@ -36,7 +37,19 @@ const action = (description: string, properties: Record<string, ArgumentSchema>,
   inputSchema: { type: 'object', properties, required, additionalProperties: false },
 });
 
+const todoAction = (description: string, properties: Record<string, ArgumentSchema>): Omit<McpToolDefinition, 'name'> => ({
+  description, inputSchema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false },
+});
+const todoTarget = { ...ownWindow, todo: target('The todo id returned by read_state.') };
+
 const TOOLS: { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> } = {
+  todo_create: todoAction('Create a todo in any turn.', { ...ownWindow, text: target('The todo text.') }),
+  todo_edit: todoAction('Edit an outstanding todo in any turn.', { ...todoTarget, text: target('The replacement text.') }),
+  todo_reorder: todoAction('Reorder outstanding todos in any turn.', { ...ownWindow, todos: { type: 'array', items: { type: 'string' }, description: 'Outstanding todo ids in the desired order.' } }),
+  todo_complete: todoAction('Complete a todo in any turn.', todoTarget),
+  todo_delete: todoAction('Delete a todo in any turn.', todoTarget),
+  todo_send: action('Accept a todo for delivery after this turn ends. Only one send may wait per turn.', todoTarget),
+  capture_report: todoAction('Capture the latest report and its findings in any turn.', ownWindow),
   read_state: {
     description:
       "Read this agent-terminal window's state as its UI shows it: the repository, the flow and its step, a waiting gate with its options and why it waits, a failed turn, the loop message, the latest round report, the todos, the flows it can start, and the todo count Terminate would delete.",
@@ -89,6 +102,9 @@ export function invalidToolArguments(tool: string, args: unknown): string | null
         break;
       case 'integer':
         if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < schema.minimum || value > schema.maximum) return `${tool}'s ${key} must be a nonnegative safe integer`;
+        break;
+      case 'array':
+        if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) return `${tool}'s ${key} must be a list of todo ids`;
         break;
       case 'object':
         if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.values(value).some(item => typeof item !== 'string')) return `${tool}'s ${key} must map input names to text`;

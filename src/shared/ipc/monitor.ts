@@ -1,7 +1,7 @@
 import type { ChannelSpecs, SessionId } from './session';
 import type { UiSettings } from './settings';
 import type { PtyExitMsg } from './terminal';
-import type { TodoItem, TodoSource, TodoStatus, TodoTemplateList } from './todo';
+import type { TodoChangedMsg, TodoItem, TodoSource, TodoStatus, TodoTemplateList } from './todo';
 
 export const MONITOR_CHANNELS = {
   monitorCapture: {
@@ -27,6 +27,10 @@ export const MONITOR_CHANNELS = {
   monitorCurrentRepo: {
     name: 'monitor:currentRepo',
     does: "The monitor pane asks for the agent's current repo, so it learns the repo key even if it missed cwd:changed.",
+  },
+  captureChanged: {
+    name: 'capture:changed',
+    does: 'Main sends a replacement report and its findings captured through MCP.',
   },
   captureLast: {
     name: 'capture:last',
@@ -207,6 +211,7 @@ export interface MonitorApi {
   /** Run report-detection on demand and return the single latest report + findings (§21.1);
    *  [] when none. The captured report replaces any prior — the pane holds one (§21.1). */
   captureLast(): Promise<MonitorEvent[]>;
+  onCaptureChanged(cb: (events: MonitorEvent[]) => void): void;
   /** Dismiss one captured event; dismissing a report cascades to its findings (§15.6). */
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */
@@ -224,6 +229,7 @@ export interface MonitorApi {
   /** The agent's repo key changed (OSC 7 → §16.3); pane re-pulls its todo list. */
   onCwdChanged(cb: (msg: CwdChangedMsg) => void): void;
   // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
+  onTodosChanged(cb: (msg: TodoChangedMsg) => void): void;
   todoList(repoKey: string): Promise<TodoItem[]>;
   todoAdd(repoKey: string, text: string, source?: TodoSource): Promise<TodoItem[]>;
   todoUpdate(repoKey: string, id: string, text: string): Promise<TodoItem[]>;
@@ -239,3 +245,5 @@ export interface MonitorApi {
    *  present (silent dedup); resolves to the fresh list. */
   instantiateTemplate(repoKey: string, ref: string): Promise<TodoItem[]>;
 }
+
+export interface CaptureChangedMsg { sessionId: SessionId; events: MonitorEvent[] }

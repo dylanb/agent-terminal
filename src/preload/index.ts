@@ -34,6 +34,7 @@ import {
   type ViewerFile,
   type MonitorCaptureMsg,
   type MonitorEvent,
+  type CaptureChangedMsg,
   type MonitorEventMsg,
   type MonitorEventRemovedMsg,
   type MonitorUpdateMsg,
@@ -41,6 +42,7 @@ import {
   type PtyExitMsg,
   type RepoInfo,
   type TermApi,
+  type TodoChangedMsg,
   type TodoItem,
   type TodoTemplateList,
   type TodoSource,
@@ -97,6 +99,7 @@ const monitorApi: MonitorApi = {
   replay: () => ipcRenderer.invoke(CH.monitorReplay) as Promise<MonitorEvent[]>,
   currentRepo: () =>
     ipcRenderer.invoke(CH.monitorCurrentRepo, { sessionId: SESSION_ID }) as Promise<RepoInfo | null>,
+  onCaptureChanged: (cb) => ipcRenderer.on(CH.captureChanged, (_e, msg: CaptureChangedMsg) => cb(msg.events)),
   captureLast: () => ipcRenderer.invoke(CH.captureLast, { sessionId: SESSION_ID }) as Promise<MonitorEvent[]>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
@@ -110,6 +113,7 @@ const monitorApi: MonitorApi = {
   setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
   onCwdChanged: (cb) => ipcRenderer.on(CH.cwdChanged, (_e, m: CwdChangedMsg) => cb(m)),
   // §16.4: repoKey threaded so an in-flight edit always targets its own repo, not whatever cwd moved to.
+  onTodosChanged: (cb) => ipcRenderer.on(CH.todoChanged, (_e, msg: TodoChangedMsg) => cb(msg)),
   todoList: (repoKey) => ipcRenderer.invoke(CH.todoList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoItem[]>,
   todoAdd: (repoKey, text, source?: TodoSource) =>
     ipcRenderer.invoke(CH.todoAdd, { sessionId: SESSION_ID, repoKey, text, source }) as Promise<TodoItem[]>,

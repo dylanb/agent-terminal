@@ -44,6 +44,8 @@ function baseMonitor(handlers: {
   cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void;
 }): Record<string, ReturnType<typeof vi.fn>> {
   return {
+    onTodosChanged: vi.fn(),
+    onCaptureChanged: vi.fn(),
     onEvent: vi.fn(),
     onEventRemoved: vi.fn(),
     onCleared: vi.fn(),
@@ -81,6 +83,8 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     handlers = {};
     settings = { ...DEFAULT_UI_SETTINGS };
     monitor = {
+      onTodosChanged: vi.fn(),
+      onCaptureChanged: vi.fn(),
       onEvent: vi.fn(),
       onEventRemoved: vi.fn(),
       onCleared: vi.fn(),

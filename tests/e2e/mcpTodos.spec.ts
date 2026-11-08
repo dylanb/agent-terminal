@@ -158,7 +158,7 @@ for (const injected of [false, true]) {
   test(`MCP todos: capture replaces the prior report and paints findings in a ${injected ? 'non-human' : 'human'} turn`, { tag: '@ownapp' }, async () => {
     const m = machine();
     const agent = join(m.binDir, 'report-agent');
-    writeFileSync(agent, 'read -r text\ncase "$text" in\nold-report) printf "\\033[2J\\033[HHere is the summary of findings from this code review:\\n- old finding to replace before merge because it describes a distinct obsolete problem which is no longer relevant to the new report\\n" ;;\nnew-report) printf "\\033[2J\\033[HHere is the summary of findings from this code review:\\n- first new finding worth acting on\\n- second distinct new finding before merge\\n" ;;\nesac\n');
+    writeFileSync(agent, 'read -r text\ncase "$text" in\nold-report) printf "\\033[2J\\033[HHere is the summary of findings from this code review:\\n- old finding to replace before merge because it describes a distinct obsolete problem which is no longer relevant to the new report\\n" ;;\nnew-report) printf "\\033[2J\\033[HHere is the summary of findings from this code review:\\n- first new finding worth acting on\\n- second distinct new finding before merge\\n❯ " ;;\nesac\n');
     seedFakeClaude(m.binDir, { agent, hold: m.hold });
     await launch(m, { APP_SHELL_INTEGRATION: '0', APP_LAUNCH_DIR: m.repo });
     await prompt(m, 'old-report'); await overlay(); await page.getByRole('tab', { name: /^Capture/ }).click();

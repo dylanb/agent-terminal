@@ -1,3 +1,6 @@
+import { outstandingTodoOrder } from '../shared/todoOrder';
+import type { TodoStore } from './todoStore';
+import type { MonitorEvent } from '../shared/ipc';
 import { isMcpToolName, type McpToolName } from '../shared/mcp';
 import type { McpCaller, WindowAnswerFailure, WindowRequest } from '../shared/mcpBridge';
 import type { McpWindowState } from '../shared/mcpWindowState';
@@ -16,6 +19,9 @@ export interface GateTarget {
 }
 
 export interface McpActionDeps {
+  todos?: TodoStore;
+  captureReport?: () => MonitorEvent[];
+  sendTodo?: (caller: McpCaller, todo: { id: string; text: string }, persist: () => void) => string | null;
   windowId: string;
   originOf(caller: McpCaller): Promise<TurnOrigin>;
   readState(): Promise<McpWindowState>;
@@ -99,6 +105,8 @@ function approveAnswer(outcome: GateApproveOutcome, at: string): unknown {
   }
 }
 
+type TodoTool = Extract<McpToolName, `todo_${string}` | 'capture_report'>;
+
 interface ActionArguments {
   window: string;
   repo: string;
@@ -110,6 +118,9 @@ interface ActionArguments {
   flow: string;
   inputs?: Record<string, string>;
   expectedTodoCount: number;
+  todo: string;
+  todos: string[];
+  text: string;
 }
 
 /** The window's answer to a tool call, which the server turns into the call's tool result. */
@@ -130,7 +141,7 @@ export function createMcpActions(deps: McpActionDeps): { call(request: WindowReq
     }
     return null;
   };
-  const act = async (tool: Exclude<McpToolName, 'read_state' | 'approve'>, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
+  const act = async (tool: Exclude<McpToolName, 'read_state' | 'approve' | TodoTool>, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
     const origin = await deps.originOf(caller);
     if (origin !== 'human') return ORIGIN_REFUSALS[origin];
@@ -227,7 +238,57 @@ export function createMcpActions(deps: McpActionDeps): { call(request: WindowReq
     return answer;
   };
 
+  const todo = async (tool: TodoTool, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
+    if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
+    if (tool === 'todo_send') {
+      const origin = await deps.originOf(caller);
+      if (origin !== 'human') return ORIGIN_REFUSALS[origin];
+    }
+    const state = deps.readActionState ? deps.readActionState() : await deps.readState();
+    if (state.repo?.key !== args.repo) return refusal('not-valid', 'the repository changed; read the state again.');
+    if (tool === 'capture_report') {
+      if (!deps.captureReport) return refusal('not-valid', 'capture is unavailable.');
+      const events = deps.captureReport();
+      return { kind: 'captured', message: events.length ? 'Captured the latest report.' : 'No report detected; the prior capture is preserved.', events };
+    }
+    const store = deps.todos;
+    if (!store) return refusal('not-valid', 'todos are unavailable.');
+    const items = store.list(args.repo);
+    const targets = tool === 'todo_reorder' ? args.todos : tool === 'todo_create' ? [] : [args.todo];
+    if (targets.some(id => !items.some(item => item.id === id))) return refusal('not-valid', 'a todo no longer exists; read the state again.');
+    if (['todo_edit', 'todo_reorder', 'todo_send'].includes(tool) && targets.some(id => items.some(item => item.id === id && item.status === 'done'))) return refusal('not-valid', 'a completed todo cannot be edited, reordered or sent.');
+    switch (tool) {
+      case 'todo_create':
+        if (!args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
+        return { kind: 'created', todos: store.add(args.repo, args.text) };
+      case 'todo_edit':
+        if (!args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
+        return { kind: 'edited', todos: store.update(args.repo, args.todo, args.text) };
+      case 'todo_complete': return { kind: 'completed', todos: store.setStatus(args.repo, args.todo, 'done') };
+      case 'todo_delete': return { kind: 'deleted', todos: store.delete(args.repo, args.todo) };
+      case 'todo_reorder':
+        if (args.todos.length !== items.filter(item => item.status !== 'done').length || new Set(args.todos).size !== args.todos.length) return refusal('not-valid', 'provide every outstanding todo exactly once.');
+        return { kind: 'reordered', todos: store.reorder(args.repo, outstandingTodoOrder(items, args.todos)) };
+      case 'todo_send': {
+        if (!deps.sendTodo) return refusal('not-valid', 'delivery is unavailable.');
+        const item = items.find(item => item.id === args.todo)!;
+        if (typeof item.text !== 'string' || !item.text.trim()) return refusal('not-valid', 'the stored todo text is malformed or blank; edit it before sending.');
+        const reason = deps.sendTodo(caller, { id: item.id, text: item.text }, () => { store.setStatus(args.repo, args.todo, 'in_progress'); });
+        if (reason !== null) return refusal('not-valid', reason);
+        return { kind: 'accepted', message: 'Accepted for delivery when this turn ends and the session is idle.' };
+      }
+      default: return tool satisfies never;
+    }
+  };
+
   const operations: Record<McpToolName, (args: ActionArguments, caller: McpCaller) => Promise<unknown>> = {
+    todo_create: (args, caller) => todo('todo_create', args, caller),
+    todo_edit: (args, caller) => todo('todo_edit', args, caller),
+    todo_reorder: (args, caller) => todo('todo_reorder', args, caller),
+    todo_complete: (args, caller) => todo('todo_complete', args, caller),
+    todo_delete: (args, caller) => todo('todo_delete', args, caller),
+    todo_send: (args, caller) => todo('todo_send', args, caller),
+    capture_report: (args, caller) => todo('capture_report', args, caller),
     read_state: () => deps.readState(),
     approve,
     request_changes: (args, caller) => act('request_changes', args, caller),

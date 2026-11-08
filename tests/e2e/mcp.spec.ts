@@ -412,6 +412,7 @@ test("an engine-driven session lists the tools, reads its window in the engine's
     const callsBefore = readCalls(session()).length;
     await typeCommand('mcp read_state {}');
     await expect.poll(stops).toBe(turnsBefore + 1);
+    await expect.poll(() => readCalls(session()).length).toBe(callsBefore + 1);
     return resultState(readCalls(session())[callsBefore]?.result) as ReadState | undefined;
   };
 

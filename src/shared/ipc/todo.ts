@@ -1,6 +1,10 @@
 import type { ChannelSpecs, SessionId } from './session';
 
 export const TODO_CHANNELS = {
+  todoChanged: {
+    name: 'todo:changed',
+    does: 'Main reports that a repository todo list changed, so the pane refreshes that list.',
+  },
   todoList: {
     name: 'todo:list',
     does: "The renderer reads the current repo's todos in order.",
@@ -130,3 +134,5 @@ export interface TodoTemplateInstantiateMsg {
   repoKey: string;
   ref: string;
 }
+
+export interface TodoChangedMsg { sessionId: SessionId; repoKey: string }

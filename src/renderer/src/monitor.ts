@@ -3,7 +3,7 @@
 // terminal pane, the renderer xterm, or selection.
 
 import type { TabId } from '../../shared/ipc';
-import { resolveMonitorElements } from './dom';
+import { captureSubtreeFocus, resolveMonitorElements } from './dom';
 import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
@@ -67,6 +67,17 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
       })
       .catch(() => {}), // a rejected invoke (main restart) must not be an unhandled rejection
   );
+
+  window.monitor.onCaptureChanged(events => {
+    if (!events.length) return;
+    const restore = captureSubtreeFocus(el.blocks);
+    captureTab.showReport(events);
+    restore(() => el.blocks.querySelector<HTMLElement>('input, button, summary, [tabindex="0"]') ?? el.captureLast);
+  });
+
+  window.monitor.onTodosChanged(msg => {
+    if (msg.repoKey === todoTab.currentRepoKey()) todoTab.refresh();
+  });
 
   window.monitor.onUpdate((msg) => status.update(msg));
 

@@ -19,6 +19,8 @@ export interface SessionTurns {
    *  for the operator to submit (an Insert). */
   injected(text: string, opts?: { submitted: boolean }): void;
   origin(session: number): Promise<TurnOrigin>;
+  acceptSend(session: number, todo: { id: string; text: string }, persist?: () => void): string | null;
+  deliverPending(idle: boolean, inject: (text: string) => void): void;
 }
 
 /** `injected`: the prompt matched text the window injected; `unmatched`: an Insert was waiting and the prompt
@@ -46,6 +48,7 @@ interface Session {
   /** The injections this session's prompts have used up. Each session keeps its own, so another session's prompt
    *  never uses up text meant for this one. */
   used: Set<number>;
+  pending?: { id: string; text: string; turn: Turn; ready: boolean };
 }
 
 interface Injection {
@@ -171,6 +174,23 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
   };
 
   return {
+    acceptSend(id, todo, persist) {
+      const session = sessions.get(id);
+      if (!session || !session.turn || session.turn === 'unknown') return 'the calling turn is no longer open.';
+      if (session.pending) return `todo ${JSON.stringify(session.pending.id)} is already waiting for this turn to end.`;
+      persist?.();
+      session.pending = { ...todo, turn: session.turn, ready: false };
+      return null;
+    },
+    deliverPending(idle, inject) {
+      if (!idle) return;
+      for (const session of sessions.values()) {
+        if (!session.pending?.ready || session.turn !== null) continue;
+        const { text } = session.pending;
+        delete session.pending;
+        inject(text);
+      }
+    },
     hook(id, input) {
       const report = parseHookReport(input);
       if (report === 'ignored') return;
@@ -200,6 +220,7 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
           }
           return;
         case 'Stop':
+          if (session.pending?.turn === session.turn) session.pending.ready = true;
           session.turn = null;
           return;
         case 'UserPromptSubmit': {

@@ -1,3 +1,5 @@
+import { outstandingTodoOrder } from '../../shared/todoOrder';
+import { captureSubtreeFocus } from './dom';
 // Todo tab (§24.1 mockup-exact / §16.3 / §16.4 / §24.2.1): a flat, repo-scoped todo list. Owns the
 // todo state; the Capture tab reaches it only through the narrow TodoSink surface, so the two tabs
 // share state through one owner, not a scope.
@@ -61,7 +63,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap defers while an edit is open so the in-flight edit writes to its own repo (§16.3).
-  let editingId: string | null = null;
+  let editing: TodoItem | null = null;
   let pendingRepoKey: string | null = null;
   // The delete is deferred for TODO_UNDO_MS so Undo needs no re-add (§16.4). Both vars are render
   // state (survive a re-render).
@@ -115,7 +117,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   }
 
   function onRepoChanged(repoKey: string): void {
-    if (editingId !== null) {
+    if (editing !== null) {
       pendingRepoKey = repoKey;
       renderTodos(); // surface the blocked-swap notice
       return;
@@ -124,7 +126,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   }
 
   function resolveEdit(): void {
-    editingId = null;
+    editing = null;
     if (pendingRepoKey !== null) {
       const next = pendingRepoKey;
       pendingRepoKey = null;
@@ -160,8 +162,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
    *  reorder never shoves an inline done row (§16.4). */
   function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): Promise<void> | undefined {
     if (!currentRepoKey) return undefined;
-    let k = 0;
-    const ids = ordered.map((t) => (isOutstanding(t) ? newActive[k++].id : t.id));
+    const ids = outstandingTodoOrder(ordered, newActive.map(item => item.id));
     // A rejected invoke (main restart) keeps the current order, never an unhandled rejection.
     return monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
@@ -186,8 +187,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const actions = doc.createElement('div');
     actions.className = 'todo-actions';
 
-    if (t.id === editingId) {
-      const save = listChangeButton('todo-save pill sm signal', 'Save', 'Save todo', t.id, () => commitEdit(t));
+    if (t.id === editing?.id) {
+      const present = todos.some(item => item.id === t.id);
+      const save = listChangeButton('todo-save pill sm signal', present ? 'Save' : 'Save as new todo', present ? 'Save todo' : 'Save as new todo', t.id, () => commitEdit(t));
       actions.append(
         save.button,
         actionButton('todo-cancel linkbtn', 'Cancel', 'Cancel edit', () =>
@@ -207,7 +209,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const down = listChangeButton('todo-down iconbtn', '↓', 'Move down', t.id, () => moveActive(ordered, t, 1)).button;
     down.disabled = !outstanding || ai === active.length - 1;
     const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
-      editingId = t.id;
+      editing = { ...t };
       rerenderFocusing(t.id, '.tx');
     });
     edit.disabled = !outstanding;
@@ -255,7 +257,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
     let updated: TodoItem[];
     try {
-      updated = await monitor.todoUpdate(t.repoKey, t.id, next);
+      updated = todos.some(item => item.id === t.id)
+        ? await monitor.todoUpdate(t.repoKey, t.id, next)
+        : await monitor.todoAdd(t.repoKey, next, { type: 'manual' });
     } catch {
       return; // IPC failure (main restart): keep the user in the edit state, list unchanged.
     }
@@ -310,10 +314,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const row = doc.createElement('div');
     row.className = `todo${done ? ' done' : ''}${t.status === 'in_progress' ? ' in-progress' : ''}`;
     row.dataset.todoId = t.id;
-    row.draggable = isOutstanding(t) && editingId === null;
+    row.draggable = isOutstanding(t) && editing === null;
 
     const chk = doc.createElement('button');
     chk.className = 'chk';
+    chk.disabled = !todos.some(item => item.id === t.id);
     chk.setAttribute('role', 'checkbox');
     // Tri-state checkbox (§16.3).
     chk.setAttribute('aria-checked', done ? 'true' : t.status === 'in_progress' ? 'mixed' : 'false');
@@ -332,7 +337,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const tx = doc.createElement('div');
     tx.className = 'tx';
     tx.textContent = t.text;
-    if (t.id === editingId) {
+    if (t.id === editing?.id) {
       tx.contentEditable = 'true';
       tx.tabIndex = 0; // focusable so enter-edit can move focus here (a11y)
       tx.classList.add('editing');
@@ -357,7 +362,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     body.append(tx, src);
 
     row.append(chk, body, actions);
-    if (t.id === confirmingDeleteId && t.id !== editingId) row.append(renderDeleteBar(t));
+    if (t.id === confirmingDeleteId && t.id !== editing?.id) row.append(renderDeleteBar(t));
     return row;
   }
 
@@ -437,6 +442,16 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   }
 
   function renderTodos(): void {
+    const previousInput = todoListEl.querySelector<HTMLTextAreaElement>('#todo-new');
+    const active = doc.activeElement as HTMLElement | null;
+    const activeId = active?.id;
+    const activeTodo = active?.closest<HTMLElement>('[data-todo-id]')?.dataset.todoId;
+    const activeClass = active?.className;
+    const restore = captureSubtreeFocus(todoListEl);
+    const editor = todoListEl.querySelector<HTMLElement>('.editing');
+    const selected = doc.getSelection();
+    const selection = editor && selected?.anchorNode && selected.focusNode && editor.contains(selected.anchorNode)
+      ? { anchor: selected.anchorNode, start: selected.anchorOffset, focus: selected.focusNode, end: selected.focusOffset } : null;
     todoListEl.replaceChildren();
 
     if (pendingRepoKey !== null) {
@@ -452,6 +467,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     input.id = 'todo-new';
     input.className = 'todo-new';
     input.rows = 1;
+    input.value = previousInput?.value ?? '';
     input.setAttribute('aria-label', 'New todo');
     input.placeholder = 'Add a todo…';
     const addBtn = doc.createElement('button');
@@ -459,7 +475,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     addBtn.className = 'pill sm signal';
     addBtn.textContent = 'Add';
     const submitAdd = async (): Promise<void> => {
-      const text = input.value.trim();
+      const submittedDraft = input.value;
+      const text = submittedDraft.trim();
       if (!text || !currentRepoKey) return;
       let list: TodoItem[];
       try {
@@ -467,8 +484,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       } catch {
         return; // IPC failure (main restart): keep the typed text and list unchanged.
       }
+      const currentInput = todoListEl.querySelector<HTMLTextAreaElement>('#todo-new');
+      if (currentInput?.value === submittedDraft) currentInput.value = '';
       setTodos(list);
-      input.value = '';
     };
     const pressAdd = listChanges.bind(addBtn, submitAdd);
     input.addEventListener('keydown', (e) => {
@@ -486,14 +504,30 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     list.className = 'todos';
     // One flat list in stored order; done rows render inline (dimmed), not in a section.
     const ordered = [...todos].sort((a, b) => a.order - b.order);
+    if (editing && !ordered.some(item => item.id === editing?.id)) ordered.push(editing);
     ordered.forEach((t) => list.appendChild(renderTodoRow(t, ordered)));
     todoListEl.appendChild(list);
 
+    if (editor && editing !== null) {
+      list.querySelector('.editing')?.replaceWith(editor);
+      if (active === editor) {
+        restore(() => editor);
+        if (selection) doc.getSelection()?.setBaseAndExtent(selection.anchor, selection.start, selection.focus, selection.end);
+      }
+    }
     wireDragReorder(list, ordered);
 
     const focus = focusAfterRender;
     focusAfterRender = null;
     if (focus) focus();
+    if (!focus || doc.activeElement === doc.body) restore(() => {
+      const replacement = activeId ? doc.getElementById(activeId)
+        : active === editor && editor?.isConnected ? editor
+        : Array.from(todoListEl.querySelectorAll<HTMLElement>('[data-todo-id] button, [data-todo-id] [role="checkbox"]'))
+          .find(el => el.closest<HTMLElement>('[data-todo-id]')?.dataset.todoId === activeTodo && el.className === activeClass);
+      return replacement && !replacement.matches(':disabled') ? replacement : input;
+    });
+    if (doc.activeElement === input && previousInput) input.setSelectionRange(previousInput.selectionStart, previousInput.selectionEnd);
   }
 
   // HTML5 drag reorder of the active rows (§16.4); ↑/↓ are the keyboard path. Reorders within the

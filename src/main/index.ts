@@ -360,6 +360,7 @@ async function createWindow(): Promise<void> {
   let agentActivity: AgentState = 'quiet';
   // §27.2/§27.3 — fired on each active→quiet flip so the app-loop engine can inject a deferred/retry
   // turn the moment the instance is injectable. Assigned once the engine exists (below); a no-op until.
+  let deliverMcpTodos: () => void = () => {};
   let notifyInjectable: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
@@ -372,7 +373,7 @@ async function createWindow(): Promise<void> {
       agentActivity = status.agentState;
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
-      if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
+      if (status.agentState === 'quiet') { notifyInjectable(); deliverMcpTodos(); } // §27.2: the instance is now injectable
     },
   });
 
@@ -1434,7 +1435,33 @@ async function createWindow(): Promise<void> {
     if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: `${verb}; pickup started.` };
     return { kind: 'taken', message: `${verb}.${view.notice ? ` ${view.notice}` : ''}` };
   };
+  const todoOperations: typeof todoStore = {
+    list: (repo) => todoStore.list(repo),
+    add: (repo, text, source) => changeTodos(repo, () => todoStore.add(repo, text, source)),
+    update: (repo, id, text) => changeTodos(repo, () => todoStore.update(repo, id, text)),
+    reorder: (repo, ids) => changeTodos(repo, () => todoStore.reorder(repo, ids)),
+    setStatus: (repo, id, status) => changeTodos(repo, () => todoStore.setStatus(repo, id, status)),
+    delete: (repo, id) => changeTodos(repo, () => todoStore.delete(repo, id)),
+    clear: (repo) => changeTodos(repo, () => todoStore.clear(repo)),
+  };
+  function changeTodos(repo: string, change: () => ReturnType<typeof todoStore.list>) {
+    const before = todoSnapshot(repo);
+    const list = change();
+    audit.recordTodoChange(repo, before, list);
+    send(CH.todoChanged, { sessionId: SESSION_ID, repoKey: repo });
+    pushFlowChanged();
+    return list;
+  }
+  const captureReport = () => captureLastReport(SESSION_ID, store, scanner);
+  deliverMcpTodos = () => sessionTurns.deliverPending(agentActivity === 'quiet', text => inject(text, { submit: true }));
   const mcpActions = createMcpActions({
+    todos: todoOperations,
+    captureReport: () => {
+      const events = captureReport();
+      if (events.length) send(CH.captureChanged, { sessionId: SESSION_ID, events });
+      return events;
+    },
+    sendTodo: (caller, todo, persist) => caller.session === null ? 'the calling session is unknown.' : sessionTurns.acceptSend(caller.session, todo, persist),
     windowId,
     originOf: (caller) => (caller.session === null ? Promise.resolve('undetermined') : sessionTurns.origin(caller.session)),
     readState: readMcpWindowState,
@@ -1464,6 +1491,7 @@ async function createWindow(): Promise<void> {
   answerMcp = async (request, caller) => {
     if (request.tool !== MCP_HOOK_REPORT) return mcpActions.call(request, caller);
     if (caller.session !== null) sessionTurns.hook(caller.session, request.args);
+    deliverMcpTodos();
     return null;
   };
 
@@ -1567,7 +1595,7 @@ async function createWindow(): Promise<void> {
       // a duplicate rather than replace the single slot. Fail-closed to [], which the renderer reads as
       // "nothing captured, keep the prior report" (§6 live-session check).
       [CH.captureLast]: (_e, m) =>
-        isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
+        isValidCaptureLast(m) ? captureReport() : [],
       // §27.9/§27.13 / N5 / §6 / AC7 — approve, polish and back-to-red without a brief. The reply is whether the
       // decision landed, sent once main has finished acting on it, so the gate's controls hold until then.
       // Fail-closed to false.
@@ -1593,38 +1621,11 @@ async function createWindow(): Promise<void> {
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
-      [CH.todoAdd]: (_e, m) => {
-        if (!isValidTodoAdd(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.add(m.repoKey, m.text, m.source);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
-      [CH.todoUpdate]: (_e, m) => {
-        if (!isValidTodoUpdate(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.update(m.repoKey, m.id, m.text);
-        audit.recordTodoChange(m.repoKey, before, list);
-        return list;
-      },
-      [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
-      [CH.todoSetStatus]: (_e, m) => {
-        if (!isValidTodoSetStatus(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.setStatus(m.repoKey, m.id, m.status);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
-      [CH.todoDelete]: (_e, m) => {
-        if (!isValidTodoDelete(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.delete(m.repoKey, m.id);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
+      [CH.todoAdd]: (_e, m) => isValidTodoAdd(m) ? todoOperations.add(m.repoKey, m.text, m.source) : [],
+      [CH.todoUpdate]: (_e, m) => isValidTodoUpdate(m) ? todoOperations.update(m.repoKey, m.id, m.text) : [],
+      [CH.todoReorder]: (_e, m) => isValidTodoReorder(m) ? todoOperations.reorder(m.repoKey, m.orderedIds) : [],
+      [CH.todoSetStatus]: (_e, m) => isValidTodoSetStatus(m) ? todoOperations.setStatus(m.repoKey, m.id, m.status) : [],
+      [CH.todoDelete]: (_e, m) => isValidTodoDelete(m) ? todoOperations.delete(m.repoKey, m.id) : [],
       // Artifact viewer (§20.1/§20.2): discover/read against the live cwd (see viewerCwd). Read is
       // path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
