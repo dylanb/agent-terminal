@@ -16,10 +16,6 @@ export function isWaitingValue(value: unknown): value is WaitingValue {
   return typeof program === 'string' && program.length > 0 && typeof others === 'number' && Number.isSafeInteger(others) && others >= 0;
 }
 
-export function sameWaitingValue(a: WaitingValue | null, b: WaitingValue | null): boolean {
-  return a === b || (a !== null && b !== null && a.program === b.program && a.others === b.others);
-}
-
 export function waitingLabel({ program, others }: WaitingValue): string {
   return others > 0 ? `${program} +${others}` : program;
 }
