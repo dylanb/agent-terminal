@@ -41,6 +41,21 @@ describe('the window status (#319 AC6, AC11)', () => {
     expect(delivered.map((update) => update.waiting)).toEqual([{ program: 'node', others: 0 }, null]);
   });
 
+  it('delivers each change of label while the screen stays quiet', () => {
+    const { window, delivered, setWaiting } = harness();
+    setWaiting({ program: 'node', others: 0 });
+    window.screen(quiet(1));
+    setWaiting({ program: 'node', others: 1 });
+    window.refresh();
+    setWaiting({ program: 'pytest', others: 1 });
+    window.refresh();
+    expect(delivered.map((update) => update.waiting)).toEqual([
+      { program: 'node', others: 0 },
+      { program: 'node', others: 1 },
+      { program: 'pytest', others: 1 },
+    ]);
+  });
+
   it('never delivers a Waiting value beside an active screen, whatever the source reports', () => {
     const { window, delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });
