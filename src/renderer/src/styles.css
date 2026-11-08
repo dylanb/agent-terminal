@@ -63,6 +63,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar:has(.sb-alert-btn) { background:color-mix(in srgb, var(--attn) 10%, var(--card));
   border-bottom-color:color-mix(in srgb, var(--attn) 38%, var(--hair)); }
 
+.status-bar .sb-body { display:contents; }
+.status-bar .sb-setup-slot { flex:none; display:flex; }
+.status-bar .sb-setup { min-height:var(--sb-line); padding:0 10px; border-radius:999px; font:inherit; font-weight:600;
+  border:1px solid var(--attn); background:transparent; color:var(--text); cursor:pointer; }
+.status-bar .sb-setup:hover, .status-bar .sb-setup:focus-visible { background:color-mix(in srgb, var(--attn) 12%, transparent); }
+.status-bar .sb-setup[hidden] { display:none; }
+
 /* WCAG 1.4.4 / 1.4.10 / 2.4.11 */
 .status-bar .sb-title { flex:0 10000 auto; min-width:7ch; overflow:hidden; margin-right:auto; }
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;

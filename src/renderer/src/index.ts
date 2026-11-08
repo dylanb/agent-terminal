@@ -353,7 +353,8 @@ if (flowStripHost) {
 }
 
 const setupCheckHost = document.getElementById('setup-check-host');
-if (setupCheckHost) {
+const setupNeededHost = document.getElementById('setup-needed');
+if (setupCheckHost && setupNeededHost) {
   let agentState: HostedAgentState = 'absent';
   const agentListeners = new Set<(state: HostedAgentState) => void>();
   const agentStateIs = (state: HostedAgentState): void => {
@@ -365,7 +366,7 @@ if (setupCheckHost) {
   window.setup.agentState().then(agentStateIs, (e: unknown) => {
     console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
   });
-  const setupCheck = createSetupCheckDialog(setupCheckHost, {
+  const setupCheck = createSetupCheckDialog({ button: setupNeededHost, dialog: setupCheckHost }, {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
     previewExamples: () => window.examples.preview(),
@@ -374,14 +375,13 @@ if (setupCheckHost) {
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
     }),
+    onSetupLoopFailed: (reason) => showError({ title: 'Could not run the setup loop', message: reason }),
     agentState: () => agentState,
     onAgentStateChanged: (cb) => {
       agentListeners.add(cb);
       return () => agentListeners.delete(cb);
     },
     onFocusLost: landFocus,
-    blockingDialogOpen: () => shell.modalIsOpen(),
-    onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),
   });
   repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
