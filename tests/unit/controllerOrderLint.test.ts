@@ -89,7 +89,7 @@ describe('a card, the card order and the sort control announce nothing', () => {
 
 describe('controller tests find the sort control only through the helper', () => {
   it('flags a hand-written radio or radio-group query', async () => {
-    for (const file of ['tests/unit/controllerProbe.test.ts', 'tests/unit/sortModeControl.test.ts', 'tests/e2e/controllerRecentOrder.spec.ts']) {
+    for (const file of ['tests/unit/controllerProbe.test.ts', 'tests/unit/sortModeControl.test.ts', 'tests/e2e/controllerRecentOrder.spec.ts', 'tests/unit/controllerProtocol.test.ts', 'tests/e2e/controllerWireVersion.spec.ts']) {
       expect({
         file,
         radio: await errors(SORT_CONTROL_HELPER, "page.getByRole('radio', { name: 'Attention' });\n", file),
@@ -120,6 +120,8 @@ const ORDER_TESTS = [
   'tests/e2e/controllerHold.spec.ts',
   'tests/browser/controllerRecency.test.ts',
   'tests/browser/controllerAttentionReading.test.ts',
+  'tests/browser/controllerLiveUpdate.test.ts',
+  'tests/browser/controllerCardUpdate.test.ts',
 ];
 
 describe('the card order tests wait on observed state and read no wall clock', () => {
@@ -157,7 +159,7 @@ describe('the card order tests wait on observed state and read no wall clock', (
     }).toEqual({ poll: 0, fakeClock: 0, frameClock: 0 });
   });
 
-  it('keeps the card-helper, sort-control and protocol-version rules in them and in the other blocks that restate them', async () => {
+  it('keeps the card-helper, sort-control and protocol-version rules in them and in the other controller tests beside them', async () => {
     for (const file of [...ORDER_TESTS, 'tests/unit/controllerCard.test.ts', 'tests/e2e/controllerWindowPreferences.spec.ts']) {
       expect({
         file,

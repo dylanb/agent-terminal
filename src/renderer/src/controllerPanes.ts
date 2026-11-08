@@ -1,10 +1,10 @@
 import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardClassification';
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate } from './controllerCardConditions';
-import { captureSubtreeFocus } from './dom';
+import { reconcileChildren } from './dom';
 import { CONTROLLER_DEFAULT_SORT_MODE, CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerSortMode, type ControllerTimelineEntry, type Theme } from '../../shared/ipc';
-import { createControllerCard, type CardState, type ControllerCard } from './controllerCard';
-import { cardList, frozenCardList, observeCards, timeInStateText, type CardListEntry, type CardObservations } from './controllerCardOrder';
+import { createControllerCard, type ControllerCard } from './controllerCard';
+import { createCardOrder, type CardListEntry } from './controllerCardOrder';
 import type { ControllerClock, ControllerLayout, ControllerWindowFocus } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
 import { createThemeToggle } from './themeToggle';
@@ -77,18 +77,16 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   status.setAttribute('aria-atomic', 'true');
   let previousAttention = new Map<string, string>();
   let previousNotifications = new Map<string, NotificationEntry>();
-  let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
-  let observations: CardObservations | undefined;
+  let cards = new Map<string, { directory: ControllerDirectoryCard; card: ControllerCard }>();
+  const order = createCardOrder();
+  let observed = false;
   let directories: ControllerDirectoryCard[] = [];
   let sortMode = CONTROLLER_DEFAULT_SORT_MODE;
   const recency = new Map<string, number>();
   let uses = 0;
-  let resortQueued = false;
-  let shown: CardListEntry[] = [];
   let held: ReadonlySet<string> = new Set();
   let pointerOver: string | undefined;
   let focusedNode: Node | null = null;
-  let rendering = false;
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
     const slot = doc.createElement('span');
@@ -141,13 +139,12 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const applyLayout = () => { host.dataset.layout = deps.layout.oneColumn() ? 'one-column' : 'multi-column'; };
   applyLayout();
   const unsubscribeClock = deps.clock.onTick(() => {
-    if (!observations) return;
     const now = deps.clock.now();
-    for (const { directory, card } of cards) card.setTimeText(timeInStateText(directory, observations, now));
+    for (const { directory, card } of cards.values()) card.setTimeText(order.timeInState(directory, now));
   });
   const unsubscribeLayout = deps.layout.onChange(() => {
     applyLayout();
-    for (const { directory, card } of cards) card.setExpandedByDefault(expandedFor(directory));
+    for (const { directory, card } of cards.values()) card.setExpandedByDefault(expandedFor(directory));
   });
 
   const announce = () => {
@@ -187,23 +184,39 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     previousNotifications = currentNotifications;
   }
 
+  const headings = new Map<string, HTMLElement>();
+  function headingShown(entry: Exclude<CardListEntry, { kind: 'card' }>): { key: string; text: string } {
+    switch (entry.kind) {
+      case 'group':
+        return { key: entry.group, text: `${entry.name} (${entry.count})` };
+      case 'recent':
+        return { key: entry.kind, text: entry.name };
+      default:
+        return entry satisfies never;
+    }
+  }
   function groupHeading(entry: Exclude<CardListEntry, { kind: 'card' }>): HTMLElement {
-    const heading = doc.createElement('h2');
+    const { key, text } = headingShown(entry);
+    const heading = headings.get(key) ?? doc.createElement('h2');
+    headings.set(key, heading);
     heading.className = 'controller-group-heading';
-    heading.textContent = entry.kind === 'group' ? `${entry.name} (${entry.count})` : entry.name;
+    heading.textContent = text;
     return heading;
   }
+  const empty = doc.createElement('p');
+  empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
+  empty.tabIndex = -1;
 
-  function mountCard(directory: ControllerDirectoryCard, timeText: string, from: CardState | undefined): ControllerCard {
+  function mountCard(directory: ControllerDirectoryCard, timeText: string): ControllerCard {
+    const { launchDirectory } = directory;
     return createControllerCard(list, {
       card: directory,
       expandedByDefault: expandedFor(directory),
       timeText,
-      held: held.has(directory.launchDirectory),
-      from,
-      onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
+      held: held.has(launchDirectory),
+      onClearHistory(target) {
         alert.replaceChildren();
-        return deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
+        return deps.controller.clearHistory(target).then(outcome => {
           if (disposed || outcome === 'cleared') return;
           alert.replaceChildren();
           alert.textContent = outcome === 'stale'
@@ -211,10 +224,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
             : 'Clear history unavailable. Please retry.';
         }).catch(announce);
       },
-      onAction() {
-        if (directory.kind === 'disconnected') return deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
+      onAction(current) {
+        if (current.kind === 'disconnected') return deps.controller.dismissTerminal(current.dismissOccurrenceId).catch(announce);
         const request = ++activation;
-        const targets = directory.activationTargets;
+        const targets = current.activationTargets;
         alert.replaceChildren();
         return Promise.all(targets.map(async id => {
           try { return await deps.controller.activateTerminal(id); }
@@ -228,43 +241,32 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
           }
         });
       },
-      onDismissLoopMessage(id) {
-        if (directory.kind !== 'single') return;
-        return deps.controller.dismissLoopMessage(directory.activationTargets[0], id).catch(announce);
+      onDismissLoopMessage(id, current) {
+        if (current.kind !== 'single') return;
+        return deps.controller.dismissLoopMessage(current.activationTargets[0], id).catch(announce);
       },
       onUse() {
-        recency.set(directory.launchDirectory, ++uses);
-        if (resortQueued) return;
-        resortQueued = true;
-        queueMicrotask(() => {
-          resortQueued = false;
-          if (!disposed && observations && !held.size && !sameCardOrder(observations)) renderList();
-        });
+        recency.set(launchDirectory, ++uses);
+        if (!held.size) renderList();
       },
     });
-  }
-
-  /** Whether the list rule would place the cards where they are shown, so a rebuild would only replace the pressed control. */
-  function sameCardOrder(observed: CardObservations): boolean {
-    const order = cardList(directories, observed, sortMode, recency).flatMap(entry => (entry.kind === 'card' ? [entry.card] : []));
-    return order.length === cards.length && order.every((card, index) => card === cards[index].directory);
   }
 
   function currentHolds(): Set<string> {
     const present = new Set(directories.map(({ launchDirectory }) => launchDirectory));
     const holds = new Set<string>();
     if (pointerOver !== undefined && present.has(pointerOver)) holds.add(pointerOver);
-    const focused = deps.windowFocus.focused() ? cards.find(({ card }) => card.contains(focusedNode)) : undefined;
+    const focused = deps.windowFocus.focused() ? [...cards.values()].find(({ card }) => card.contains(focusedNode)) : undefined;
     if (focused && present.has(focused.directory.launchDirectory)) holds.add(focused.directory.launchDirectory);
     return holds;
   }
 
   function refreshHolds(): void {
-    if (disposed || rendering) return;
+    if (disposed) return;
     const wasFrozen = held.size > 0;
     held = currentHolds();
     if (wasFrozen && !held.size) renderList();
-    else for (const { directory, card } of cards) card.setHeld(held.has(directory.launchDirectory));
+    else for (const { directory, card } of cards.values()) card.setHeld(held.has(directory.launchDirectory));
   }
 
   const nodeOf = (target: EventTarget | null): Node | null => (target instanceof Node && host.contains(target) ? target : null);
@@ -275,7 +277,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   };
   const pointerMoved = (event: PointerEvent) => {
     const target = event.target instanceof Node ? event.target : null;
-    pointerOver = cards.find(({ card }) => card.contains(target))?.directory.launchDirectory;
+    pointerOver = [...cards.values()].find(({ card }) => card.contains(target))?.directory.launchDirectory;
     refreshHolds();
   };
   const pointerLeft = () => {
@@ -288,32 +290,38 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   host.addEventListener('focusout', focusMoved);
   const unsubscribeWindowFocus = deps.windowFocus.onChange(refreshHolds);
 
-  function renderList(): void {
-    if (!observations) return;
-    const observed = observations;
-    const now = deps.clock.now();
-    const restoreFocus = captureSubtreeFocus(list);
-    rendering = true;
-    try {
-      const handover = new Map(cards.map(({ directory, card }) => [directory.launchDirectory, card.state()]));
-      cards.forEach(({ card }) => card.dispose());
-      list.replaceChildren();
-      cards = [];
-      shown = held.size ? frozenCardList(shown, directories, observed, sortMode, recency) : cardList(directories, observed, sortMode, recency);
-      for (const entry of shown) {
-        if (entry.kind !== 'card') list.append(groupHeading(entry));
-        else cards.push({ directory: entry.card, card: mountCard(entry.card, timeInStateText(entry.card, observed, now), handover.get(entry.card.launchDirectory)) });
-      }
-      if (!directories.length) {
-        const empty = doc.createElement('p');
-        empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
-        empty.tabIndex = -1;
-        list.append(empty);
-      }
-      restoreFocus(() => cards.map(({ card }) => card.focusTarget()).find(Boolean) ?? cards[0]?.card.header() ?? list.querySelector('p'));
-    } finally {
-      rendering = false;
+  function showCard(directory: ControllerDirectoryCard, timeText: string): ControllerCard {
+    const kept = cards.get(directory.launchDirectory);
+    if (!kept) return mountCard(directory, timeText);
+    if (kept.directory !== directory) {
+      kept.card.update(directory);
+      kept.card.setExpandedByDefault(expandedFor(directory));
     }
+    kept.card.setTimeText(timeText);
+    return kept.card;
+  }
+
+  function renderList(): void {
+    if (disposed || !observed) return;
+    const now = deps.clock.now();
+    const next = new Map<string, { directory: ControllerDirectoryCard; card: ControllerCard }>();
+    const nodes: Node[] = [];
+    for (const entry of order.list(sortMode, recency, held.size > 0)) {
+      if (entry.kind !== 'card') {
+        nodes.push(groupHeading(entry));
+        continue;
+      }
+      const directory = entry.card;
+      const card = showCard(directory, order.timeInState(directory, now));
+      next.set(directory.launchDirectory, { directory, card });
+      nodes.push(card.element());
+    }
+    if (!directories.length) nodes.push(empty);
+    const fallback = () => [...next.values()][0]?.card.header() ?? (directories.length ? undefined : empty);
+    reconcileChildren(list, nodes, fallback);
+    const previous = cards;
+    cards = next;
+    for (const [launchDirectory, { card }] of previous) if (!next.has(launchDirectory)) card.dispose();
     refreshHolds();
   }
 
@@ -323,7 +331,8 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     for (const directory of recency.keys()) if (!present.has(directory)) recency.delete(directory);
     if (pointerOver !== undefined && !present.has(pointerOver)) pointerOver = undefined;
     held = currentHolds();
-    observations = observeCards(observations, directories, deps.clock.now());
+    order.observe(directories, deps.clock.now());
+    observed = true;
     announceAttention(directories);
     header.render(directories);
     renderList();

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
+import type { ControllerDirectoryCard } from '../../src/shared/controllerCards';
 import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardHeadingLevelsIn, cardIn, headerStatusIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
@@ -267,6 +268,17 @@ describe('controller card loop message', () => {
     expect(loopMessageDismissals).toEqual([(terminal.work as WorkStatus).loopMessage!.id]);
   });
 
+  it('dismisses the newer message after an update replaces the loop message with one of the same kind and reason', () => {
+    const terminal = STATUS_CASES['loop-error'].terminal;
+    const work = terminal.work as WorkStatus;
+    const { host, card, loopMessageDismissals } = mount(terminal);
+    const newer: ControllerTerminal = { ...terminal, work: { ...work, loopMessage: { ...work.loopMessage!, id: 'newer-message' } } };
+    card.update(directoryCards([newer])[0]);
+    const element = cardIn(host, terminal.launchDirectory);
+    (element ? dismissLoopMessageIn(element) : undefined)?.click();
+    expect(loopMessageDismissals).toEqual(['newer-message']);
+  });
+
   it('shows no loop message or its Dismiss when there is none', () => {
     const { element } = mount(STATUS_CASES.idle.terminal);
     expect(element && dismissLoopMessageIn(element)).toBeUndefined();
@@ -299,23 +311,101 @@ describe('controller card action while its work is being answered', () => {
     expect({ pending, afterAnswer: answers.length }).toEqual({ pending: { dispatched: 1, busy: 'true' }, afterAnswer: 2 });
   });
 
-  it('keeps Bring forward unavailable on a card rebuilt while the old card\'s press is still answered', async () => {
+  it('keeps Bring forward unavailable while its press is answered across an update, then takes the next press', async () => {
     const { terminal } = STATUS_CASES.working;
-    const { host, card: old, answers } = mountPending(terminal);
+    const { host, card, answers } = mountPending(terminal);
     const first = cardIn(host, terminal.launchDirectory);
     (first && bringForwardIn(first))?.click();
-    const state = old.state();
-    old.dispose();
-    const later: string[] = [];
-    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT, from: state, onAction() { later.push('pressed'); }, onDismissLoopMessage() {} });
-    const rebuilt = cardIn(host, terminal.launchDirectory);
-    const control = rebuilt ? bringForwardIn(rebuilt) : undefined;
+    card.update(directoryCards([terminal])[0]);
+    const updated = cardIn(host, terminal.launchDirectory);
+    const control = updated ? bringForwardIn(updated) : undefined;
     control?.click();
-    const pending = [...later];
+    const pending = answers.length;
     answers[0]?.();
     await settle();
     control?.click();
-    expect({ pending, afterAnswer: later }).toEqual({ pending: [], afterAnswer: ['pressed'] });
+    expect({ pending, afterAnswer: answers.length }).toEqual({ pending: 1, afterAnswer: 2 });
+  });
+});
+
+describe('a controller card updated in place', () => {
+  const pressed: ControllerDirectoryCard[] = [];
+  function mountRecording(terminal: ControllerTerminal) {
+    const host = document.createElement('div');
+    document.body.append(host);
+    pressed.length = 0;
+    const card = createControllerCard(host, {
+      card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT,
+      onAction(current) { pressed.push(current); }, onDismissLoopMessage() {},
+    });
+    return { host, card };
+  }
+
+  it('reports a press with the directory the card shows now, after an update to it', () => {
+    const { terminal } = STATUS_CASES.working;
+    const { host, card } = mountRecording(terminal);
+    card.update(directoryCards([terminal, { ...terminal, id: 'second' }])[0]);
+    const element = cardIn(host, terminal.launchDirectory);
+    (element ? bringForwardIn(element) : undefined)?.click();
+    expect(pressed.map(current => (current.kind === 'disconnected' ? [] : current.activationTargets))).toEqual([[terminal.id, 'second']]);
+  });
+
+  it('shows each of two reasons with the same text, and keeps a selection in the first, across an update', () => {
+    const terminal = withWork({ attention: { status: 'needs a human', reasons: ['Approve the plan', 'Approve the plan'] } });
+    const { host, card } = mountRecording(terminal);
+    const count = () => (cardIn(host, terminal.launchDirectory)?.textContent ?? '').split('Approve the plan').length - 1;
+    const before = count();
+    const element = cardIn(host, terminal.launchDirectory);
+    const walker = element ? document.createTreeWalker(element, NodeFilter.SHOW_TEXT) : undefined;
+    while (walker?.nextNode() && walker.currentNode.textContent !== 'Approve the plan');
+    if (walker?.currentNode.parentNode) getSelection()?.selectAllChildren(walker.currentNode.parentNode);
+    card.update(directoryCards([terminal])[0]);
+    expect({ before, after: count(), selected: getSelection()?.toString() }).toEqual({ before: 2, after: 2, selected: 'Approve the plan' });
+  });
+
+  it('keeps focus on the same Dismiss of a loop message across an update', () => {
+    const { terminal } = STATUS_CASES['loop-error'];
+    const { host, card } = mountRecording(terminal);
+    const element = cardIn(host, terminal.launchDirectory);
+    const dismiss = element ? dismissLoopMessageIn(element) : undefined;
+    dismiss?.focus();
+    card.update(directoryCards([terminal])[0]);
+    expect({ found: Boolean(dismiss), same: document.activeElement === dismiss }).toEqual({ found: true, same: true });
+  });
+
+  it('keeps a selection in a condition\'s title across an update', () => {
+    const { terminal } = STATUS_CASES['loop-error'];
+    const { host, card } = mountRecording(terminal);
+    const element = cardIn(host, terminal.launchDirectory);
+    const walker = element ? document.createTreeWalker(element, NodeFilter.SHOW_TEXT) : undefined;
+    let title: Node | null = null;
+    while (walker?.nextNode()) if (walker.currentNode.textContent === 'Loop error') title = walker.currentNode;
+    if (title) getSelection()?.selectAllChildren(title.parentNode!);
+    card.update(directoryCards([terminal])[0]);
+    expect(getSelection()?.toString()).toBe('Loop error');
+  });
+
+  it('refuses an update to a different launch directory', () => {
+    const { terminal } = STATUS_CASES.working;
+    const { card } = mountRecording(terminal);
+    expect(() => card.update(directoryCards([{ ...terminal, launchDirectory: '/elsewhere' }])[0])).toThrow(/elsewhere/);
+  });
+
+  it('offers Clear history only while its directory has a history it can clear', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const terminal = { ...statusTerminal(), timeline: [statusItem('Turned quiet', 1)] } as ControllerTerminal;
+    const target = { id: terminal.id, launchDirectory: terminal.launchDirectory, revision: 'r1' };
+    const cleared: string[] = [];
+    const card = createControllerCard(host, {
+      card: directoryCards([terminal])[0], expandedByDefault: true, timeText: TIME_TEXT,
+      onAction() {}, onDismissLoopMessage() {}, onClearHistory(asked) { cleared.push(asked.revision); },
+    });
+    const element = () => cardIn(host, terminal.launchDirectory)!;
+    const withoutTarget = clearHistoryIn(element()) !== undefined;
+    card.update(directoryCards([{ ...terminal, clearHistoryTarget: target }])[0]);
+    clearHistoryIn(element())?.click();
+    expect({ withoutTarget, cleared }).toEqual({ withoutTarget: false, cleared: ['r1'] });
   });
 });
 
@@ -380,7 +470,10 @@ describe('controller card timeline', () => {
     notificationItem('Review the release proposal', at(13, 24), 2),
     statusItem('Started the oldest retained change', at(10, 17)),
   ];
-  const withTimeline = (items: readonly unknown[], work: Partial<WorkStatus> = {}) => ({ ...statusTerminal(work), timeline: items }) as ControllerTerminal;
+  const withTimeline = (items: readonly unknown[], work: Partial<WorkStatus> = {}) => {
+    const terminal = statusTerminal(work);
+    return { ...terminal, timeline: items, clearHistoryTarget: { id: terminal.id, launchDirectory: terminal.launchDirectory, revision: 'r1' } } as ControllerTerminal;
+  };
   function mountWithClear(terminal: ControllerTerminal) {
     const host = document.createElement('div');
     document.body.append(host);

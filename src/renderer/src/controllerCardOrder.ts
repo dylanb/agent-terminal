@@ -9,10 +9,7 @@ interface Observation {
   readonly seen: number;
 }
 
-const OBSERVED = Symbol('card observations');
-export interface CardObservations {
-  readonly [OBSERVED]: { readonly byDirectory: ReadonlyMap<string, Observation>; readonly nextSeen: number };
-}
+interface CardObservations { readonly byDirectory: ReadonlyMap<string, Observation>; readonly nextSeen: number }
 
 export type CardListEntry =
   | { readonly kind: 'group'; readonly name: string; readonly group: SummaryLabel; readonly count: number }
@@ -29,9 +26,9 @@ const TIME_VERBS: Readonly<Record<SummaryLabel, string>> = {
   errors: 'for', 'need a human': 'waiting', idle: 'for', working: 'running',
 };
 
-export function observeCards(previous: CardObservations | undefined, cards: readonly ControllerDirectoryCard[], now: number): CardObservations {
-  const before = previous?.[OBSERVED].byDirectory;
-  let nextSeen = previous?.[OBSERVED].nextSeen ?? 0;
+function observeCards(previous: CardObservations | undefined, cards: readonly ControllerDirectoryCard[], now: number): CardObservations {
+  const before = previous?.byDirectory;
+  let nextSeen = previous?.nextSeen ?? 0;
   const byDirectory = new Map<string, Observation>();
   for (const card of cards) {
     const group = cardStatus(card).summary;
@@ -45,11 +42,11 @@ export function observeCards(previous: CardObservations | undefined, cards: read
       seen: last?.seen ?? nextSeen++,
     });
   }
-  return { [OBSERVED]: { byDirectory, nextSeen } };
+  return { byDirectory, nextSeen };
 }
 
 function observationOf(card: ControllerDirectoryCard, observations: CardObservations): Observation {
-  const observation = observations[OBSERVED].byDirectory.get(card.launchDirectory);
+  const observation = observations.byDirectory.get(card.launchDirectory);
   if (!observation) throw new Error(`The card for ${card.launchDirectory} was not observed`);
   return observation;
 }
@@ -57,7 +54,7 @@ function observationOf(card: ControllerDirectoryCard, observations: CardObservat
 /** Each used launch directory's latest recency interaction, a higher number for a later one. */
 export type CardRecency = ReadonlyMap<string, number>;
 
-export function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
+function cardList(cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
   const observed = cards.map(card => ({ card, observation: observationOf(card, observations) }));
   const groups = SUMMARY_LABELS.map(group => ({
     group,
@@ -78,7 +75,7 @@ export function cardList(cards: readonly ControllerDirectoryCard[], observations
   return groups.flatMap(({ group, members }): CardListEntry[] => [{ kind: 'group', name: GROUP_HEADINGS[group], group, count: members.length }, ...members.map(entry)]);
 }
 
-export function frozenCardList(shown: readonly CardListEntry[], cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
+function frozenCardList(shown: readonly CardListEntry[], cards: readonly ControllerDirectoryCard[], observations: CardObservations, sortMode: ControllerSortMode, recency: CardRecency): CardListEntry[] {
   const current = new Map(cards.map(card => [card.launchDirectory, card]));
   const counts = new Map<SummaryLabel, number>();
   for (const card of cards) {
@@ -107,7 +104,31 @@ function durationText(elapsed: number): string {
   return `${Math.floor(elapsed / DAY)}d ${Math.floor((elapsed % DAY) / HOUR)}h`;
 }
 
-export function timeInStateText(card: ControllerDirectoryCard, observations: CardObservations, now: number): string {
+function timeInStateText(card: ControllerDirectoryCard, observations: CardObservations, now: number): string {
   const { group, enteredAt } = observationOf(card, observations);
   return `${TIME_VERBS[group]} ${durationText(Math.max(0, now - enteredAt))}`;
+}
+
+export interface CardOrder {
+  observe(cards: readonly ControllerDirectoryCard[], now: number): void;
+  /** The list to show; `frozen` keeps every card and heading where the last list put it. */
+  list(sortMode: ControllerSortMode, recency: CardRecency, frozen: boolean): CardListEntry[];
+  timeInState(card: ControllerDirectoryCard, now: number): string;
+}
+
+export function createCardOrder(): CardOrder {
+  let observations: CardObservations = { byDirectory: new Map(), nextSeen: 0 };
+  let cards: readonly ControllerDirectoryCard[] = [];
+  let shown: CardListEntry[] = [];
+  return {
+    observe(next, now) {
+      cards = next;
+      observations = observeCards(observations, next, now);
+    },
+    list(sortMode, recency, frozen) {
+      shown = frozen ? frozenCardList(shown, cards, observations, sortMode, recency) : cardList(cards, observations, sortMode, recency);
+      return shown;
+    },
+    timeInState: (card, now) => timeInStateText(card, observations, now),
+  };
 }

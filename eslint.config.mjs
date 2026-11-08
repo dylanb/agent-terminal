@@ -9,6 +9,25 @@ import tseslint from 'typescript-eslint';
 // explicit `eslint-disable-next-line local/no-todo-comments`.
 const MARKER = /\b(TODO|FIXME)\b/;
 
+/** A rule that reports each `{ selector, message }` it is built with. Each concern is its own rule, so blocks that
+ *  name the same file add their checks together; one `no-restricted-syntax` per file would keep only the last. */
+function selectorRule(description, entries) {
+  return {
+    meta: { type: 'problem', docs: { description }, messages: { found: '{{message}}' }, schema: [] },
+    create(context) {
+      const handlers = {};
+      for (const { selector, message } of entries) {
+        const before = handlers[selector];
+        handlers[selector] = (node) => {
+          before?.(node);
+          context.report({ node, messageId: 'found', data: { message } });
+        };
+      }
+      return handlers;
+    },
+  };
+}
+
 const localPlugin = {
   rules: {
     'no-todo-comments': {
@@ -97,6 +116,8 @@ const CARD_ORDER_TESTS = [
   'tests/e2e/controllerRecency.spec.ts',
   'tests/e2e/controllerHold.spec.ts',
   'tests/browser/controllerRecency.test.ts',
+  'tests/browser/controllerLiveUpdate.test.ts',
+  'tests/browser/controllerCardUpdate.test.ts',
 ];
 const ZERO_DELAY_FLUSH_CARD_TESTS = ['tests/unit/controllerCard.test.ts', 'tests/unit/controllerFrozenList.test.ts', 'tests/unit/controllerRecencyInPlace.test.ts'];
 const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts', 'tests/**/sortModeControl.test.ts'];
@@ -150,6 +171,21 @@ const RAW_CLICK = [
   "AssignmentExpression[left.property.name='onclick']",
 ].map((selector) => ({ selector, message: PRESS_HELPER_MESSAGE }));
 
+const CONTROLLER_WAIT_TESTS = ['tests/e2e/controllerWindow*.ts', ...CARD_ORDER_TESTS];
+
+Object.assign(localPlugin.rules, {
+  'card-helper': selectorRule('Find controller cards through the card helper.', CARD_DOM),
+  'switch-helper': selectorRule('Find the controller header switch through the card helper.', SWITCH_DOM),
+  'sort-control-helper': selectorRule('Find the controller sort control through the card helper.', SORT_CONTROL_DOM),
+  'protocol-constants': selectorRule('Build controller messages with the protocol version constants.', TYPED_IN_VERSION),
+  'no-test-sleep': selectorRule('Wait for an observed state, never a fixed time.', [NO_SLEEP]),
+  'no-promise-sleep': selectorRule('Never sleep on a timer inside a promise.', [NO_PROMISE_SLEEP]),
+  'no-test-new-date': selectorRule('Drive time through the fake clock, never the wall clock.', [TEST_NEW_DATE]),
+  pressable: selectorRule('Run a control\'s action through pressable.ts.', RAW_CLICK),
+  'clock-seam': selectorRule('Read time through the clock dependency.', [CLOCK_SEAM_SYNTAX]),
+  'no-live-region': selectorRule('A card, the card order and the sort control add no live region.', LIVE_REGION),
+});
+
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
   {
@@ -160,23 +196,22 @@ export default [
   },
   {
     files: CONTROLLER_TESTS,
-    ignores: [...CARD_HELPER, ...WIRE_FORMAT_TESTS],
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION] },
-  },
-  {
-    files: CARD_HELPER,
-    ignores: WIRE_FORMAT_TESTS,
-    rules: { 'no-restricted-syntax': ['error', ...TYPED_IN_VERSION] },
-  },
-  {
-    files: WIRE_FORMAT_TESTS,
     ignores: CARD_HELPER,
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP] },
+    rules: { 'local/card-helper': 'error', 'local/sort-control-helper': 'error' },
   },
   {
-    files: ['tests/e2e/controllerWindow*.ts', ...CARD_ORDER_TESTS],
+    files: CONTROLLER_TESTS,
+    ignores: WIRE_FORMAT_TESTS,
+    rules: { 'local/protocol-constants': 'error' },
+  },
+  {
+    files: [...WIRE_FORMAT_TESTS, ...CONTROLLER_WAIT_TESTS],
+    rules: { 'local/switch-helper': 'error', 'local/no-test-sleep': 'error' },
+  },
+  {
+    files: CONTROLLER_WAIT_TESTS,
     rules: {
-      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, NO_SLEEP, NO_PROMISE_SLEEP],
+      'local/no-promise-sleep': 'error',
       'no-restricted-imports': ['error', {
         paths: ['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: NO_SLEEP_MESSAGE })),
       }],
@@ -184,17 +219,7 @@ export default [
   },
   {
     files: [...CARD_ORDER_TESTS, ...ZERO_DELAY_FLUSH_CARD_TESTS],
-    rules: { 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
-  },
-  {
-    files: CARD_ORDER_TESTS,
-    rules: {
-      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, NO_SLEEP, NO_PROMISE_SLEEP, TEST_NEW_DATE],
-    },
-  },
-  {
-    files: ZERO_DELAY_FLUSH_CARD_TESTS,
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SORT_CONTROL_DOM, ...TYPED_IN_VERSION, TEST_NEW_DATE] },
+    rules: { 'local/no-test-new-date': 'error', 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
   },
   {
     files: ['src/main/controller*.ts'],
@@ -226,19 +251,19 @@ export default [
   {
     files: ['src/renderer/**/*.ts'],
     ignores: ['src/renderer/src/pressable.ts'],
-    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
+    rules: { 'local/pressable': 'error' },
   },
   {
     files: CARD_ORDER_CODE,
     rules: {
-      'no-restricted-syntax': ['error', ...RAW_CLICK, CLOCK_SEAM_SYNTAX],
+      'local/clock-seam': 'error',
       'no-restricted-properties': ['error', ...CLOCK_SEAM_READS],
       'no-restricted-globals': ['error', ...CLOCK_SEAM_GLOBALS],
     },
   },
   {
     files: QUIET_CARD_CODE,
-    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK, CLOCK_SEAM_SYNTAX, ...LIVE_REGION] },
+    rules: { 'local/no-live-region': 'error' },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,
