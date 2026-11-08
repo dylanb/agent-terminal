@@ -1,24 +1,53 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/renderer/src/setupCheckDialog';
-import { APP_VERSION, ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
+import {
+  APP_VERSION,
+  ENTRY,
+  REPO,
+  cleanPreview,
+  differingPreview,
+  fakeSetupDeps,
+  installFailed,
+  installSucceeded,
+  plainStatus,
+  repoStatus,
+  retiredPreview,
+} from '../helpers/setupCheckFixtures';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
-import { openModalDialogs, recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
-import { createSetupFlowRun, type SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
+import { openModalDialogs, setupCheckScreen, setupNeededButton } from '../helpers/setupCheckScreen';
+import { createSetupFlowRun } from '../../src/renderer/src/setupFlowRun';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
-import type { FlowStateView } from '../../src/shared/ipc';
+import type { FlowStateView, SetupStatusReply } from '../../src/shared/ipc';
 
-// The setup-check popup lists each condition the checked repository fails, in plain words, one message per
-// failure kind.
+// The setup check shows a setup needed button while the terminal's directory fails a condition; pressing it opens
+// the popup, which lists each condition in plain words, one message per failure kind.
 
 const mounted: SetupCheckDialog[] = [];
 
-function mountDialog(fake: ReturnType<typeof fakeSetupDeps>) {
-  const host = document.body.appendChild(document.createElement('div'));
-  const dialog = createSetupCheckDialog(host, fake.deps);
+/** Presses the setup needed button the way the operator does, with focus on it; fails when it is not shown. */
+function pressSetupNeeded(buttonHost: HTMLElement): HTMLElement {
+  const button = setupNeededButton(buttonHost);
+  expect(button, 'the setup needed button is shown').not.toBeNull();
+  button!.focus();
+  button!.click();
+  return button!;
+}
+
+function mountDialog(fake: ReturnType<typeof fakeSetupDeps>, host: HTMLElement = document.body.appendChild(document.createElement('div'))) {
+  const buttonHost = document.body.appendChild(document.createElement('div'));
+  const dialog = createSetupCheckDialog({ button: buttonHost, dialog: host }, fake.deps);
   mounted.push(dialog);
-  return { host, dialog, screen: setupCheckScreen(host) };
+  const screen = setupCheckScreen(host);
+  /** Checks `repoKey`, presses the button it shows, and settles once the popup names it; returns the button. */
+  const raise = async (repoKey: string): Promise<HTMLElement> => {
+    await dialog.check(repoKey);
+    const button = pressSetupNeeded(buttonHost);
+    await shownFor(screen, repoKey);
+    return button;
+  };
+  return { host, buttonHost, dialog, screen, raise };
 }
 
 /** Waits until the open dialog is the one raised for `repoKey`. */
@@ -27,6 +56,14 @@ const shownFor = (screen: ReturnType<typeof setupCheckScreen>, repoKey: string):
     expect(screen.isOpen(), `a setup dialog is open for ${repoKey}`).toBe(true);
     expect(`${screen.title()} ${screen.description()}`).toContain(repoKey);
   });
+
+async function openPopup(fake: ReturnType<typeof fakeSetupDeps>) {
+  const mountedDialog = mountDialog(fake);
+  const { screen, raise } = mountedDialog;
+  const opener = await raise(REPO.alpha);
+  const before = { entries: screen.entries(), controls: screen.controls(), title: screen.title(), description: screen.description() };
+  return { ...mountedDialog, opener, before };
+}
 
 beforeEach(() => document.body.replaceChildren());
 afterEach(() => {
@@ -37,10 +74,7 @@ describe('a check whose status lists conditions', () => {
   it('opens a dialog naming the repository with one entry per listed condition', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { screen } = await openPopup(fake);
 
     expect(screen.entries()).toHaveLength(2);
   });
@@ -59,9 +93,8 @@ describe('a check whose status lists conditions', () => {
     for (const entry of kinds) {
       const fake = fakeSetupDeps();
       fake.answer(REPO.bravo, repoStatus(REPO.bravo, [entry]));
-      const { dialog, screen } = mountDialog(fake);
-      void dialog.check(REPO.bravo);
-      await shownFor(screen, REPO.bravo);
+      const { screen, raise } = mountDialog(fake);
+      await raise(REPO.bravo);
       messages.push(...screen.entries());
     }
 
@@ -72,45 +105,141 @@ describe('a check whose status lists conditions', () => {
   });
 });
 
-describe('a check whose status lists nothing', () => {
-  it('opens no dialog: the next failing repository raises the first dialog shown', async () => {
+describe('the setup needed button', () => {
+  it('shows while the status lists a condition, and no popup opens until it is pressed', async () => {
     const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, []));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog, screen } = mountDialog(fake);
-    const seen = recordSetupDialogs(host);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    const { buttonHost, dialog, screen } = mountDialog(fake);
 
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.charlie);
-    await shownFor(screen, REPO.charlie);
+    await dialog.check(REPO.alpha);
+    await settle();
 
-    expect(seen()[0]).toContain(REPO.charlie);
+    expect({ button: setupNeededButton(buttonHost) !== null, open: screen.isOpen() }).toEqual({ button: true, open: false });
+  });
+
+  it('does not open the popup when an agent starts at the prompt', async () => {
+    const fake = fakeSetupDeps();
+    fake.agent.set('absent');
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true));
+    const { dialog, screen } = mountDialog(fake);
+    await dialog.check(REPO.alpha);
+
+    fake.agent.set('busy');
+    fake.agent.set('idle');
+    await settle();
+
+    expect(screen.isOpen()).toBe(false);
+  });
+
+  const NOTHING: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answer']>[1] }> = [
+    { how: 'lists nothing', reply: repoStatus(REPO.alpha, []) },
+    { how: 'answers ok: false', reply: { ok: false, reason: 'scripted status failure' } },
+    { how: 'is rejected', reply: { reject: 'scripted invoke rejection' } },
+  ];
+
+  for (const { how, reply } of NOTHING) {
+    it(`is not shown when the status request ${how}`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, reply);
+      const { buttonHost, dialog } = mountDialog(fake);
+
+      await expect(dialog.check(REPO.alpha)).resolves.toBeUndefined();
+
+      expect(setupNeededButton(buttonHost)).toBeNull();
+    });
+  }
+
+  it('goes when the terminal moves to a directory whose status lists nothing, and comes back on return', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, []));
+    const { buttonHost, dialog } = mountDialog(fake);
+    await dialog.check(REPO.alpha);
+
+    await dialog.check(REPO.bravo);
+    const inBravo = setupNeededButton(buttonHost) !== null;
+    await dialog.check(REPO.alpha);
+
+    expect({ inBravo, backInAlpha: setupNeededButton(buttonHost) !== null }).toEqual({ inBravo: false, backInAlpha: true });
+  });
+
+  it('follows the directory the terminal is in now when an earlier status answers late', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, []));
+    const { buttonHost, dialog } = mountDialog(fake);
+    const release = fake.hold(REPO.alpha);
+    const first = dialog.check(REPO.alpha);
+    await dialog.check(REPO.bravo);
+
+    release();
+    await first;
+
+    expect(setupNeededButton(buttonHost)).toBeNull();
+  });
+
+  it("opens the popup for the directory the terminal is in now", async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    const { buttonHost, dialog, screen } = mountDialog(fake);
+    await dialog.check(REPO.alpha);
+    await dialog.check(REPO.bravo);
+
+    pressSetupNeeded(buttonHost);
+
+    await shownFor(screen, REPO.bravo);
+  });
+
+  it('closing the popup re-reads the status: the button stays while it lists something and goes once it lists nothing', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, []));
+    const { buttonHost, screen, raise } = mountDialog(fake);
+    await raise(REPO.alpha);
+    screen.control('Close').click();
+    await settle();
+    const afterFirst = setupNeededButton(buttonHost) !== null;
+
+    pressSetupNeeded(buttonHost);
+    screen.control('Close').click();
+    await settle();
+
+    expect({ afterFirst, afterSecond: setupNeededButton(buttonHost) !== null, reads: fake.statusRequests().length }).toEqual({
+      afterFirst: true,
+      afterSecond: false,
+      reads: 3,
+    });
+  });
+
+  it('lands focus through onFocusLost when it goes while it has focus', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, []));
+    const { screen, raise } = mountDialog(fake);
+    const landing = document.body.appendChild(document.createElement('button'));
+    landing.textContent = 'landing';
+    fake.landFocusOn(landing);
+    await raise(REPO.alpha);
+
+    screen.control('Close').click();
+    await settle();
+
+    expect(document.activeElement).toBe(landing);
+  });
+
+  it('is removed when the dialog is disposed', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const { buttonHost, dialog } = mountDialog(fake);
+    await dialog.check(REPO.alpha);
+
+    dialog.dispose();
+
+    expect(setupNeededButton(buttonHost)).toBeNull();
   });
 });
 
-const KEYS = Object.values(REPO);
-
-/** The repository the open dialog names, or null when none is open. */
-function openFor(screen: ReturnType<typeof setupCheckScreen>): string | null {
-  if (!screen.isOpen()) return null;
-  const shown = `${screen.title()} ${screen.description()}`;
-  return KEYS.find((key) => shown.includes(key)) ?? null;
-}
-
-/** The repository each recorded dialog named, in the order the dialogs appeared. */
-const namedIn = (seen: () => string[]) => (): Array<string | null> =>
-  seen().map((shown) => KEYS.find((key) => shown.includes(key)) ?? null);
-
 /** Runs every microtask the fake status replies queue, which all settle before the next task. */
 const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-/** A focusable control outside the dialog's host, focused, standing for where the operator was. */
-function focusedOpener(): HTMLButtonElement {
-  const opener = document.body.appendChild(document.createElement('button'));
-  opener.textContent = 'opener';
-  opener.focus();
-  return opener;
-}
 
 const DOORS: Array<{ door: string; close: (screen: ReturnType<typeof setupCheckScreen>) => void }> = [
   { door: 'Close', close: (screen) => screen.control('Close').click() },
@@ -122,11 +251,9 @@ describe('the popup is a modal dialog (AC11)', () => {
   it('is announced as a modal dialog with its title and description, and takes focus on open', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-    focusedOpener();
+    const { screen, raise } = mountDialog(fake);
 
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    await raise(REPO.alpha);
 
     const shown = screen.dialog();
     expect({
@@ -140,10 +267,7 @@ describe('the popup is a modal dialog (AC11)', () => {
   it('reads every listed failure in its accessible description', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.malformed]));
-    const { dialog, screen } = mountDialog(fake);
-
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { screen } = await openPopup(fake);
 
     const description = screen.description();
     const entries = screen.entries();
@@ -156,11 +280,9 @@ describe('the popup is a modal dialog (AC11)', () => {
   it('lands focus on the dialog itself on open, not on one of its controls', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale], true));
-    const { dialog, screen } = mountDialog(fake);
-    focusedOpener();
+    const { screen, raise } = mountDialog(fake);
 
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    await raise(REPO.alpha);
 
     expect({ focusOnDialog: document.activeElement === screen.dialog(), focusedControl: focusedControl(screen) }).toEqual({
       focusOnDialog: true,
@@ -169,13 +291,11 @@ describe('the popup is a modal dialog (AC11)', () => {
   });
 
   for (const { door, close } of DOORS) {
-    it(`closes on ${door}, with focus back where the operator was`, async () => {
+    it(`closes on ${door}, with focus back on the setup needed button`, async () => {
       const fake = fakeSetupDeps();
-      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-      const { dialog, screen } = mountDialog(fake);
-      const opener = focusedOpener();
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]), repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      const { screen, raise } = mountDialog(fake);
+      const opener = await raise(REPO.alpha);
 
       close(screen);
 
@@ -186,16 +306,14 @@ describe('the popup is a modal dialog (AC11)', () => {
     });
   }
 
-  it('lands focus through onFocusLost when the opener left the page while the dialog was open', async () => {
+  it('lands focus through onFocusLost when the button left the page while the dialog was open', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.malformed]));
-    const { dialog, screen } = mountDialog(fake);
+    const { screen, raise } = mountDialog(fake);
     const landing = document.body.appendChild(document.createElement('button'));
     landing.textContent = 'landing';
     fake.landFocusOn(landing);
-    const opener = focusedOpener();
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const opener = await raise(REPO.alpha);
     opener.remove();
 
     screen.pressEscape();
@@ -206,10 +324,8 @@ describe('the popup is a modal dialog (AC11)', () => {
   it('dispose() removes the dialog without moving focus back to the opener', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-    const opener = focusedOpener();
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { dialog, screen, raise } = mountDialog(fake);
+    const opener = await raise(REPO.alpha);
 
     dialog.dispose();
 
@@ -217,20 +333,6 @@ describe('the popup is a modal dialog (AC11)', () => {
       open: false,
       focusOnOpener: false,
     });
-  });
-
-  it('dispose() settles the check whose popup was open', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-    let settled = false;
-    void dialog.check(REPO.alpha).then(() => (settled = true));
-    await shownFor(screen, REPO.alpha);
-
-    dialog.dispose();
-    await nextTask();
-
-    expect(settled).toBe(true);
   });
 
   const PLACEMENTS: Array<{ placement: string; mount: () => HTMLElement }> = [
@@ -252,14 +354,10 @@ describe('the popup is a modal dialog (AC11)', () => {
       const outsideBefore = outside.outerHTML;
       const host = mount();
       const fake = fakeSetupDeps();
-      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.unchecked]));
-      const dialog = createSetupCheckDialog(host, fake.deps);
-      mounted.push(dialog);
-      const screen = setupCheckScreen(host);
-      const opener = focusedOpener();
+      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.unchecked]), repoStatus(REPO.bravo, [ENTRY.unchecked]));
+      const { screen, raise } = mountDialog(fake, host);
+      const opener = await raise(REPO.bravo);
 
-      void dialog.check(REPO.bravo);
-      await shownFor(screen, REPO.bravo);
       const listed = screen.entries().length;
       screen.pressEscape();
 
@@ -271,127 +369,6 @@ describe('the popup is a modal dialog (AC11)', () => {
       }).toEqual({ listed: 1, open: false, focusOnOpener: true, outsideUnchanged: true });
     });
   }
-});
-
-describe('another app dialog is open', () => {
-  it('opens no setup dialog while it stays open, then opens once it closes', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-    const { dialog, screen } = mountDialog(fake);
-    fake.otherDialog.open();
-
-    void dialog.check(REPO.alpha);
-    await nextTask();
-    const whileBlocked = screen.isOpen();
-    fake.otherDialog.close();
-
-    await vi.waitFor(() =>
-      expect({ whileBlocked, afterItClosed: openFor(screen) }).toEqual({ whileBlocked: false, afterItClosed: REPO.alpha }),
-    );
-  });
-  it('opens no setup dialog when the other one opened while the status request was still pending', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-    const release = fake.hold(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    await nextTask();
-
-    fake.otherDialog.open();
-    release();
-    await nextTask();
-    const whileBlocked = screen.isOpen();
-    fake.otherDialog.close();
-
-    await vi.waitFor(() =>
-      expect({ whileBlocked, afterItClosed: openFor(screen) }).toEqual({ whileBlocked: false, afterItClosed: REPO.alpha }),
-    );
-  });
-});
-
-describe('a wait for another app dialog to close', () => {
-  it('leaves no subscription to that dialog closing once the popup has opened', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-    let live = 0;
-    const subscribe = fake.deps.onBlockingDialogClosed;
-    fake.deps.onBlockingDialogClosed = (cb) => {
-      live += 1;
-      const off = subscribe(cb);
-      let released = false;
-      return () => {
-        if (!released) live -= 1;
-        released = true;
-        off();
-      };
-    };
-    const { dialog, screen } = mountDialog(fake);
-    fake.otherDialog.open();
-    const answered = fake.answered(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    await answered;
-
-    fake.otherDialog.close();
-    await shownFor(screen, REPO.alpha);
-
-    expect(live).toBe(0);
-  });
-});
-
-describe('another app dialog replaced by a third one', () => {
-  it('opens no setup dialog until the last of them has closed', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-    const { dialog, screen } = mountDialog(fake);
-    fake.otherDialog.open();
-    const answered = fake.answered(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    await answered;
-
-    fake.otherDialog.replace();
-    await nextTask();
-    const whileReplaced = screen.isOpen();
-    fake.otherDialog.close();
-
-    await vi.waitFor(() =>
-      expect({ whileReplaced, afterItClosed: openFor(screen) }).toEqual({ whileReplaced: false, afterItClosed: REPO.alpha }),
-    );
-  });
-});
-
-describe('a dialog disposed while it waits for another app dialog', () => {
-  it('settles its pending check without the other dialog closing', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-    const { dialog } = mountDialog(fake);
-    fake.otherDialog.open();
-    const answered = fake.answered(REPO.alpha);
-    let settled = false;
-    void dialog.check(REPO.alpha).then(() => (settled = true));
-    await answered;
-
-    dialog.dispose();
-    await nextTask();
-
-    expect(settled).toBe(true);
-  });
-
-  it('opens nothing once the other dialog closes', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
-    const { host, dialog } = mountDialog(fake);
-    const seen = recordSetupDialogs(host);
-    fake.otherDialog.open();
-    const answered = fake.answered(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    await answered;
-
-    dialog.dispose();
-    fake.otherDialog.close();
-    await nextTask();
-
-    expect(seen()).toEqual([]);
-  });
 });
 
 describe('a disposed dialog', () => {
@@ -413,161 +390,13 @@ describe('a disposed dialog', () => {
   });
 });
 
-describe('checks run one at a time, each repository at most once', () => {
-  for (const { door, close } of DOORS) {
-    it(`shows back-to-back checks one at a time, in arrival order, the next once the first closes on ${door}`, async () => {
-      const fake = fakeSetupDeps();
-      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-      const { dialog, screen } = mountDialog(fake);
-      const answered = fake.answered(REPO.alpha);
-
-      void dialog.check(REPO.alpha);
-      void dialog.check(REPO.bravo);
-      await answered;
-      const first = openFor(screen);
-      if (screen.isOpen()) close(screen);
-
-      await vi.waitFor(() =>
-        expect({ first, second: openFor(screen) }).toEqual({ first: REPO.alpha, second: REPO.bravo }),
-      );
-    });
-  }
-
-  it('shows the first check first even when its status answers after the second one was asked for', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-    const { host, dialog, screen } = mountDialog(fake);
-    const seen = namedIn(recordSetupDialogs(host));
-    const release = fake.hold(REPO.alpha);
-
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.bravo);
-    await nextTask();
-    release();
-    await nextTask();
-    if (screen.isOpen()) screen.pressEscape();
-
-    await vi.waitFor(() => expect(seen()).toEqual([REPO.alpha, REPO.bravo]));
-  });
-
-  it('raises one popup when the same repository is checked twice before its first status answers', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog, screen } = mountDialog(fake);
-    const seen = namedIn(recordSetupDialogs(host));
-
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.charlie);
-    await nextTask();
-    if (screen.isOpen()) screen.pressEscape();
-
-    await vi.waitFor(() => expect(seen()).toEqual([REPO.alpha, REPO.charlie]));
-  });
-
-  it('raises no second popup for a repository already checked and shown this session (AC10)', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog, screen } = mountDialog(fake);
-    const seen = namedIn(recordSetupDialogs(host));
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-    screen.pressEscape();
-
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.charlie);
-    await shownFor(screen, REPO.charlie);
-
-    expect(seen()).toEqual([REPO.alpha, REPO.charlie]);
-  });
-
-  it('does not check again a repository whose status listed nothing', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, []), repoStatus(REPO.alpha, [ENTRY.absent]));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog, screen } = mountDialog(fake);
-    const seen = namedIn(recordSetupDialogs(host));
-    const answered = fake.answered(REPO.alpha);
-    void dialog.check(REPO.alpha);
-    await answered;
-
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.charlie);
-    await shownFor(screen, REPO.charlie);
-
-    expect(seen()).toEqual([REPO.charlie]);
-  });
-
-  const FAILED: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answer']>[1] }> = [
-    { how: 'answers ok: false', reply: { ok: false, reason: 'scripted status failure' } },
-    { how: 'is rejected', reply: { reject: 'scripted invoke rejection' } },
-  ];
-
-  it('a check whose status request is rejected settles without rejecting', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, { reject: 'scripted invoke rejection' });
-    const { dialog } = mountDialog(fake);
-
-    await expect(dialog.check(REPO.alpha)).resolves.toBeUndefined();
-  });
-
-  it('a check that fails while it waits for other dialogs does not stall a later check of another repository', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-    let probeFails = true;
-    fake.deps.blockingDialogOpen = () => {
-      if (!probeFails) return false;
-      probeFails = false;
-      throw new Error('scripted blocking-dialog probe failure');
-    };
-    const { dialog, screen } = mountDialog(fake);
-
-    void dialog.check(REPO.alpha).catch(() => {});
-    void dialog.check(REPO.bravo);
-
-    await shownFor(screen, REPO.bravo);
-  });
-
-  for (const { how, reply } of FAILED) {
-    it(`a status request that ${how} shows nothing, does not stall the next check, and leaves its repository to be checked again, once`, async () => {
-      const fake = fakeSetupDeps();
-      fake.answer(REPO.alpha, reply, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
-      fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-      const { host, dialog, screen } = mountDialog(fake);
-      const seen = namedIn(recordSetupDialogs(host));
-
-      void dialog.check(REPO.alpha);
-      void dialog.check(REPO.bravo);
-      await shownFor(screen, REPO.bravo);
-      screen.pressEscape();
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
-      screen.pressEscape();
-      void dialog.check(REPO.alpha);
-      void dialog.check(REPO.charlie);
-      await shownFor(screen, REPO.charlie);
-
-      expect(seen()).toEqual([REPO.bravo, REPO.alpha, REPO.charlie]);
-    });
-  }
-});
-
 const INSTALL = 'Install/update examples';
 
 describe('the examples entry and Install/update examples (AC12, AC17)', () => {
   it('shows Install/update examples when the examples entry is listed', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale]));
-    const { dialog, screen } = mountDialog(fake);
-
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { screen } = await openPopup(fake);
 
     expect(screen.hasControl(INSTALL)).toBe(true);
   });
@@ -575,111 +404,468 @@ describe('the examples entry and Install/update examples (AC12, AC17)', () => {
   it('hides Install/update examples when only repository entries are listed (AC12)', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.notIgnored]));
-    const { dialog, screen } = mountDialog(fake);
-
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { screen } = await openPopup(fake);
 
     expect(screen.hasControl(INSTALL)).toBe(false);
   });
 
-  it('pressing it closes the popup, then opens the install-examples flow (AC17)', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale]));
-    const { dialog, screen } = mountDialog(fake);
-    fake.whenInstallOpens(() => ({ popupOpen: screen.isOpen() }));
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(INSTALL).click();
-
-    await vi.waitFor(() =>
-      expect({ open: screen.isOpen(), installOpens: fake.installOpens() }).toEqual({
-        open: false,
-        installOpens: [{ popupOpen: false }],
-      }),
-    );
-  });
-
-  it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.bravo);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(INSTALL).click();
-
-    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
-  });
 });
 
-describe('the examples entry after startup', () => {
-  /** Runs the startup check of `dir`, outside a git repository with the examples entry listed, and closes its
-   *  popup. */
-  async function closedStartupPopup(fake: ReturnType<typeof fakeSetupDeps>, dir: string) {
-    fake.answer(dir, plainStatus(dir, [ENTRY.examplesStale]));
-    const mountedDialog = mountDialog(fake);
-    void mountedDialog.dialog.check(dir);
-    await vi.waitFor(() => expect(mountedDialog.screen.isOpen()).toBe(true));
-    mountedDialog.screen.pressEscape();
-    return mountedDialog;
+const REPLACE = 'Install';
+const BACK = 'Back to the list';
+
+/** Lets every reply the fake scripted run through the popup; they all settle within a task each. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 4; i++) await nextTask();
+}
+
+const reading = (screen: ReturnType<typeof setupCheckScreen>) =>
+  screen.isOpen()
+    ? {
+        entries: screen.entries(),
+        controls: screen.controls(),
+        alert: screen.alert(),
+        title: screen.title(),
+        description: screen.description(),
+        focusInside: screen.dialog().contains(document.activeElement),
+        checkboxes: screen.checkboxes(),
+      }
+    : null;
+
+function expectComeBackReason(read: ReturnType<typeof reading>, reason: string): void {
+  expect.soft(read?.alert ?? '', 'the reason is in its error line').toContain(reason);
+  expect.soft(read?.description ?? '', 'the reason is in the dialog description').toContain(reason);
+}
+
+function pressIfShown(screen: ReturnType<typeof setupCheckScreen>, name: string): boolean {
+  if (!screen.isOpen() || !screen.hasControl(name)) return false;
+  screen.control(name).click();
+  return true;
+}
+
+describe('Install/update examples runs the install inside the popup (AC2, AC3, AC4, AC5, AC9, AC10, AC11)', () => {
+  const MIXED = [ENTRY.notIgnored, ENTRY.examplesStale];
+
+  function openMixed(fake: ReturnType<typeof fakeSetupDeps>, ...rereads: Array<SetupStatusReply | { reject: string }>) {
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED), ...rereads);
+    return openPopup(fake);
   }
 
-  it('entering a directory that is not a git repository raises no popup, even with the examples entry listed', async () => {
+  it('installs a preview that needs no choice at once, then lists what the repository still fails (AC2)', async () => {
     const fake = fakeSetupDeps();
-    fake.answer(REPO.bravo, plainStatus(REPO.bravo, [ENTRY.examplesStale]));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog } = await closedStartupPopup(fake, REPO.alpha);
-    const seen = namedIn(recordSetupDialogs(host));
+    fake.examples.preview(cleanPreview('pv-clean'));
+    fake.examples.install(installSucceeded());
+    const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
 
-    void dialog.check(REPO.bravo);
-    void dialog.check(REPO.charlie);
+    screen.control(INSTALL).click();
+    await settle();
 
-    await vi.waitFor(() => expect(seen()[0]).toBe(REPO.charlie));
+    expect.soft(fake.examples.requests(), 'the install request').toEqual([
+      { previewId: 'pv-clean', replace: [], removeRetired: false },
+    ]);
+    expect.soft(fake.statusRequests(), 'the status re-read names the popup repository').toEqual([REPO.alpha, REPO.alpha]);
+    expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+    const read = reading(screen);
+    expect.soft(read?.entries, 'the re-read entries are listed').toEqual([before.entries[0]]);
+    expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is gone').toBe(false);
+    expect.soft(read?.controls.includes(UNTIL_UPDATE), "Don't show again until the app updates is gone").toBe(false);
+    expect.soft(read?.controls.includes(FOR_REPO), "Don't show again for this repo stays").toBe(true);
+    expect.soft(read !== null && screen.dialog().contains(document.activeElement), 'focus is inside the popup').toBe(true);
   });
 
-  it('entering a new git repository whose status lists only the examples entry raises a popup listing it', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.examplesStale]));
-    const { dialog, screen } = await closedStartupPopup(fake, REPO.alpha);
+  describe('a preview with differing files asks the replace question inside the popup (AC3)', () => {
+    const differing = differingPreview('pv-diff', ['flow', 'commands']);
 
-    void dialog.check(REPO.bravo);
-    await shownFor(screen, REPO.bravo);
+    it('switches the dialog to the question: another name and description, focus inside, nothing installed', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      const { screen, before } = await openMixed(fake);
 
-    expect(screen.entries()).toHaveLength(1);
+      screen.control(INSTALL).click();
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+      expect.soft(read?.title, 'the name comes from the question').not.toBe(before.title);
+      expect.soft(read?.title, 'the popup is open and named').toBeTruthy();
+      expect.soft(read?.description, 'the description comes from the question').not.toBe(before.description);
+      expect.soft(read?.description, 'the popup is open and described').toBeTruthy();
+      expect.soft(read?.focusInside, 'focus is inside the question').toBe(true);
+      expect.soft(read?.controls, 'the question offers Install, Back to the list and Close').toEqual(
+        expect.arrayContaining([REPLACE, BACK, 'Close']),
+      );
+      expect.soft(fake.examples.requests(), 'nothing is installed while the question shows').toEqual([]);
+    });
+
+    it('Back to the list installs nothing and shows the list it showed before', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      const { screen, before } = await openMixed(fake);
+      screen.control(INSTALL).click();
+      await settle();
+
+      expect.soft(pressIfShown(screen, BACK), 'the question offers Back to the list').toBe(true);
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(fake.examples.requests(), 'no install request').toEqual([]);
+      expect.soft(fake.statusRequests(), 'no re-read').toEqual([REPO.alpha]);
+      expect.soft(read?.entries, 'lists what it listed before').toEqual(before.entries);
+      expect.soft(read?.title, 'the name is the list name again').toBe(before.title);
+      expect.soft(read?.description, 'the description is the list description again').toBe(before.description);
+      expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+    });
+
+    it('ticking every replacement and pressing Install sends every differing destination, then lists the re-read', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      fake.examples.install(installSucceeded());
+      const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+
+      const boxes = reading(screen)?.checkboxes ?? [];
+      expect.soft(boxes.length, 'one checkbox per differing destination').toBe(2);
+      for (const box of boxes) box.click();
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests().map((r) => ({ ...r, replace: [...r.replace].sort() })), 'the install request').toEqual([
+        { previewId: 'pv-diff', replace: ['commands', 'flow'], removeRetired: false },
+      ]);
+      const read = reading(screen);
+      expect.soft(read?.entries, 'the re-read entries are listed').toEqual([before.entries[0]]);
+      expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is gone').toBe(false);
+      expect.soft(openModalDialogs(document.body), 'the popup is the only open dialog').toBe(1);
+    });
+
+    it('Install with nothing ticked sends no replacement; the examples entry the re-read keeps is listed beside the others', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differing);
+      fake.examples.install(installSucceeded());
+      const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+      screen.control(INSTALL).click();
+      await settle();
+
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'the install request').toEqual([{ previewId: 'pv-diff', replace: [], removeRetired: false }]);
+      const read = reading(screen);
+      expect.soft(read?.entries, 'both entries are listed').toEqual(before.entries);
+      expect.soft(read?.controls.includes(INSTALL), 'Install/update examples is offered again').toBe(true);
+      expect.soft(read?.title, 'the name is the list name again').toBe(before.title);
+      expect.soft(read?.description, 'the description is the list description again').toBe(before.description);
+      expect.soft(read?.focusInside, 'focus is inside the popup').toBe(true);
+    });
+
+    it('a retired example the operator ticks is sent as removeRetired', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(retiredPreview('pv-retired'));
+      fake.examples.install(installSucceeded());
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+
+      const boxes = reading(screen)?.checkboxes ?? [];
+      expect.soft(boxes.length, 'one checkbox for the retired examples').toBe(1);
+      boxes[0]?.click();
+      expect.soft(pressIfShown(screen, REPLACE), 'the question offers Install').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'the install request').toEqual([
+        { previewId: 'pv-retired', replace: [], removeRetired: true },
+      ]);
+    });
   });
+
+  describe('closing the question ends the popup for the session (AC9)', () => {
+    for (const { door, close } of DOORS) {
+      it(`${door} installs nothing, and a later check of the repository opens nothing`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(differingPreview('pv-door', ['flow']));
+        const { dialog, screen } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+        screen.control(INSTALL).click();
+        await settle();
+        expect.soft(screen.isOpen() && screen.hasControl(BACK), 'the replace question is showing').toBe(true);
+
+        if (screen.isOpen()) close(screen);
+        await settle();
+
+        expect.soft(screen.isOpen(), 'the popup ended').toBe(false);
+        expect.soft(fake.examples.requests(), 'no install request').toEqual([]);
+        void dialog.check(REPO.alpha);
+        await settle();
+        expect.soft(screen.isOpen(), 'nothing opens again this session').toBe(false);
+      });
+    }
+  });
+
+  describe('while an install request is pending', () => {
+    it('Escape and the scrim leave the popup open; once it answers, Escape closes it', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-pending'));
+      fake.examples.install(installSucceeded());
+      const release = fake.examples.holdInstall();
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, MIXED));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.requests().length, 'the install is pending').toBe(1);
+
+      if (screen.isOpen()) screen.pressEscape();
+      await settle();
+      expect.soft(screen.isOpen(), 'Escape leaves it open').toBe(true);
+      if (screen.isOpen()) screen.pressScrim();
+      await settle();
+      expect.soft(screen.isOpen(), 'the scrim leaves it open').toBe(true);
+
+      release();
+      await settle();
+      expect.soft(screen.isOpen(), 'it lists the re-read once answered').toBe(true);
+      if (screen.isOpen()) screen.pressEscape();
+      await settle();
+      expect.soft(screen.isOpen(), 'Escape closes it once the install answered').toBe(false);
+    });
+  });
+
+  describe('a new attempt asks for a fresh preview and installs only what that preview offered', () => {
+    it('after Back to the list', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(differingPreview('pv-first', ['flow']), cleanPreview('pv-second'));
+      fake.examples.install(installSucceeded());
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(pressIfShown(screen, BACK), 'the question offers Back to the list').toBe(true);
+      await settle();
+
+      expect.soft(pressIfShown(screen, INSTALL), 'the list offers Install/update examples again').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.previews(), 'a preview for each attempt').toBe(2);
+      expect.soft(fake.examples.requests(), 'the install names the second preview').toEqual([
+        { previewId: 'pv-second', replace: [], removeRetired: false },
+      ]);
+    });
+
+    it('after a failed install', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-first'), cleanPreview('pv-second'));
+      fake.examples.install(installFailed('scripted first install failure'), installSucceeded());
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, MIXED), repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+
+      expect.soft(pressIfShown(screen, INSTALL), 'the list offers Install/update examples again').toBe(true);
+      await settle();
+
+      expect.soft(fake.examples.previews(), 'a preview for each attempt').toBe(2);
+      expect.soft(fake.examples.requests().map((request) => request.previewId), 'each install names its own preview').toEqual([
+        'pv-first',
+        'pv-second',
+      ]);
+    });
+  });
+
+  describe('while a preview request is pending', () => {
+    it('Escape and the scrim leave the popup open, and the install still runs once the preview answers', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-held'));
+      fake.examples.install(installSucceeded());
+      const release = fake.examples.holdPreview();
+      const { screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.previews(), 'the preview is pending').toBe(1);
+
+      if (screen.isOpen()) screen.pressEscape();
+      await settle();
+      expect.soft(screen.isOpen(), 'Escape leaves it open').toBe(true);
+      if (screen.isOpen()) screen.pressScrim();
+      await settle();
+      expect.soft(screen.isOpen(), 'the scrim leaves it open').toBe(true);
+
+      release();
+      await settle();
+      expect.soft(fake.examples.requests(), 'the install ran').toEqual([{ previewId: 'pv-held', replace: [], removeRetired: false }]);
+      expect.soft(screen.isOpen(), 'the popup lists the re-read').toBe(true);
+    });
+  });
+
+  describe('Run setup loop follows the re-read (AC5)', () => {
+    for (const fixable of [ENTRY.absent, ENTRY.notIgnored]) {
+      it(`is offered when the re-read reports the setup flow installed and lists ${fixable.condition}/${fixable.failure}`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-run'));
+        fake.examples.install(installSucceeded());
+        fake.answer(REPO.alpha, repoStatus(REPO.alpha, [fixable, ENTRY.examplesStale], false), repoStatus(REPO.alpha, [fixable], true));
+        const { screen } = await openPopup(fake);
+        expect(screen.hasControl(RUN_SETUP), 'not offered before the install').toBe(false);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        expect.soft(reading(screen)?.controls.includes(RUN_SETUP), 'offered after the re-read').toBe(true);
+      });
+    }
+
+    it('is not offered when the re-read reports it installed but lists nothing it fixes', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-run-none'));
+      fake.examples.install(installSucceeded());
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.malformed, ENTRY.examplesStale], false), repoStatus(REPO.alpha, [ENTRY.malformed], true));
+      const { screen } = await openPopup(fake);
+
+      screen.control(INSTALL).click();
+      await settle();
+
+      const read = reading(screen);
+      expect.soft(read?.entries.length, 'the re-read entry is listed').toBe(1);
+      expect.soft(read?.controls.includes(RUN_SETUP), 'not offered').toBe(false);
+    });
+  });
+
+  describe('failures keep the popup open with the reason (U6)', () => {
+    const REASON = 'scripted-reason-zq';
+
+    for (const reply of [{ ok: false as const, error: REASON }, { reject: REASON }]) {
+      it(`a failed preview (${'reject' in reply ? 'rejected' : 'refused'}) keeps the previous entries and shows why`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(reply);
+        const { screen, before } = await openMixed(fake);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.examples.previews(), 'a preview was requested').toBe(1);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expect.soft(read?.alert ?? '', 'the reason is shown').toContain(REASON);
+        expect.soft(fake.examples.requests(), 'nothing installed').toEqual([]);
+      });
+    }
+
+    for (const reply of [installFailed(REASON), { reject: REASON }]) {
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) still re-reads and lists what it reports, with the reason`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail'));
+        fake.examples.install(reply);
+        const { screen, before } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
+        expect.soft(read?.entries, 'what the re-read reports').toEqual([before.entries[1]]);
+        expectComeBackReason(read, REASON);
+      });
+
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) whose re-read lists nothing keeps the popup open with the reason, and Close ends it`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail-empty'));
+        fake.examples.install(reply);
+        const { screen } = await openMixed(fake, repoStatus(REPO.alpha, []));
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(read !== null, 'the popup is still open').toBe(true);
+        expectComeBackReason(read, REASON);
+        expect.soft(read?.controls, 'it offers Close').toContain('Close');
+        if (screen.isOpen()) screen.control('Close').click();
+        await settle();
+        expect.soft(screen.isOpen(), 'Close ends it').toBe(false);
+      });
+
+      it(`a failed install (${'reject' in reply ? 'rejected' : 'refused'}) followed by a failed re-read shows the install reason and keeps the previous entries`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-fail-both'));
+        fake.examples.install(reply);
+        const { screen, before } = await openMixed(fake, { ok: false, reason: 'scripted-reread-reason-kx' });
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expectComeBackReason(read, REASON);
+        expect.soft(read?.description, 'not the re-read reason').not.toContain('scripted-reread-reason-kx');
+      });
+    }
+
+    for (const reply of [{ ok: false as const, reason: REASON } as SetupStatusReply, { reject: REASON }]) {
+      it(`a failed re-read (${'reject' in reply ? 'rejected' : 'refused'}) keeps the previous entries and shows why`, async () => {
+        const fake = fakeSetupDeps();
+        fake.examples.preview(cleanPreview('pv-reread'));
+        fake.examples.install(installSucceeded());
+        const { screen, before } = await openMixed(fake, reply);
+
+        screen.control(INSTALL).click();
+        await settle();
+
+        const read = reading(screen);
+        expect.soft(fake.statusRequests(), 'the status was re-read').toEqual([REPO.alpha, REPO.alpha]);
+        expect.soft(read?.entries, 'the previous entries').toEqual(before.entries);
+        expectComeBackReason(read, REASON);
+      });
+    }
+  });
+
+  describe('a dialog disposed while a request is pending draws nothing when it answers', () => {
+    const drawn = (host: HTMLElement, screen: ReturnType<typeof setupCheckScreen>) => ({
+      open: screen.isOpen(),
+      focusInHost: host.contains(document.activeElement),
+    });
+
+    it('an install', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-dispose-install'));
+      fake.examples.install(installSucceeded());
+      const release = fake.examples.holdInstall();
+      const { host, dialog, screen } = await openMixed(fake, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.requests().length, 'the install is pending').toBe(1);
+
+      dialog.dispose();
+      release();
+      await settle();
+
+      expect(drawn(host, screen)).toEqual({ open: false, focusInHost: false });
+    });
+
+    it('a preview', async () => {
+      const fake = fakeSetupDeps();
+      fake.examples.preview(cleanPreview('pv-dispose-preview'));
+      const release = fake.examples.holdPreview();
+      const { host, dialog, screen } = await openMixed(fake);
+      screen.control(INSTALL).click();
+      await settle();
+      expect.soft(fake.examples.previews(), 'the preview is pending').toBe(1);
+
+      dialog.dispose();
+      release();
+      await settle();
+
+      expect.soft(fake.examples.requests(), 'nothing installed').toEqual([]);
+      expect(drawn(host, screen)).toEqual({ open: false, focusInHost: false });
+    });
+  });
+
 });
 
 describe('a popup raised outside a git repository', () => {
   it('names no directory in its title or description', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, plainStatus(REPO.alpha, [ENTRY.examplesStale]));
-    const { dialog, screen } = mountDialog(fake);
+    const { dialog, buttonHost, screen } = mountDialog(fake);
 
-    void dialog.check(REPO.alpha);
-    await vi.waitFor(() => expect(screen.isOpen()).toBe(true));
+    await dialog.check(REPO.alpha);
+    pressSetupNeeded(buttonHost);
 
     expect(`${screen.title()} ${screen.description()}`).not.toContain(REPO.alpha);
-  });
-});
-
-describe('a startup check that failed is still the startup check', () => {
-  it('a later check of a directory that is not a git repository raises no popup, even with the examples entry listed', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, { reject: 'scripted status failure' });
-    fake.answer(REPO.bravo, plainStatus(REPO.bravo, [ENTRY.examplesStale]));
-    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
-    const { host, dialog } = mountDialog(fake);
-    const seen = namedIn(recordSetupDialogs(host));
-
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.bravo);
-    void dialog.check(REPO.charlie);
-
-    await vi.waitFor(() => expect(seen()[0]).toBe(REPO.charlie));
   });
 });
 
@@ -693,14 +879,12 @@ async function messagesOf(entries: SetupConditionEntry[]): Promise<string[]> {
   for (const entry of entries) {
     const fake = fakeSetupDeps();
     fake.answer(REPO.charlie, repoStatus(REPO.charlie, [entry]));
-    const host = document.body.appendChild(document.createElement('div'));
-    const dialog = createSetupCheckDialog(host, fake.deps);
-    const screen = setupCheckScreen(host);
-    void dialog.check(REPO.charlie);
-    await shownFor(screen, REPO.charlie);
+    const { host, buttonHost, dialog, screen, raise } = mountDialog(fake);
+    await raise(REPO.charlie);
     messages.push(...screen.entries());
     dialog.dispose();
     host.remove();
+    buttonHost.remove();
   }
   return messages;
 }
@@ -721,10 +905,7 @@ describe('the dismissal controls are offered only for the entries they silence (
     it(`shows ${control} when an entry it silences is listed`, async () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, own));
-      const { dialog, screen } = mountDialog(fake);
-
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { screen } = await openPopup(fake);
 
       expect(screen.hasControl(control)).toBe(true);
     });
@@ -732,10 +913,7 @@ describe('the dismissal controls are offered only for the entries they silence (
     it(`hides ${control} when only entries it does not silence are listed`, async () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, otherOnly));
-      const { dialog, screen } = mountDialog(fake);
-
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { screen } = await openPopup(fake);
 
       expect(screen.hasControl(control)).toBe(false);
     });
@@ -764,9 +942,7 @@ describe('a dismissal press removes what it silences and keeps the other kind (A
       const expected = await messagesOf(remaining);
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED));
-      const { dialog, screen } = mountDialog(fake);
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { screen } = await openPopup(fake);
 
       screen.control(control).focus();
       screen.control(control).click();
@@ -794,10 +970,9 @@ describe('a dismissal that could not be saved', () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
       fake.answerDismiss(reply);
-      const { dialog, screen } = mountDialog(fake);
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { host, screen } = await openPopup(fake);
       const before = screen.entries();
+      const writtenToAlerts = alertTextsWrittenIn(host);
 
       screen.control(FOR_REPO).click();
 
@@ -809,18 +984,17 @@ describe('a dismissal that could not be saved', () => {
           alerted: (screen.alert() ?? '').includes(reason),
         }).toEqual({ asked: 1, entries: before, retryable: true, alerted: true }),
       );
+      expect(writtenToAlerts().some((text) => text.includes(reason)), 'written to the alert after the card was in the page').toBe(true);
     });
   }
 });
 
 describe('the last dismissal closes the popup as an accept', () => {
-  it('with focus back where the operator was', async () => {
+  it('with focus back on the setup needed button while the re-read still lists something', async () => {
     const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
-    const { dialog, screen } = mountDialog(fake);
-    const opener = focusedOpener();
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+    const { screen, raise } = mountDialog(fake);
+    const opener = await raise(REPO.alpha);
 
     screen.control(FOR_REPO).click();
 
@@ -832,19 +1006,6 @@ describe('the last dismissal closes the popup as an accept', () => {
     );
   });
 
-  it('so a queued check raises its popup (AC11)', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.bravo);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(UNTIL_UPDATE).click();
-
-    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
-  });
 });
 
 describe('a dismissal still being saved when the dialog is disposed', () => {
@@ -854,9 +1015,7 @@ describe('a dismissal still being saved when the dialog is disposed', () => {
     let answer: (reply: { ok: true }) => void = () => {};
     const saved = new Promise<{ ok: true }>((resolve) => (answer = resolve));
     fake.deps.dismiss = () => saved;
-    const { host, dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    const { host, dialog, screen } = await openPopup(fake);
 
     screen.control(FOR_REPO).click();
     dialog.dispose();
@@ -891,110 +1050,127 @@ describe('Run setup loop is offered only for the entries the setup flow fixes, w
     it(`${shown ? 'shows' : 'hides'} it when ${when}`, async () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, entries, installed));
-      const { dialog, screen } = mountDialog(fake);
-
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { screen } = await openPopup(fake);
 
       expect(screen.hasControl(RUN_SETUP)).toBe(shown);
     });
   }
 });
 
-describe('pressing Run setup loop (AC18, AC19)', () => {
-  /** A popup for alpha offering Run setup loop, with the terminal already moved on to bravo, whose check waits. */
-  async function runSetupOffered(fake: ReturnType<typeof fakeSetupDeps>) {
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true));
+/** The text each `role="alert"` element inside `host` is given after the host already holds it, read from the
+ *  mutation records so a line written before its card entered the page is not counted. Call the returned function
+ *  to read it. */
+function alertTextsWrittenIn(host: HTMLElement): () => string[] {
+  const written: string[] = [];
+  const isAlert = (node: Node | null): boolean => node instanceof Element && node.getAttribute('role') === 'alert';
+  const take = (records: MutationRecord[]): void => {
+    for (const record of records) {
+      if (record.type === 'characterData' && isAlert(record.target.parentNode)) written.push(record.target.textContent ?? '');
+      if (record.type === 'childList' && isAlert(record.target)) written.push(record.target.textContent ?? '');
+    }
+  };
+  const observer = new MutationObserver(take);
+  observer.observe(host, { childList: true, subtree: true, characterData: true });
+  return () => {
+    take(observer.takeRecords());
+    return [...written];
+  };
+}
+
+describe('pressing Run setup loop', () => {
+  const FIXED_AND_EXAMPLES = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+
+  it("closes the popup and starts the repo-setup flow in the popup's repository, not the one the terminal moved to", async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
     fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
-    const mountedDialog = mountDialog(fake);
-    void mountedDialog.dialog.check(REPO.alpha);
-    void mountedDialog.dialog.check(REPO.bravo);
-    await shownFor(mountedDialog.screen, REPO.alpha);
-    return mountedDialog;
+    const release = fake.setupFlow.hold();
+    const { dialog, screen } = await openPopup(fake);
+    void dialog.check(REPO.bravo);
+    await settle();
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+    const whileStarting = screen.isOpen();
+    release();
+    await settle();
+
+    expect({ whileStarting, runs: fake.setupFlow.runs(), open: screen.isOpen() }).toEqual({
+      whileStarting: false,
+      runs: [REPO.alpha],
+      open: false,
+    });
+  });
+
+  it('once the flow starts, the button no longer counts the entries the setup flow fixes for that repository', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true), repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true));
+    const { buttonHost, screen } = await openPopup(fake);
+
+    screen.control(RUN_SETUP).click();
+    await settle();
+
+    expect({ runs: fake.setupFlow.runs(), button: setupNeededButton(buttonHost) }).toEqual({ runs: [REPO.alpha], button: null });
+  });
+
+  it('once the flow starts, the button still opens the popup for what the setup flow does not fix, without Run setup loop', async () => {
+    const expected = await messagesOf([ENTRY.examplesStale]);
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true), repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const { buttonHost, screen } = await openPopup(fake);
+    screen.control(RUN_SETUP).click();
+    await settle();
+
+    pressSetupNeeded(buttonHost);
+
+    expect({ entries: screen.entries(), runSetup: screen.hasControl(RUN_SETUP) }).toEqual({ entries: expected, runSetup: false });
+  });
+
+  const FAILURES: Array<{ how: string; run: Parameters<ReturnType<typeof fakeSetupDeps>['setupFlow']['answer']>[0]; reason: string }> = [
+    { how: 'is refused', run: { ok: false, reason: 'scripted begun-run refusal' }, reason: 'scripted begun-run refusal' },
+    { how: 'is rejected', run: { reject: 'scripted start rejection' }, reason: 'scripted start rejection' },
+  ];
+
+  for (const { how, run, reason } of FAILURES) {
+    it(`a start that ${how} reports its reason, opens no popup, and leaves the button opening every entry with Run setup loop`, async () => {
+      const fake = fakeSetupDeps();
+      fake.setupFlow.answer(run);
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true), repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+      const { buttonHost, screen, before } = await openPopup(fake);
+
+      screen.control(RUN_SETUP).click();
+      await settle();
+      const failures = fake.setupFlow.failures();
+      const openAfter = screen.isOpen();
+      pressSetupNeeded(buttonHost);
+
+      expect({
+        reported: failures.length === 1 && failures[0].includes(reason),
+        openAfter,
+        entries: screen.entries(),
+        runSetup: screen.hasControl(RUN_SETUP),
+      }).toEqual({ reported: true, openAfter: false, entries: before.entries, runSetup: true });
+    });
   }
 
-  it("starts the repo-setup flow in the popup's repository, not the one the terminal moved to", async () => {
-    const fake = fakeSetupDeps();
-    const { screen } = await runSetupOffered(fake);
-
-    screen.control(RUN_SETUP).click();
-
-    await vi.waitFor(() => expect(fake.setupFlow.runs()).toEqual([REPO.alpha]));
-  });
-
-  it('closes the popup once the start has run, and announces nothing itself', async () => {
-    const fake = fakeSetupDeps();
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(RUN_SETUP).click();
-
-    await vi.waitFor(() =>
-      expect({ open: screen.isOpen(), runs: fake.setupFlow.runs(), announced: fake.announcements() }).toEqual({
-        open: false,
-        runs: [REPO.alpha],
-        announced: [],
-      }),
-    );
-  });
-
-  it('when the setup flow could not run, closes the popup and announces why', async () => {
-    const reason = 'scripted begun-run refusal';
-    const fake = fakeSetupDeps();
-    fake.setupFlow.answer({ ok: false, reason });
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(RUN_SETUP).click();
-
-    await vi.waitFor(() =>
-      expect({
-        open: screen.isOpen(),
-        announcedReason: fake.announcements().some(({ message }) => message.includes(reason)),
-      }).toEqual({ open: false, announcedReason: true }),
-    );
-  });
-
-  it("announces nothing when the setup flow's refusal lands after the dialog was disposed", async () => {
+  it('reports nothing when the start settles after the dialog was disposed', async () => {
     const fake = fakeSetupDeps();
     fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
-    let refuse: (run: SetupFlowRun) => void = () => {};
-    const started = new Promise<SetupFlowRun>((resolve) => (refuse = resolve));
-    let asked = false;
-    fake.deps.runSetupFlow = () => {
-      asked = true;
-      return started;
-    };
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
+    fake.setupFlow.answer({ ok: false, reason: 'scripted begun-run refusal' });
+    const release = fake.setupFlow.hold();
+    const { dialog, screen } = await openPopup(fake);
     screen.control(RUN_SETUP).click();
-    await vi.waitFor(() => expect(asked).toBe(true));
+    await settle();
 
     dialog.dispose();
-    refuse({ ok: false, reason: 'scripted begun-run refusal' });
-    await started;
-    await nextTask();
+    release();
+    await settle();
 
-    expect(fake.announcements()).toEqual([]);
-  });
-
-  it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
-    const fake = fakeSetupDeps();
-    const { screen } = await runSetupOffered(fake);
-
-    screen.control(RUN_SETUP).click();
-
-    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
+    expect(fake.setupFlow.failures()).toEqual([]);
   });
 });
-
 describe('Run setup loop over the real flow strip (AC18)', () => {
-  it('opens the step-entry input modal only once the popup has gone, so two modal dialogs are never open, and focus ends in it', async () => {
+  it('opens the step-entry input modal with the popup closed, so it is the only modal open', async () => {
     const promptView: FlowStateView = {
       stepName: 'setup-entry',
       runStarted: 'started',
@@ -1008,6 +1184,7 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
     const stripHost = document.body.appendChild(document.createElement('div'));
     const inputHost = document.body.appendChild(document.createElement('div'));
     const inputModal = createFlowInputModal(inputHost);
+    const fake = fakeSetupDeps();
     const modalsOpenWhenInputOpened: number[] = [];
     const strip = createFlowStrip(stripHost, {
       state: async () => idle,
@@ -1025,86 +1202,24 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
       },
     });
     strip.onRepoChanged(REPO.alpha);
-    const fake = fakeSetupDeps();
     fake.deps.runSetupFlow = createSetupFlowRun({ setActiveFlow: async () => ({ ok: true }), start: (repoKey) => strip.start(repoKey) });
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(RUN_SETUP).click();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent, ENTRY.examplesStale], true));
+    const { screen } = await openPopup(fake);
 
     try {
-      await vi.waitFor(() =>
-        expect({ modalsOpenWhenInputOpened, focusInInputModal: inputHost.contains(document.activeElement) }).toEqual({
-          modalsOpenWhenInputOpened: [0],
-          focusInInputModal: true,
-        }),
-      );
+      screen.control(RUN_SETUP).click();
+      await settle();
+      expect({
+        modalsOpenWhenInputOpened,
+        popupOpen: screen.isOpen(),
+        focusInInputModal: inputHost.contains(document.activeElement),
+      }).toEqual({ modalsOpenWhenInputOpened: [0], popupOpen: false, focusInInputModal: true });
     } finally {
       strip.dispose();
       inputModal.dispose();
     }
   });
 });
-
-describe('Run setup loop with another check queued, over the real flow strip (AC18)', () => {
-  it("keeps the queued popup closed until the start's step-entry input modal has opened, so it never opens under it", async () => {
-    const promptView: FlowStateView = {
-      stepName: 'setup-entry',
-      runStarted: 'started',
-      steps: ['setup-entry'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      prompt: { inputs: [{ name: 'note', type: 'text' }], bootstrap: '' },
-    };
-    const idle: FlowStateView = { ...promptView, runStarted: 'never-started', status: 'not_started', prompt: undefined };
-    let releaseStart: () => void = () => {};
-    const startHeld = new Promise<void>((resolve) => (releaseStart = resolve));
-    const stripHost = document.body.appendChild(document.createElement('div'));
-    const inputHost = document.body.appendChild(document.createElement('div'));
-    const inputModal = createFlowInputModal(inputHost);
-    const modalsOpenWhenInputOpened: number[] = [];
-    const strip = createFlowStrip(stripHost, {
-      state: async () => idle,
-      start: () => startHeld.then(() => promptView),
-      advance: async () => promptView,
-      restart: async () => promptView,
-      undo: async () => promptView,
-      terminate: async () => idle,
-      provideInput: async () => promptView,
-      onStateChanged: () => () => {},
-      onStatusBar: () => {},
-      onPrompt: (prompt, stepName, submit) => {
-        if (prompt) modalsOpenWhenInputOpened.push(openModalDialogs(document.body));
-        inputModal.render(prompt, stepName, submit);
-      },
-    });
-    strip.onRepoChanged(REPO.alpha);
-    const fake = fakeSetupDeps();
-    fake.deps.runSetupFlow = createSetupFlowRun({ setActiveFlow: async () => ({ ok: true }), start: (repoKey) => strip.start(repoKey) });
-    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
-    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
-    const { dialog, screen } = mountDialog(fake);
-    void dialog.check(REPO.alpha);
-    void dialog.check(REPO.bravo);
-    await shownFor(screen, REPO.alpha);
-
-    screen.control(RUN_SETUP).click();
-    await vi.waitFor(() => expect(screen.isOpen()).toBe(false));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    releaseStart();
-
-    try {
-      await vi.waitFor(() => expect(modalsOpenWhenInputOpened).toEqual([0]));
-    } finally {
-      strip.dispose();
-      inputModal.dispose();
-    }
-  });
-});
-
 describe('Run setup loop after a dismissal rebuilds the popup, with the setup flow installed (AC12, AC18)', () => {
   const MIXED: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
   const CASES: Array<{ press: string; offered: boolean }> = [
@@ -1116,13 +1231,75 @@ describe('Run setup loop after a dismissal rebuilds the popup, with the setup fl
     it(`${offered ? 'keeps' : 'removes'} it once ${press} leaves ${offered ? 'entries the flow fixes' : 'only the examples entry'} listed`, async () => {
       const fake = fakeSetupDeps();
       fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED, true));
-      const { dialog, screen } = mountDialog(fake);
-      void dialog.check(REPO.alpha);
-      await shownFor(screen, REPO.alpha);
+      const { screen } = await openPopup(fake);
 
       screen.control(press).click();
 
       await vi.waitFor(() => expect({ dismissed: screen.hasControl(press), runSetup: screen.hasControl(RUN_SETUP) }).toEqual({ dismissed: false, runSetup: offered }));
     });
   }
+});
+
+describe('Run setup loop waits for an agent at the terminal prompt', () => {
+  const FIXED_AND_EXAMPLES: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+
+  function noAgentPopup(entries: SetupConditionEntry[] = FIXED_AND_EXAMPLES) {
+    const fake = fakeSetupDeps();
+    fake.agent.set('absent');
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, entries, true));
+    return { fake, opened: openPopup(fake) };
+  }
+
+  it('with no agent running, offers the install and the dismissals but not Run setup loop', async () => {
+    const { opened } = noAgentPopup();
+    const { screen } = await opened;
+
+    expect({ runSetup: screen.hasControl(RUN_SETUP), install: screen.hasControl(INSTALL), close: screen.hasControl('Close') }).toEqual({
+      runSetup: false,
+      install: true,
+      close: true,
+    });
+  });
+
+  it('says something different in its description when Run setup loop waits for an agent than when it is offered', async () => {
+    const { opened } = noAgentPopup();
+    const { screen } = await opened;
+    const without = screen.description();
+    const withAgent = fakeSetupDeps();
+    withAgent.answer(REPO.bravo, repoStatus(REPO.bravo, FIXED_AND_EXAMPLES, true));
+    const other = mountDialog(withAgent);
+    await other.raise(REPO.bravo);
+
+    expect(without.replace(REPO.alpha, '')).not.toEqual(other.screen.description().replace(REPO.bravo, ''));
+  });
+
+  it('offers Run setup loop in the open popup as soon as an agent starts, keeping its entries', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { screen, before } = await opened;
+
+    fake.agent.set('idle');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(true));
+    expect(screen.entries()).toEqual(before.entries);
+  });
+
+  it('withdraws Run setup loop from the open popup when the agent leaves the prompt', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const { screen } = await openPopup(fake);
+
+    fake.agent.set('absent');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(false));
+  });
+
+  it('offers Run setup loop while the agent is busy', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { screen } = await opened;
+
+    fake.agent.set('busy');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(true));
+  });
+
 });

@@ -30,6 +30,12 @@ __app_term_precmd() {
 }
 
 __app_term_install
+# The first source runs from the first prompt's PROMPT_COMMAND, before __app_term_precmd is hooked in, so that
+# prompt's start mark comes from here; without it a fresh shell reads as running no prompt at all.
+if [[ -z "${__app_term_sourced:-}" ]]; then
+  __app_term_sourced=1
+  printf '\e]133;A\a'
+fi
 case "$PROMPT_COMMAND" in
   *__app_term_precmd*) ;;
   *) PROMPT_COMMAND="__app_term_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;

@@ -32,7 +32,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import type { GateDecisionOption } from '../../shared/ipc';
+import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
@@ -89,7 +89,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
-const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
+createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>
     window.examples.apply(previewId, replace, removeRetired),
@@ -353,22 +353,35 @@ if (flowStripHost) {
 }
 
 const setupCheckHost = document.getElementById('setup-check-host');
-if (setupCheckHost) {
-  const setupCheck = createSetupCheckDialog(setupCheckHost, {
+const setupNeededHost = document.getElementById('setup-needed');
+if (setupCheckHost && setupNeededHost) {
+  let agentState: HostedAgentState = 'absent';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
+  const agentStateIs = (state: HostedAgentState): void => {
+    if (state === agentState) return;
+    agentState = state;
+    for (const cb of [...agentListeners]) cb(state);
+  };
+  window.setup.onAgentStateChanged(agentStateIs);
+  window.setup.agentState().then(agentStateIs, (e: unknown) => {
+    console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  const setupCheck = createSetupCheckDialog({ button: setupNeededHost, dialog: setupCheckHost }, {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
-    openInstallExamples: () => {
-      shell.setView('4');
-      installExamples.open();
-    },
+    previewExamples: () => window.examples.preview(),
+    installExamples: (previewId, { replace, removeRetired }) => window.examples.apply(previewId, replace, removeRetired),
     runSetupFlow: createSetupFlowRun({
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
     }),
-    announce: (title, message) => showError({ title, message }),
+    onSetupLoopFailed: (reason) => showError({ title: 'Could not run the setup loop', message: reason }),
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
     onFocusLost: landFocus,
-    blockingDialogOpen: () => shell.modalIsOpen(),
-    onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),
   });
   repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
