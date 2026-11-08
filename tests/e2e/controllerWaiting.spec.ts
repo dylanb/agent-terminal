@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
@@ -9,6 +10,7 @@ import { exampleConfigDir, FAKE_AGENT_READY, seedFakeAgentSteps, seedFakeAgentV2
 import { fakeProcessPid, fakeProcessRunning, fakeSpawnLine, stopAllFakeProcesses, stopFakeProcess } from './fakeProcesses';
 import { cardHeaderLocator, cardLocator, statusRowLocator, timelineEntriesLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { PS_ARGS } from '../../src/main/waitingRule';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -251,6 +253,36 @@ test('naming a running helper in the operator\'s helper file makes a terminal Wa
     finally {
       try { await h.dispose(); }
       finally { rmSync(binDir, { recursive: true, force: true }); }
+    }
+  }
+});
+
+test('a lookup slower than the default bound still finds a command when APP_WAITING_LOOKUP_TIMEOUT_MS allows it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(240_000);
+  const h = await createControllerDesktopHarness();
+  const binDir = mkdtempSync(join(tmpdir(), 'waiting-bound-'));
+  const shimDir = mkdtempSync(join(tmpdir(), 'waiting-slow-ps-'));
+  const repo = h.fixture.repositories[0];
+  try {
+    seedFakeAgentSteps(binDir, {});
+    const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
+    // Slower than the default bound, so only a configured bound lets a lookup answer.
+    writeFileSync(join(shimDir, 'ps'), `#!/bin/sh\n[ "$*" = ${shellQuote(PS_ARGS.join(' '))} ] && sleep 3\nexec ${shellQuote(realPs)} "$@"\n`);
+    chmodSync(join(shimDir, 'ps'), 0o755);
+    await h.launch(controllerTarget, h.fixture.nonGit);
+    const { page } = await h.launch(terminalTarget, repo, { env: { PATH: `${shimDir}:${binDir}:${h.fixture.env.PATH ?? process.env.PATH}`, ...SLOW_LOOKUP_ENV } });
+    await hostFakeAgent(page, repo);
+    await typeLine(page, fakeSpawnLine(COMMAND, 'session'));
+    await fakeProcessPid(binDir, COMMAND);
+    await expect(page.locator('#monitor-status').getByText(/^agent:/)).toHaveText(new RegExp(String.raw`\bwaiting\b.*\b${COMMAND}\b`), { timeout: STATUS_BUDGET_MS });
+  } finally {
+    try { await stopAllFakeProcesses(binDir); }
+    finally {
+      try { await h.dispose(); }
+      finally {
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(shimDir, { recursive: true, force: true });
+      }
     }
   }
 });

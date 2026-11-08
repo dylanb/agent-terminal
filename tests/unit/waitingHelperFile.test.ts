@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { createHelperPrograms } from '../../src/main/helperPrograms';
+import { createHelperPrograms } from '../../src/main/waitingHelperFile';
 
 // The operator decision: the file is re-read at most every 15 s.
 const REFRESH_MS = 15_000;

@@ -82,7 +82,7 @@ import { resolveRuntimeConfig } from './runtimeConfig';
 import { createWaitingDetector } from './waitingDetector';
 import { readProcessTable } from './waitingLookup';
 import { waitingInTable, waitingPlatform } from './waitingRule';
-import { createHelperPrograms } from './helperPrograms';
+import { createHelperPrograms } from './waitingHelperFile';
 import type { WaitingValue } from '../shared/waiting';
 import { createWindowStatus } from './windowStatus';
 import { createCommandTracker } from './commandTracker';
@@ -335,7 +335,7 @@ async function createWindow(): Promise<void> {
     waiting: windowWaiting,
     deliver: ({ status, waiting }) => {
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status, waiting });
-      pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
+      pushFlowChanged(); // a screen flip or a Waiting change moves the strip's derived line (§24.2.2 S5, §8.3.1)
     },
   });
 
