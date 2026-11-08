@@ -22,7 +22,7 @@ export function activityLine(work: ControllerWorkActivity): string {
   return work.activity === 'waiting' ? `${word} · ${waitingLabel(work.waiting)}` : word;
 }
 
-const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
+export const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
 
 const SUMMARY_CLASS: Readonly<Record<SummaryLabel, CardStatusClass>> = {
   errors: 'error', 'need a human': 'needs-human', idle: 'idle', working: 'working',

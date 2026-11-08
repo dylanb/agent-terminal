@@ -90,6 +90,9 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 - **Waiting · `<program>`** when the agent's screen is quiet but a command it started (a test run, a build) is still running. It counts as working, and the card reads Idle within about 5 s of the command ending. The terminal's status strip and flow strip show it too. Helpers the agent keeps running never count; if one does, list its program name in `~/.agent-terminal/helper-programs.yaml` (a YAML list, picked up within about 20 s). See [docs/controller.md](docs/controller.md#cards).
 - Each card's header shows the repository, the terminal's title (its PR's or ticket's title, else the one you gave it), its git branch and its status, so sibling checkouts of one repository are told apart even when collapsed. The branch is re-read every five minutes by default (`APP_BRANCH_REFRESH_MS`).
 - An expanded card shows a timeline of its three newest events, newest first with times: notifications, and status changes such as Working, Idle, a flow step or Disconnected. **Clear history** empties it.
+- Cards sort by **Attention** (Errors, Needs a human, Idle & unassigned, Working, each under a heading with its count, longest-waiting first) or **Recently used** (cards you used in the controller first), picked in the window header. The choice survives a restart.
+- Each card header shows how long it has been in its state, for example **Needs a human · Idle · waiting 41m**.
+- A card under your pointer, or with keyboard focus in it, holds the list still and shows **position held**, so nothing moves while you act on it. The list re-sorts when you move away.
 - Tray dot: amber when a human is needed, red on error.
 - The arrow icon in each card's header (**Bring forward**) raises the right window, collapsed or expanded. Agents sharing a directory are flagged **Duplicate directory**, and the same icon brings all of them forward.
 - An always-on-top toggle.

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { MONITOR_ELEMENT_IDS, captureFocusReturn, captureSubtreeFocus, requireElement, resolveElements, resolveMonitorElements } from '../../src/renderer/src/dom';
+import { MONITOR_ELEMENT_IDS, captureFocusReturn, captureSubtreeFocus, content, reconcileChildren, requireElement, resolveElements, resolveMonitorElements } from '../../src/renderer/src/dom';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -113,5 +113,42 @@ describe('renderer DOM contract (typed required-element handles)', () => {
     for (const key of Object.keys(MONITOR_ELEMENT_IDS) as (keyof typeof MONITOR_ELEMENT_IDS)[]) {
       expect(el[key]).toBe(document.getElementById(MONITOR_ELEMENT_IDS[key]));
     }
+  });
+});
+
+describe('reconcileChildren — update a subtree in place', () => {
+  const editable = (doc: Document, onInput: () => void) => {
+    const field = doc.createElement('div');
+    field.contentEditable = 'true';
+    field.textContent = 'draft';
+    field.addEventListener('input', onInput);
+    return field;
+  };
+
+  it('places a new node it was not told is content, even when an old child looks the same', () => {
+    const parent = document.body.appendChild(document.createElement('div'));
+    const heard: string[] = [];
+    reconcileChildren(parent, [editable(document, () => heard.push('old'))]);
+    reconcileChildren(parent, [editable(document, () => heard.push('new'))]);
+    parent.firstElementChild?.dispatchEvent(new Event('input'));
+    expect({ children: parent.childNodes.length, heard }).toEqual({ children: 1, heard: ['new'] });
+  });
+
+  it('places new content, never an equal old child that was not placed as content', () => {
+    const parent = document.body.appendChild(document.createElement('div'));
+    const heard: string[] = [];
+    reconcileChildren(parent, [editable(document, () => heard.push('old'))]);
+    reconcileChildren(parent, [content(editable(document, () => heard.push('new')))]);
+    parent.firstElementChild?.dispatchEvent(new Event('input'));
+    expect({ children: parent.childNodes.length, heard }).toEqual({ children: 1, heard: ['new'] });
+  });
+
+  it('keeps unchanged content, and a selection in it, when the same content is given again', () => {
+    const parent = document.body.appendChild(document.createElement('div'));
+    const line = () => Object.assign(document.createElement('p'), { textContent: 'Flow: feature-dev' });
+    reconcileChildren(parent, [content(line())]);
+    getSelection()?.selectAllChildren(parent.firstChild!);
+    reconcileChildren(parent, [content(line())]);
+    expect(getSelection()?.toString()).toBe('Flow: feature-dev');
   });
 });

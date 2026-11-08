@@ -7,6 +7,7 @@ export interface ClampedReasonDeps {
 }
 
 export interface ClampedReason {
+  element(): HTMLElement;
   control(): HTMLElement | undefined;
   dispose(): void;
 }
@@ -49,6 +50,7 @@ export function createClampedReason(host: HTMLElement, deps: ClampedReasonDeps):
   const observer = View ? new View(render) : undefined;
   observer?.observe(text);
   return {
+    element: () => root,
     control: () => (toggle.isConnected ? toggle : undefined),
     dispose() {
       observer?.disconnect();
