@@ -13,8 +13,9 @@ export function createMcpServer<H>(opts: { endpoint: string | null; build: strin
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: endpoint === null ? [] : mcpToolDefinitions() }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const problem = endpoint === null ? `unknown tool ${JSON.stringify(name)}: this session is not in an agent-terminal window` : invalidToolArguments(name, args);
-    if (problem !== null || endpoint === null) throw new McpError(ErrorCode.InvalidParams, problem ?? 'no window');
+    if (endpoint === null) throw new McpError(ErrorCode.InvalidParams, `unknown tool ${JSON.stringify(name)}: this session is not in an agent-terminal window`);
+    const problem = invalidToolArguments(name, args);
+    if (problem !== null) throw new McpError(ErrorCode.InvalidParams, problem);
     return { ...toolResult(await callWindow(endpoint, { tool: name, args: args ?? {} }, opts)) };
   });
   return server;

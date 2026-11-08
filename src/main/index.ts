@@ -242,7 +242,8 @@ async function createWindow(): Promise<void> {
         process.cwd(),
       ),
     })));
-  const mcpInvocation = { execPath: process.execPath, appArgs: [resolveMcpScript(__dirname)] };
+  const mcpScript = resolveMcpScript(__dirname);
+  const mcpInvocation = { execPath: process.execPath, appArgs: [mcpScript] };
   const claudeCodeContext = { appHome: flowGlobalDir, invocation: mcpInvocation, env: process.env, platform: process.platform };
   ipcMain.handle(CH.claudeCodeInstall, (_e, m): Promise<ClaudeCodeIntegrationResult> =>
     isValidClaudeCodeIntegration(m) ? changeClaudeCodeIntegration('install', claudeCodeContext) : Promise.resolve({ ok: false, error: 'invalid install request' }));
@@ -297,7 +298,7 @@ async function createWindow(): Promise<void> {
   };
   const mcpBridge: WindowBridge | null = await (async () => openWindowBridge({
     appHome: flowGlobalDir,
-    build: mcpBuildId(resolveMcpScript(__dirname)),
+    build: mcpBuildId(mcpScript),
     handle: (request) => answerMcp(request),
   }))().catch((error: unknown) => {
     console.error(`The Claude Code tools are off in this window: ${errMsg(error)}`);
@@ -309,7 +310,7 @@ async function createWindow(): Promise<void> {
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
-    env: windowSessionEnv(process.env, mcpBridge?.endpoint ?? null, { execPath: process.execPath, script: resolveMcpScript(__dirname) }),
+    env: windowSessionEnv(process.env, mcpBridge?.endpoint ?? null, { execPath: process.execPath, script: mcpScript }),
   });
   if (win.isDestroyed()) {
     ptyProcess.kill();

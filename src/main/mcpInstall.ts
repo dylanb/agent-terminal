@@ -41,27 +41,32 @@ function settingsFile(env: NodeJS.ProcessEnv): string {
   return path.join(root, 'settings.json');
 }
 
-async function readSettings(file: string): Promise<{ settings: Settings; bytes: string | null }> {
+async function readJsonFile(file: string, label: string): Promise<{ value: unknown } | null> {
   let bytes: string;
   try {
     bytes = await readFile(file, 'utf8');
   } catch (error) {
-    if (isErrno(error, 'ENOENT')) return { settings: {}, bytes: null };
-    throw new IntegrationFailure(`Could not read the Claude Code settings file ${file}: ${errMsg(error)}`);
+    if (isErrno(error, 'ENOENT')) return null;
+    throw new IntegrationFailure(`Could not read ${label} ${file}: ${errMsg(error)}`);
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(bytes);
+    return { value: JSON.parse(bytes) as unknown };
   } catch (error) {
-    throw new IntegrationFailure(`The Claude Code settings file ${file} is not valid JSON: ${errMsg(error)}`);
+    throw new IntegrationFailure(`${label.charAt(0).toUpperCase()}${label.slice(1)} ${file} is not valid JSON: ${errMsg(error)}`);
   }
+}
+
+async function readSettings(file: string): Promise<{ settings: Settings; existed: boolean }> {
+  const read = await readJsonFile(file, 'the Claude Code settings file');
+  if (read === null) return { settings: {}, existed: false };
+  const parsed = read.value;
   if (!isRecord(parsed)) throw new IntegrationFailure(`The Claude Code settings file ${file} does not hold a JSON object.`);
   const hooks = parsed.hooks;
   const readableGroup = (group: unknown): boolean => isRecord(group) && (group.hooks === undefined || Array.isArray(group.hooks));
   if (hooks !== undefined && (!isRecord(hooks) || Object.values(hooks).some((groups) => !Array.isArray(groups) || !groups.every(readableGroup)))) {
     throw new IntegrationFailure(`The hooks in the Claude Code settings file ${file} are not in the form Claude Code reads.`);
   }
-  return { settings: parsed as Settings, bytes };
+  return { settings: parsed as Settings, existed: true };
 }
 
 /** `dir` with every symbolic link resolved, or as given when it does not exist yet. */
@@ -80,6 +85,13 @@ async function writeSettings(file: string, settings: Settings, existed: boolean)
   if (!atomicWriteFileSync(target, `${JSON.stringify(settings, null, 2)}\n`, { mode })) {
     throw new IntegrationFailure(`The Claude Code settings file ${file} was not written: its directory is a symbolic link.`);
   }
+}
+
+/** Reads the settings afresh, so a change Claude Code wrote while `claude mcp` ran is kept. */
+async function rewriteSettings(file: string, change: (settings: Settings) => Settings | null): Promise<void> {
+  const fresh = await readSettings(file);
+  const next = change(fresh.settings);
+  if (next !== null) await writeSettings(file, next, fresh.existed);
 }
 
 function hookCommand(launch: McpIntegrationTarget['launch']): string {
@@ -160,20 +172,9 @@ function stateFile(env: NodeJS.ProcessEnv): string {
 /** Whether Claude Code has no server under the integration's name, has the integration's own (it runs the launch),
  *  or has one that is someone else's. */
 async function registeredServer(target: McpIntegrationTarget): Promise<{ kind: 'absent' } | { kind: 'ours' } | { kind: 'theirs'; command: string }> {
-  const file = stateFile(target.env);
-  let bytes: string;
-  try {
-    bytes = await readFile(file, 'utf8');
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return { kind: 'absent' };
-    throw new IntegrationFailure(`Could not read Claude Code's state file ${file}: ${errMsg(error)}`);
-  }
-  let state: unknown;
-  try {
-    state = JSON.parse(bytes);
-  } catch (error) {
-    throw new IntegrationFailure(`Claude Code's state file ${file} is not valid JSON: ${errMsg(error)}`);
-  }
+  const read = await readJsonFile(stateFile(target.env), "Claude Code's state file");
+  if (read === null) return { kind: 'absent' };
+  const state = read.value;
   const servers = isRecord(state) && isRecord(state.mcpServers) ? state.mcpServers : {};
   const entry = servers[MCP_SERVER_NAME];
   if (entry === undefined) return { kind: 'absent' };
@@ -218,11 +219,8 @@ export function installMcpIntegration(target: McpIntegrationTarget): Promise<Mcp
       const added = await runClaude(target, ['mcp', 'add-json', '--scope', 'user', MCP_SERVER_NAME, JSON.stringify({ type: 'stdio', ...target.launch })]);
       if (added.exit !== 0) throw new IntegrationFailure(`Claude Code did not register the agent-terminal server: ${added.output || `claude mcp add-json exited ${added.exit}`}`);
     }
-    await afterServerChange(`The agent-terminal server was registered with Claude Code, but its hooks were not written`, 'Install', async () => {
-      const fresh = await readSettings(file);
-      const next = withOurHooks(fresh.settings, target.launch);
-      if (next !== null) await writeSettings(file, next, fresh.bytes !== null);
-    });
+    await afterServerChange('The agent-terminal server was registered with Claude Code, but its hooks were not written', 'Install', () =>
+      rewriteSettings(file, (settings) => withOurHooks(settings, target.launch)));
   });
 }
 
@@ -236,11 +234,7 @@ export function removeMcpIntegration(target: McpIntegrationTarget): Promise<McpI
       const removed = await runClaude(target, ['mcp', 'remove', '--scope', 'user', MCP_SERVER_NAME]);
       if (removed.exit !== 0) throw new IntegrationFailure(`Claude Code did not remove the agent-terminal server: ${removed.output || `claude mcp remove exited ${removed.exit}`}`);
     }
-    const removeHooks = async (): Promise<void> => {
-      const fresh = await readSettings(file);
-      const next = withoutOurHooks(fresh.settings, target.launch);
-      if (next !== null) await writeSettings(file, next, fresh.bytes !== null);
-    };
+    const removeHooks = (): Promise<void> => rewriteSettings(file, (settings) => withoutOurHooks(settings, target.launch));
     if (ours) await afterServerChange('The agent-terminal server was removed from Claude Code, but its hooks were not removed', 'Remove', removeHooks);
     else await removeHooks();
   });
