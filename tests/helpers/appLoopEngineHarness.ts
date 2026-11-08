@@ -214,6 +214,8 @@ export class AppLoopEngineHarness {
       hostedAgent: () => this.hosted,
       armTimer: this.armTimer,
       cancelTimer: this.cancelTimer,
+      armAgentWait: () => {},
+      cancelAgentWait: () => {},
       noteSettle: () => {},
       resolveDef: () => this.defResult,
       readRecipe: () => '# work turn\nProduce the plan.',

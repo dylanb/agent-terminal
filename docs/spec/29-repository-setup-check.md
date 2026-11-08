@@ -20,7 +20,8 @@ its first gate.
 - Checks run one at a time, in the order the terminal entered the repositories. A popup due while another app
   dialog is open waits until that dialog closes, so two modal dialogs are never open together (UI-STANDARDS.md §5).
   A popup that steps aside while Run setup loop starts (§29.5) keeps its place: no queued check runs until its check
-  has ended, because it came back and was closed or nothing was left listed. Showing it again is not a new check.
+  has ended, because it came back and was closed or nothing was left listed. Showing it again is not a new check,
+  and neither is its one return when an agent starts (§29.5), which takes its turn in the same queue.
 - A check that could not run (the status request fails or is rejected) shows nothing and does not count as done:
   the next entry into that repository in the session checks it again. A check that could not run never passes.
 - `APP_SETUP_CHECK=off` turns the check off: the status reply then lists nothing. It is a test seam with no UI,
@@ -65,7 +66,7 @@ controls that apply:
 | Control | Shown when | What it does |
 |---|---|---|
 | **Install/update examples** | an `examples` entry is listed | Installs the bundled examples from inside the popup (below) |
-| **Run setup loop** | the shipped `repo-setup` flow is installed (below) and an `ignore`/`not-ignored` or a `capabilities`/`absent` entry is listed | §29.5 |
+| **Run setup loop** | the shipped `repo-setup` flow is installed (below), an `ignore`/`not-ignored` or a `capabilities`/`absent` entry is listed, and an agent is at the terminal's prompt | §29.5 |
 | **Don't show again for this repo** | an `ignore` or `capabilities` entry is listed | §29.4 |
 | **Don't show again until the app updates** | an `examples` entry is listed | §29.4 |
 | **Close** | always | Closes the popup and records nothing; Escape and the scrim do the same |
@@ -105,6 +106,18 @@ controls that apply:
   shows again.
 
 ### 29.5 Run setup loop
+
+The setup loop's turns are typed into an agent (§27.2), so Run setup loop is offered only while one is at the
+terminal's prompt, busy or idle, by the engine's own presence rule (§27.2), which main pushes to the renderer
+(`setup:agentStateChanged`). Until then the popup offers the rest of its controls and says to start Claude Code
+or Codex in the terminal.
+
+- The popup follows the agent while it is open: Run setup loop appears when an agent starts and goes when it leaves.
+- When the operator closes the popup (Close, Escape, the scrim) while Run setup loop waited for an agent, it comes
+  back once, when an agent is idle at its prompt, so it neither opens while the agent is still starting nor for a
+  command that is not a listed agent. It re-reads the repository's status and lists only the entries the setup flow
+  fixes, and opens only when it still lists one, the flow is still installed, and no other app dialog is open
+  (§29.1). It does not come back a second time, and never after a dismissal or a start removed those entries.
 
 Run setup loop selects `repo-setup` for the popup's repository and starts it through the two requests the picker
 and the flow strip already make, `flow:setActiveFlow` then `flow:start` (§18.7). It adds no Start path in main or

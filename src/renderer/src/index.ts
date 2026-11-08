@@ -32,7 +32,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import type { GateDecisionOption } from '../../shared/ipc';
+import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
@@ -354,6 +354,17 @@ if (flowStripHost) {
 
 const setupCheckHost = document.getElementById('setup-check-host');
 if (setupCheckHost) {
+  let agentState: HostedAgentState = 'absent';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
+  const agentStateIs = (state: HostedAgentState): void => {
+    if (state === agentState) return;
+    agentState = state;
+    for (const cb of [...agentListeners]) cb(state);
+  };
+  window.setup.onAgentStateChanged(agentStateIs);
+  window.setup.agentState().then(agentStateIs, (e: unknown) => {
+    console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
+  });
   const setupCheck = createSetupCheckDialog(setupCheckHost, {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
@@ -363,6 +374,11 @@ if (setupCheckHost) {
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
     }),
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
     onFocusLost: landFocus,
     blockingDialogOpen: () => shell.modalIsOpen(),
     onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),

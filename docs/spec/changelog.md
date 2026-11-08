@@ -1,3 +1,15 @@
+## Run setup loop waits for an agent, and a loop turn waits for one before failing
+
+§27.2/§29.3/§29.5 (operator decision 2026-11-07): Run setup loop was offered before Claude Code or Codex was running. Its first turn found no agent at the prompt and stopped in `error` at once, and the popup, which blocks the terminal, gave the operator no chance to start one. A fresh shell also read as an agent being present until it had run a command: the shell integration marked only the prompts after the first. Now:
+
+- the shell integration marks the first prompt too, so a fresh shell reads as a bare shell (§27.2);
+- an agent is at the prompt only when the running command line starts a listed agent program, `claude` or `codex` by default (`APP_AGENT_COMMANDS` overrides the list); before, any running command counted, so a turn could be typed into an editor or a dev server, and a short `cd` brought the popup back over the terminal (§27.2);
+- the setup popup offers Run setup loop only while an agent is at the terminal's prompt, following it as it starts and leaves, and otherwise says to start one;
+- a popup closed while Run setup loop waited for an agent comes back once when the agent is idle at its prompt, listing only the entries the setup flow fixes;
+- a loop turn that finds no agent at the prompt waits for one, for sixty seconds by default (`APP_AGENT_WAIT_MS` overrides it), injects once the agent is at its prompt, and stops in `error` only if none has arrived; it still never types the prompt into the shell.
+
+IPC: `setup:agentState` (the renderer asks whether an agent is at the prompt, idle or busy) and `setup:agentStateChanged` (main reports a change).
+
 ## #317 — The setup popup keeps its buttons inside the dialog and stays open until the operator dismisses it
 
 §29.1/§29.3/§29.5/§18.1 (operator decision 2026-11-07): the popup's controls sat on one line wider than its card, so some were painted outside it and could not be pressed, and the popup closed after Install/update examples or Run setup loop although other entries still needed an action. Now:

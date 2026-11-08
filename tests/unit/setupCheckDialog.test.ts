@@ -1726,3 +1726,184 @@ describe('Run setup loop after a dismissal rebuilds the popup, with the setup fl
     });
   }
 });
+
+describe('Run setup loop waits for an agent at the terminal prompt', () => {
+  const FIXED_AND_EXAMPLES: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+
+  function noAgentPopup(entries: SetupConditionEntry[] = FIXED_AND_EXAMPLES) {
+    const fake = fakeSetupDeps();
+    fake.agent.set('absent');
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, entries, true));
+    return { fake, opened: openPopup(fake) };
+  }
+
+  it('with no agent running, offers the install and the dismissals but not Run setup loop', async () => {
+    const { opened } = noAgentPopup();
+    const { screen } = await opened;
+
+    expect({ runSetup: screen.hasControl(RUN_SETUP), install: screen.hasControl(INSTALL), close: screen.hasControl('Close') }).toEqual({
+      runSetup: false,
+      install: true,
+      close: true,
+    });
+  });
+
+  it('says something different in its description when Run setup loop waits for an agent than when it is offered', async () => {
+    const { opened } = noAgentPopup();
+    const { screen } = await opened;
+    const without = screen.description();
+    const withAgent = fakeSetupDeps();
+    withAgent.answer(REPO.bravo, repoStatus(REPO.bravo, FIXED_AND_EXAMPLES, true));
+    const other = mountDialog(withAgent);
+    void other.dialog.check(REPO.bravo);
+    await shownFor(other.screen, REPO.bravo);
+
+    expect(without.replace(REPO.alpha, '')).not.toEqual(other.screen.description().replace(REPO.bravo, ''));
+  });
+
+  it('offers Run setup loop in the open popup as soon as an agent starts, keeping its entries', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { screen, before } = await opened;
+
+    fake.agent.set('idle');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(true));
+    expect(screen.entries()).toEqual(before.entries);
+  });
+
+  it('withdraws Run setup loop from the open popup when the agent leaves the prompt', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const { screen } = await openPopup(fake);
+
+    fake.agent.set('absent');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(false));
+  });
+
+  for (const { door, close } of DOORS) {
+    it(`closed through ${door} with no agent running, comes back for its repository listing only what the setup loop fixes once an agent starts`, async () => {
+      const expected = await messagesOf([ENTRY.notIgnored, ENTRY.absent]);
+      const { fake, opened } = noAgentPopup();
+      const { screen } = await opened;
+      close(screen);
+      await settle();
+      expect(screen.isOpen()).toBe(false);
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+
+      fake.agent.set('idle');
+      await shownFor(screen, REPO.alpha);
+
+      expect({ entries: sorted(screen.entries()), runSetup: screen.hasControl(RUN_SETUP) }).toEqual({ entries: sorted(expected), runSetup: true });
+      screen.control(RUN_SETUP).click();
+      await vi.waitFor(() => expect(fake.setupFlow.runs()).toEqual([REPO.alpha]));
+    });
+  }
+
+  it('offers Run setup loop while the agent is busy', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { screen } = await opened;
+
+    fake.agent.set('busy');
+
+    await vi.waitFor(() => expect(screen.hasControl(RUN_SETUP)).toBe(true));
+  });
+
+  it('closed with no agent running, does not come back for a command that runs and ends, and comes back when an agent goes idle', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { host, screen } = await opened;
+    screen.control('Close').click();
+    await settle();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const seen = recordSetupDialogs(host);
+
+    fake.agent.set('busy');
+    fake.agent.set('absent');
+    await settle();
+    expect.soft(seen(), 'no popup for a short command').toEqual([]);
+    fake.agent.set('busy');
+    fake.agent.set('idle');
+
+    await shownFor(screen, REPO.alpha);
+  });
+
+  it('comes back with what a fresh status read still lists, and not at all when that lists nothing the setup loop fixes', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { host, screen } = await opened;
+    screen.control('Close').click();
+    await settle();
+    const seen = recordSetupDialogs(host);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale], true));
+
+    fake.agent.set('idle');
+    await settle();
+
+    expect({ reread: fake.statusRequests(), shown: seen() }).toEqual({ reread: [REPO.alpha, REPO.alpha], shown: [] });
+  });
+
+  it('does not come back when it was closed while it offered Run setup loop', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true), repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    const { host, screen } = await openPopup(fake);
+    screen.control('Close').click();
+    await settle();
+    const seen = recordSetupDialogs(host);
+
+    fake.agent.set('absent');
+    fake.agent.set('idle');
+    await settle();
+
+    expect(seen()).toEqual([]);
+  });
+
+  it('comes back at most once', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { host, screen } = await opened;
+    screen.control('Close').click();
+    await settle();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true), repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    fake.agent.set('idle');
+    await shownFor(screen, REPO.alpha);
+    fake.agent.set('absent');
+    await settle();
+    screen.control('Close').click();
+    await settle();
+    const seen = recordSetupDialogs(host);
+
+    fake.agent.set('idle');
+    await settle();
+
+    expect(seen()).toEqual([]);
+  });
+
+  it('waits for another open app dialog to close before it comes back', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { screen } = await opened;
+    screen.control('Close').click();
+    await settle();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    fake.otherDialog.open();
+
+    fake.agent.set('idle');
+    await settle();
+    expect.soft(screen.isOpen(), 'no popup over the other dialog').toBe(false);
+    fake.otherDialog.close();
+
+    await shownFor(screen, REPO.alpha);
+  });
+
+  it('a disposed dialog does not come back when an agent starts', async () => {
+    const { fake, opened } = noAgentPopup();
+    const { host, dialog, screen } = await opened;
+    screen.control('Close').click();
+    await settle();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, FIXED_AND_EXAMPLES, true));
+    dialog.dispose();
+    const seen = recordSetupDialogs(host);
+
+    fake.agent.set('idle');
+    await settle();
+
+    expect({ reread: fake.statusRequests(), shown: seen() }).toEqual({ reread: [REPO.alpha], shown: [] });
+  });
+});
