@@ -1,11 +1,3 @@
-// Long-running processes a seeded fake agent starts on request, shaped like a harness's commands and helpers: a
-// line `fake-spawn <group> <name>` typed to the agent starts a copy of `sleep` named `<name>`, so the OS reports
-// `<name>` (cut to its executable-name limit) as its program name. `session` starts it in a new session, so a new
-// process group of its own with no controlling terminal, as Claude Code and Codex run a command; `own` puts it in a
-// new process group of its own that keeps the terminal, as Codex runs `codex-code-mode-host` and its stdio MCP
-// servers; `agent` leaves it in the agent's own group, as Claude Code runs `caffeinate`. `session` needs `setsid`,
-// which the Linux e2e image has.
-
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -16,7 +8,6 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 export type FakeProcessGroup = 'session' | 'own' | 'agent';
 
 const NAME = /^[a-z][a-z0-9-]{0,39}$/;
-// A last resort for a process every cleanup path missed; the agent's exit and `stopAllFakeProcesses` end it first.
 const LIFETIME_CAP_S = 300;
 const POLL_MS = 50;
 
@@ -28,9 +19,6 @@ function checkedName(name: string): string {
   return name;
 }
 
-/** The shell source a fake agent script includes: `fake_spawn <group> <name>`, and an EXIT trap that kills every
- *  process it started when the agent exits on a signal it can trap. `disown` keeps bash's job notices off the
- *  screen. The trap splits each record without `read`, because it can run inside the agent's `IFS= read`. */
 export function fakeSpawnShell(binDir: string): string {
   const dir = shellQuote(processDir(binDir));
   return (
@@ -45,10 +33,8 @@ export function fakeSpawnShell(binDir: string): string {
   );
 }
 
-/** The `case` arm that answers a `fake-spawn` line; `fakeSpawnShell` must be in the same script. */
 export const FAKE_SPAWN_ARM = '    "fake-spawn session "*|"fake-spawn own "*|"fake-spawn agent "*) fake_spawn ${line#fake-spawn } ;;';
 
-/** The line to type to a running fake agent to start `name` in `group`. */
 export function fakeSpawnLine(name: string, group: FakeProcessGroup): string {
   return `fake-spawn ${group} ${checkedName(name)}`;
 }
@@ -90,14 +76,12 @@ async function until(what: string, done: () => boolean): Promise<void> {
   }
 }
 
-/** The pid of `name` once the agent has started it. */
 export async function fakeProcessPid(binDir: string, name: string): Promise<number> {
   let found: Recorded | null = null;
   await until(`${name} was never started`, () => (found = recorded(binDir, name)) !== null);
   return found!.pid;
 }
 
-/** Whether `name` was started and is still in the process table. */
 export function fakeProcessRunning(binDir: string, name: string): boolean {
   const r = recorded(binDir, name);
   return r !== null && alive(r.pid);
@@ -111,9 +95,6 @@ function kill(r: Recorded): void {
   }
 }
 
-/** Kills `name` (its whole group when it has one of its own) and resolves once the agent has reaped it, so a
- *  process table read afterwards no longer lists it. Its record goes with it, so no later cleanup signals a pid
- *  the OS may have reused, and the name can be started again. */
 export async function stopFakeProcess(binDir: string, name: string): Promise<void> {
   const r = recorded(binDir, name);
   if (!r) throw new Error(`fake process ${name} was never started`);
@@ -122,8 +103,6 @@ export async function stopFakeProcess(binDir: string, name: string): Promise<voi
   rmSync(pidFile(binDir, name), { force: true });
 }
 
-/** Kills every process any fake agent seeded into `binDir` started and verifies each is gone; for a test's
- *  `finally`, before the app closes, since a fake process left running can hold the app's close. */
 export async function stopAllFakeProcesses(binDir: string): Promise<void> {
   const dir = processDir(binDir);
   if (!existsSync(dir)) return;

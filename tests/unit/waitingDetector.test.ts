@@ -3,8 +3,6 @@ import { createWaitingDetector, type ControllerActivity, type WaitingDetector } 
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import type { WaitingValue } from '../../src/shared/waiting';
 
-// How long after a command's 1 s mark the rule first reports it: the rule counts a command from an elapsed reading
-// that macOS can round up from just over a second.
 const RULE_REPORTS_AFTER_MARK_MS = 1000;
 const AC_BOUND_MS = 5000;
 const STEP_MS = 50;
@@ -12,9 +10,8 @@ const STEP_MS = 50;
 const NODE: WaitingValue = { program: 'node', others: 0 };
 const WAITING_NODE: ControllerActivity = { activity: 'waiting', waiting: NODE };
 
-type Answer = WaitingValue | null | 'hang' | 'fail';
+type Answer = WaitingValue | null | 'hang' | 'fail' | 'throw';
 
-/** The agent's commands as the lookup reports them over time, with every lookup's start time recorded. */
 function harness(answer: (now: number, call: number) => Answer) {
   const lookups: number[] = [];
   const published: Array<{ at: number; activity: ControllerActivity }> = [];
@@ -22,6 +19,7 @@ function harness(answer: (now: number, call: number) => Answer) {
     commands(signal) {
       const call = lookups.push(Date.now()) - 1;
       const reply = answer(Date.now(), call);
+      if (reply === 'throw') throw new Error('ps not started');
       if (reply === 'fail') return Promise.reject(new Error('ps exited 1'));
       if (reply === 'hang') return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
       return Promise.resolve(reply);
@@ -183,7 +181,6 @@ describe('the controller activity\'s lookups and failures', () => {
   const timers = { setTimer: (cb: () => void, ms: number) => setTimeout(cb, ms), clearTimer: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
   const lookupTimeoutMs = resolveRuntimeConfig({}).waitingLookupTimeoutMs;
 
-  /** A detector whose every lookup never answers on its own, with each lookup's signal kept. */
   function hangingDetector(onChange: (activity: ControllerActivity) => void = () => {}) {
     const signals: AbortSignal[] = [];
     const detector = createWaitingDetector({
@@ -239,6 +236,39 @@ describe('the controller activity\'s lookups and failures', () => {
     } finally {
       errors.mockRestore();
     }
+  });
+
+  it('reads a lookup that throws before it answers as no commands, logs why, and keeps looking', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { detector, published } = harness((_, call) => (call === 0 ? 'throw' : NODE));
+      detector.screen('quiet');
+      await runTo(10_000);
+      detector.dispose();
+      expect({
+        shown: published.map((entry) => entry.activity),
+        logged: errors.mock.calls.map(([message]) => String(message)),
+      }).toEqual({ shown: [WAITING_NODE], logged: [expect.stringContaining('ps not started')] });
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('keeps what it shows when a reader or a listener edits the activity it was given', async () => {
+    const { detector, published } = harness(() => ({ program: 'node', others: 0 }));
+    detector.screen('quiet');
+    await runTo(10_000);
+    const edit = (activity: ControllerActivity): void => {
+      try {
+        (activity.waiting as { program: string } | undefined)!.program = 'edited';
+      } catch {
+        return;
+      }
+    };
+    edit(detector.current());
+    edit(published[published.length - 1].activity);
+    expect({ now: detector.current(), delivered: published.map((entry) => entry.activity) }).toEqual({ now: WAITING_NODE, delivered: [WAITING_NODE] });
+    detector.dispose();
   });
 
   it('keeps looking, and shows what it finds, after a listener throws', async () => {

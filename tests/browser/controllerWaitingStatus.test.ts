@@ -16,7 +16,6 @@ const flowLine = (c: WaitingStatusCase): string => {
   return flow?.availability === 'known' ? `Flow: ${flow.name} — Step: ${flow.step}` : 'Flow loading';
 };
 
-/** The card text after its flow line, where its activity line is; the status row and header come before it. */
 function afterFlowLine(card: HTMLElement | undefined, line: string): string {
   const text = card?.textContent ?? '';
   const at = text.indexOf(line);

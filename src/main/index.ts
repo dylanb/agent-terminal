@@ -330,7 +330,7 @@ async function createWindow(): Promise<void> {
   const windowStatus = createWindowStatus({
     deliver: (update) => {
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...update });
-      pushFlowChanged(); // a screen flip or a Waiting change moves the strip's derived line (§24.2.2 S5, §8.3.1)
+      pushFlowChanged();
     },
   });
 
@@ -1337,7 +1337,7 @@ async function createWindow(): Promise<void> {
   ptyProcess.onExit(({ exitCode }) => {
     shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
-    waitingDetector.dispose(); // its pid may be reused, so a kept-open window must stop reading the table
+    waitingDetector.dispose();
     refreshControllerStatus();
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {

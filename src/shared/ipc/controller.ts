@@ -49,12 +49,10 @@ export const CONTROLLER_CHANNELS = {
   },
 } as const satisfies ChannelSpecs;
 
-/** The work status's activity: the Waiting detector's, or unavailable when the controller cannot read it. */
 export type ControllerWorkActivity = ControllerActivity | { readonly activity: 'unavailable'; readonly waiting?: never };
 
 export type ControllerWorkStatus = ControllerWorkActivity & ControllerWorkDetails;
 
-/** Everything in the work status but its activity. */
 export type ControllerWorkDetails = {
   unavailableReason?: 'message-too-large';
   flow: { availability: 'loading' | 'unavailable' } | {

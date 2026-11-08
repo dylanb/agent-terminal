@@ -27,11 +27,9 @@ afterEach(async () => {
 
 function killGroup(pid: number | undefined): void {
   if (pid === undefined) return;
-  try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+  try { process.kill(-pid, 'SIGKILL'); } catch { }
 }
 
-/** A terminal shell in a real pseudo-terminal whose foreground agent has started `node … --token=abc123` the way the
- *  harnesses start a command: a new session, so a new process group with no controlling terminal. */
 async function agentWithSecretCommand(): Promise<{ shellPid: number; commandPid: number; program: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'waiting-real-'));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));

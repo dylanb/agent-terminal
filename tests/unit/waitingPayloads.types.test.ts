@@ -4,9 +4,6 @@ import type { ControllerActivity } from '../../src/shared/waiting';
 import { isControllerWorkStatus } from '../../src/shared/controllerStatus';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
-// #319: no payload can carry Waiting without its value, or a Waiting value beside an active screen. `pnpm run
-// typecheck` type-checks this file, so each @ts-expect-error below fails the run if its shape compiles.
-
 const NODE = { program: 'node', others: 0 };
 
 describe('the controller work status', () => {

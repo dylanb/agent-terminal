@@ -1,14 +1,4 @@
 #!/usr/bin/env node
-// Captures the process table under one terminal's shell, for the Waiting detection tests
-// (tests/fixtures/process-tables/, read through tests/helpers/processTable.ts). It records program names only:
-// the ps columns below never include a command line, so no argument, token or path reaches a committed fixture.
-//
-//   node scripts/capture-process-table.mjs <fixture-name> --note "<what is running>" [--shell-pid <pid>] [--delay <s>]
-//
-// Without --shell-pid it finds the terminal shell above itself: run it as a command of the hosted agent (a Claude
-// Code or Codex tool call) and the agent is the shell's foreground. --delay waits first, so the capturing command
-// is itself old enough to count. The fixture's `expected` is left for you to write by hand; the loader rejects it
-// until you do.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -48,8 +38,6 @@ function readTable() {
   });
 }
 
-/** The nearest ancestor that is a group leader whose terminal foreground is the group of its child on the path to
- *  this process: the terminal's shell running the agent. */
 function findShell(rows) {
   const byPid = new Map(rows.map((r) => [r.pid, r]));
   let child = byPid.get(process.pid);

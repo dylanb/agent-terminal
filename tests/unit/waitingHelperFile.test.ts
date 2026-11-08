@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { createHelperPrograms } from '../../src/main/waitingHelperFile';
 
-// The operator decision: the file is re-read at most every 15 s.
 const REFRESH_MS = 15_000;
 
 let appHome: string;
@@ -31,10 +30,23 @@ function write(text: string): void {
 
 const reader = () => createHelperPrograms({ appHome, now: () => clock });
 
-/** Whether each line written to the main-process log names the helper file. */
 const warningsNamingFile = (): boolean[] => errors.mock.calls.map((args) => args.map(String).join(' ').includes(file));
 
 describe('the operator\'s helper file', () => {
+  it('keeps the names it lists when a reader edits the list it was given', () => {
+    write('- my-lsp\n');
+    const helpers = reader();
+    const edit = (names: readonly string[]): void => {
+      try {
+        (names as string[]).push('edited');
+      } catch {
+        return;
+      }
+    };
+    edit(helpers.names());
+    expect(helpers.names()).toEqual(['my-lsp']);
+  });
+
   it('lists the program names the file holds', () => {
     write('- my-lsp\n- other-helper\n');
     expect(reader().names()).toEqual(['my-lsp', 'other-helper']);

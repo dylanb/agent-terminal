@@ -11,7 +11,6 @@ describe('the Waiting rule on process tables captured from real Claude Code and 
   });
 });
 
-/** An agent in the shell's foreground, as Claude Code and Codex run in a terminal. */
 function agentTree(platform: TablePlatform) {
   const tree = processTree({ platform });
   const agent = tree.spawn(tree.shell, 'agent', { group: 'own' });
@@ -19,7 +18,6 @@ function agentTree(platform: TablePlatform) {
   return { tree, agent };
 }
 
-/** A harness command: a new process group of its own with no controlling terminal, as both harnesses start one. */
 const COMMAND = { group: 'own', tty: false } as const;
 
 describe.each(PLATFORMS)('the Waiting rule on %s', (platform) => {
@@ -29,9 +27,6 @@ describe.each(PLATFORMS)('the Waiting rule on %s', (platform) => {
       tree.spawn(agent, 'pytest', { ...COMMAND, elapsedS });
       return waitingInTable(tree.rows(), { shellPid: tree.shell.pid, platform, helpers: [] });
     };
-    // macOS can round a sub-second age up to a reading of 1 s, so neither 0 nor 1 qualifies. A real age of 2 s,
-    // which the detector tests' RULE_REPORTS_AFTER_MARK_MS assumes the rule reports, reads 2 (procps truncates) or
-    // 3 (macOS rounds up).
     expect([0, 1, 2, 3].map(reading)).toEqual([null, null, { program: 'pytest', others: 0 }, { program: 'pytest', others: 0 }]);
   });
 

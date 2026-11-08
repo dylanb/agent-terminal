@@ -15,7 +15,6 @@ import { PS_ARGS } from '../../src/main/waitingLookup';
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const COMMAND = 'fake-suite';
-// Long enough that a slow lookup never reads as no commands, so an Idle seen here is a lookup that found none.
 const SLOW_LOOKUP_ENV = { APP_WAITING_LOOKUP_TIMEOUT_MS: String(STATUS_BUDGET_MS * 4) };
 type RecordingWindow = Window & { waitingActivities?: string[] };
 
@@ -153,7 +152,6 @@ test('the status strip and the flow strip read Waiting with the program label wh
       latest: seen.at(-1) ?? null,
     });
     const flipOutcome = { activeCarryingWaiting: [], latest: { agentState: 'quiet', program: COMMAND } };
-    // A flow view is pulled after its change signal, so it may resolve after the screen is quiet again.
     await expect.soft.poll(async () => {
       const { sawActive: _pulledInTime, ...views } = afterFlip((await flowViews()).slice(beforeFlip.views));
       return { monitorUpdates: afterFlip((await updates()).slice(beforeFlip.updates)), flowViews: views };
@@ -266,7 +264,6 @@ test('a lookup slower than the default bound still finds a command when APP_WAIT
   try {
     seedFakeAgentSteps(binDir, {});
     const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
-    // Slower than the default bound, so only a configured bound lets a lookup answer.
     writeFileSync(join(shimDir, 'ps'), `#!/bin/sh\n[ "$*" = ${shellQuote(PS_ARGS.join(' '))} ] && sleep 3\nexec ${shellQuote(realPs)} "$@"\n`);
     chmodSync(join(shimDir, 'ps'), 0o755);
     await h.launch(controllerTarget, h.fixture.nonGit);

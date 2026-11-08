@@ -13,7 +13,6 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-/** Puts `dir` first on the PATH the lookup finds `ps` through, for this test only. */
 function psFrom(dir: string): void {
   const path = process.env.PATH;
   process.env.PATH = `${dir}:${path ?? ''}`;

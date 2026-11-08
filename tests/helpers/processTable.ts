@@ -1,32 +1,20 @@
-// Process tables for the Waiting detection tests, in the one `ps` output format both sources share: the captures
-// `scripts/capture-process-table.mjs` takes from real harness runs (tests/fixtures/process-tables/), and the
-// hand-built tables `processTree` renders. Expected results are written by hand: this file never imports the code
-// it checks (EXPECTED_RESULTS_FIXTURES in eslint.config.mjs).
-
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
-/** The argv every table here was produced with; the capture script records the argv it ran, and a capture taken
- *  with any other is rejected at load. */
 export const PS_ARGS: readonly string[] = ['-A', '-o', 'pid=,ppid=,pgid=,tpgid=,etime=,ucomm='];
 
 export type TablePlatform = 'darwin' | 'linux';
 
-/** The tpgid `ps` prints for a process with no controlling terminal. */
 export const NO_TERMINAL: Readonly<Record<TablePlatform, number>> = { darwin: 0, linux: -1 };
 
-/** The longest program name each OS reports; a longer executable name is cut to it. */
 export const PROGRAM_NAME_LIMIT: Readonly<Record<TablePlatform, number>> = { darwin: 16, linux: 15 };
 
-/** What the terminal should show for a table with only the built-in helper names: no Waiting, or the program label
- *  of the earliest-started command plus the count of the other commands. */
 export type WaitingExpectation = null | { readonly program: string; readonly others: number };
 
 export interface ProcessTableFixture {
   readonly name: string;
   readonly platform: TablePlatform;
   readonly shellPid: number;
-  /** What was running when the table was captured, in the capturer's words. */
   readonly note: string;
   readonly stdout: string;
   readonly expected: WaitingExpectation;
@@ -60,8 +48,6 @@ function parseFixture(file: string): ProcessTableFixture {
   return { name: basename(file, '.json'), platform, shellPid, note, stdout: `${rows.join('\n')}\n`, expected: expectation(file, raw.expected) };
 }
 
-/** Every captured table, each checked for a hand-written expected result. Throws when there are none, so a test
- *  looping over them can never pass by running nothing. */
 export function loadProcessTableFixtures(dir = PROCESS_TABLE_DIR): ProcessTableFixture[] {
   let files: string[];
   try {
@@ -79,18 +65,11 @@ export interface TreeProcess {
 }
 
 export interface SpawnOptions {
-  /** `own` starts a new process group led by this process; the default stays in the parent's group. */
   readonly group?: 'parent' | 'own';
-  /** The whole seconds `ps` reports the process has been running. By default each process is older than every
-   *  process spawned after it, by whole seconds, and minutes old. */
   readonly elapsedS?: number;
-  /** false: the process has no controlling terminal (a new session), so `ps` prints its tpgid as `NO_TERMINAL`
-   *  for the platform. `own`: a pseudo-terminal of its own, whose foreground is its own group. The default
-   *  follows the parent. */
   readonly tty?: boolean | 'own';
 }
 
-/** One process as the Waiting rule reads it. */
 export interface TableRow {
   readonly pid: number;
   readonly ppid: number;
@@ -101,15 +80,10 @@ export interface TableRow {
 }
 
 export interface ProcessTree {
-  /** The terminal's shell: its own group leader, with the terminal's foreground at its prompt until `foreground`. */
   readonly shell: TreeProcess;
-  /** Adds `program` as a child of `parent`; the name is cut to the platform's limit as the OS would. */
   spawn(parent: TreeProcess, program: string, options?: SpawnOptions): TreeProcess;
-  /** Hands the terminal's foreground to `leader`'s process group, as the shell does when it runs a program. */
   foreground(leader: TreeProcess): void;
-  /** The table as `ps ${PS_ARGS}` prints it. */
   stdout(): string;
-  /** The same table as the rule reads it. */
   rows(): TableRow[];
 }
 
@@ -135,8 +109,6 @@ export function formatEtime(seconds: number): string {
   return hours > 0 ? `${two(hours)}:${clock}` : clock;
 }
 
-/** A hand-built process table. Every process gets a distinct pid, and every group a distinct id, so no two
- *  processes a test tells apart can be swapped. */
 export function processTree({ platform, shell = 'zsh' }: { platform: TablePlatform; shell?: string }): ProcessTree {
   const rows: Row[] = [];
   const named = (program: string): string => {

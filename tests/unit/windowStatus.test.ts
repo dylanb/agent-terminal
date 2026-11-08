@@ -86,6 +86,28 @@ describe('the window status (#319 AC6, AC11)', () => {
     ]);
   });
 
+  it('keeps what it shows and delivers when the source, a reader or the receiver edits a Waiting value', () => {
+    const { window, delivered } = harness();
+    const source = { program: 'node', others: 0 };
+    window.activity({ activity: 'waiting', waiting: source });
+    window.screen(quiet(1));
+    const edit = (value: { readonly program: string } | null): void => {
+      try {
+        (value as { program: string }).program = 'edited';
+      } catch {
+        return;
+      }
+    };
+    edit(source);
+    edit(window.shown().waiting);
+    edit(delivered[0].waiting);
+    window.screen(quiet(2));
+    expect({ shown: window.shown(), delivered: delivered.map((update) => update.waiting) }).toEqual({
+      shown: { agentState: 'quiet', waiting: { program: 'node', others: 0 } },
+      delivered: [{ program: 'node', others: 0 }, { program: 'node', others: 0 }],
+    });
+  });
+
   it('delivers nothing before the first screen status', () => {
     const { delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });

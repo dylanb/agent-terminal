@@ -1,10 +1,8 @@
-/** A Waiting terminal's commands: the earliest-started command's program label, and how many others are running. */
 export interface WaitingValue {
   readonly program: string;
   readonly others: number;
 }
 
-/** What the controller reports for the terminal's activity: the screen's, or Waiting while the screen is quiet. */
 export type ControllerActivity =
   | { readonly activity: 'active' | 'quiet'; readonly waiting?: never }
   | { readonly activity: 'waiting'; readonly waiting: WaitingValue };

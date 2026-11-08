@@ -182,7 +182,6 @@ export type AgentState = 'active' | 'quiet';
  *  for input, `busy` is one producing output. */
 export type HostedAgentState = 'idle' | 'busy' | 'absent';
 
-/** The screen activity, and the Waiting value, which only a quiet screen can carry. */
 export type ScreenWaiting =
   | { agentState: 'active'; waiting: null }
   | { agentState: 'quiet'; waiting: WaitingValue | null };

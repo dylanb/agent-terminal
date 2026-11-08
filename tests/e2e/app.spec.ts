@@ -691,7 +691,6 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
 });
 
 test('a kept-open window stops reading the process table once its shell exits (#319)', { tag: '@ownapp' }, async () => {
-  // A `ps` first on PATH that records each Waiting lookup (its argv is the lookup's) and runs the real one.
   const shimDir = mkdtempSync(join(tmpdir(), 'waiting-ps-'));
   const log = join(shimDir, 'lookups');
   const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
@@ -709,7 +708,6 @@ test('a kept-open window stops reading the process table once its shell exits (#
     await typeCommand('exit');
     await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
     const atExit = lookups();
-    // Several lookup gaps long, so a detector still polling after the exit records lookups in it; the window must stay open.
     const closed = await app.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false);
     expect({ closed, lookupsAfterExit: lookups() - atExit }).toEqual({ closed: false, lookupsAfterExit: 0 });
   } finally {

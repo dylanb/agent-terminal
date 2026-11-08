@@ -10,7 +10,6 @@ export const CONTROLLER_PROTOCOL_MINOR = 4;
 /** The first minor whose peers carry `loopMessage` in status and understand `dismiss-loop-message`. */
 export const CONTROLLER_LOOP_MESSAGE_MINOR = 1;
 export const CONTROLLER_IDENTITY_MINOR = 3;
-/** The first minor whose peers carry the `waiting` activity; an older controller is sent `active` instead. */
 export const CONTROLLER_WAITING_MINOR = 4;
 export const CONTROLLER_SUPPORTED_MAJORS: ControllerVersionRange = { min: 2, max: 2 };
 

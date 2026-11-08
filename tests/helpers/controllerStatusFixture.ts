@@ -4,7 +4,6 @@ export type WorkStatus = ControllerWorkStatus;
 
 export type StatusTerminal = ControllerTerminal & { work: WorkStatus };
 
-/** Any of a work status's details, and its activity with the Waiting value that goes with it, or neither. */
 export type WorkStatusOverrides = Partial<ControllerWorkDetails> & (ControllerWorkActivity | { activity?: undefined; waiting?: undefined });
 
 export function workStatus(overrides: WorkStatusOverrides = {}): WorkStatus {
@@ -20,7 +19,6 @@ export function workStatus(overrides: WorkStatusOverrides = {}): WorkStatus {
   return { ...details, ...overrides };
 }
 
-/** `work` with `activity` in place of its own, and no Waiting value. */
 export function withActivity(work: WorkStatus, activity: 'active' | 'quiet' | 'unavailable'): WorkStatus {
   const { waiting: _waiting, ...details } = work;
   return { ...details, activity };
@@ -97,7 +95,6 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 ) as Record<StatusCaseKey, StatusCase>;
 
 export interface WaitingStatusCase extends StatusCase {
-  /** The card's activity line. */
   activity: string;
 }
 
@@ -117,7 +114,6 @@ const WAITING_CASES = {
 
 export type WaitingStatusCaseKey = keyof typeof WAITING_CASES;
 
-/** Waiting cards, written independently of the production classifier like STATUS_CASES. */
 export const WAITING_STATUS_CASES: Readonly<Record<WaitingStatusCaseKey, WaitingStatusCase>> = Object.fromEntries(
   Object.entries(WAITING_CASES).map(([key, [terminal, text, statusClass, summary, activity]]) => [key, { terminal, text, statusClass, summary, activity }]),
 ) as Record<WaitingStatusCaseKey, WaitingStatusCase>;

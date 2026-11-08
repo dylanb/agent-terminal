@@ -415,8 +415,7 @@ const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
 // that step's `work-`, `review-` and `consolidate-` turn keys. On the app WORK prompt it produces the §27
 // completion artifact and/or done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained
 // REVIEW-AND-FIX prompt it writes the round report + the review done-file. It records the boundary commands and
-// bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. A `fake-spawn` line starts a
-// long-running fake command or helper (fakeProcesses.ts). Per-step turn counts live under
+// bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
 export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>): void {
   const scripts = Object.entries(steps);

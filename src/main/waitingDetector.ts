@@ -4,9 +4,7 @@ import { errMsg } from './errno';
 
 export type { ControllerActivity } from '../shared/waiting';
 
-/** The pause between one lookup settling and the next starting. */
 export const WAITING_POLL_GAP_MS = 1000;
-/** How long after the screen goes quiet the controller keeps showing Working before it shows Idle. */
 export const WAITING_GRACE_MS = 3000;
 
 export interface WaitingTimers {
@@ -15,7 +13,6 @@ export interface WaitingTimers {
 }
 
 export interface WaitingDetectorDeps {
-  /** The agent's commands running now, or null when none is; aborting the signal abandons the lookup. */
   commands(signal: AbortSignal): Promise<WaitingValue | null>;
   timers: WaitingTimers;
   lookupTimeoutMs: number;
@@ -23,30 +20,24 @@ export interface WaitingDetectorDeps {
 }
 
 export interface WaitingDetector {
-  /** The screen-based activity changed. */
   screen(state: AgentState): void;
   current(): ControllerActivity;
-  /** Stops every lookup for good; the activity then reads quiet. */
   dispose(): void;
 }
+
+const QUIET: ControllerActivity = Object.freeze({ activity: 'quiet' });
 
 function sameActivity(a: ControllerActivity, b: ControllerActivity): boolean {
   if (a.activity === 'waiting' && b.activity === 'waiting') return sameWaitingValue(a.waiting, b.waiting);
   return a.activity === b.activity;
 }
 
-/**
- * The controller's activity: the screen's while it is active, and while it is quiet, Waiting when the latest
- * settled lookup found a command. For `WAITING_GRACE_MS` after the screen goes quiet it shows Working rather than
- * Idle, so a command that is already running is never preceded by a quiet frame. Lookups run one at a time and
- * only while the screen is quiet; one that fails or misses `lookupTimeoutMs` reads as no commands.
- */
 export function createWaitingDetector(deps: WaitingDetectorDeps): WaitingDetector {
   const { timers } = deps;
   let screen: AgentState | null = null;
   let inGrace = false;
   let latest: WaitingValue | null = null;
-  let shown: ControllerActivity = { activity: 'quiet' };
+  let shown: ControllerActivity = QUIET;
   let generation = 0;
   let disposed = false;
   let lastFailure: string | undefined;
@@ -73,10 +64,10 @@ export function createWaitingDetector(deps: WaitingDetectorDeps): WaitingDetecto
   };
 
   const show = (): void => {
-    const next: ControllerActivity = screen === 'active' ? { activity: 'active' }
+    const next: ControllerActivity = Object.freeze(screen === 'active' ? { activity: 'active' }
       : latest ? { activity: 'waiting', waiting: latest }
       : inGrace ? { activity: 'active' }
-      : { activity: 'quiet' };
+      : { activity: 'quiet' });
     if (sameActivity(shown, next)) return;
     shown = next;
     try {
@@ -102,7 +93,7 @@ export function createWaitingDetector(deps: WaitingDetectorDeps): WaitingDetecto
       cancel(bound);
       if (owner !== generation) return;
       inFlight = undefined;
-      latest = value && { program: value.program, others: value.others };
+      latest = value && Object.freeze({ program: value.program, others: value.others });
       show();
       after(WAITING_POLL_GAP_MS, lookUp);
     };
@@ -147,7 +138,7 @@ export function createWaitingDetector(deps: WaitingDetectorDeps): WaitingDetecto
     dispose() {
       disposed = true;
       stop();
-      shown = { activity: 'quiet' };
+      shown = QUIET;
     },
   };
 }

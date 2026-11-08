@@ -9,7 +9,6 @@ export const ACTIVITY_WORDS: Readonly<Record<ControllerWorkStatus['activity'], s
   active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable', waiting: 'Waiting',
 };
 
-/** The activity the controller timeline records: Waiting counts as Working, whatever its program. */
 export const TIMELINE_ACTIVITY: Readonly<Record<ControllerWorkStatus['activity'], Exclude<ControllerWorkStatus['activity'], 'waiting'>>> = {
   active: 'active', quiet: 'quiet', unavailable: 'unavailable', waiting: 'active',
 };

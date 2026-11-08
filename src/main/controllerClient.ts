@@ -11,7 +11,6 @@ export const CONTROLLER_RETRY_DELAY_MS = 5_000;
 
 type OlderWork = ControllerWorkActivity & Omit<ControllerWorkDetails, 'loopMessage' | 'title' | 'branch'>;
 
-/** An older controller rejects the Waiting activity, so it is shown as Working with no program. */
 function withoutWaiting(work: OlderWork): OlderWork {
   if (work.activity !== 'waiting') return work;
   const { waiting: _waiting, ...details } = work;
