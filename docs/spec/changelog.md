@@ -1,3 +1,13 @@
+## The setup check moves to a setup needed button in the status bar
+
+§22.3.1/§29.1/§29.3/§29.5 (operator decision 2026-11-08): the setup popup opened on its own at startup and on entering a repository, and while it was open the terminal took no input, so an operator whose shell was asking a question at startup could not answer it. Its timing rules (the once-per-session check, the queue of popups, the wait for other dialogs, stepping aside for Run setup loop and returning when an agent went idle) kept failing in new ways. Now:
+
+- the popup never opens on its own. The status bar shows a **setup needed** button, before the work's name, while the latest check of the terminal's directory lists anything, and pressing it opens the popup (§22.3.1, §29.1);
+- the check runs at startup and on every change of the terminal's repository key, inside a repository or not, and closing the popup checks again, so the button goes once nothing is listed (§29.1);
+- Run setup loop closes the popup and starts the flow; the popup does not come back. A refused start shows its reason in the app's error dialog. Once the flow has started, the check no longer counts the entries it fixes for the rest of the app session (§29.5);
+- an agent starting at the prompt never opens the popup; an open popup still offers Run setup loop only while an agent is there (§29.5);
+- UI-STANDARDS.md §5 item 9 now says a condition the app notices opens no dialog on its own, and `Shell.modalIsOpen()`/`Shell.onModalClosed`, which only the self-opening popup used, are removed.
+
 ## Run setup loop waits for an agent, and a loop turn waits for one before failing
 
 §27.2/§29.3/§29.5 (operator decision 2026-11-07): Run setup loop was offered before Claude Code or Codex was running. Its first turn found no agent at the prompt and stopped in `error` at once, and the popup, which blocks the terminal, gave the operator no chance to start one. A fresh shell also read as an agent being present until it had run a command: the shell integration marked only the prompts after the first. Now:

@@ -294,20 +294,15 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the shell's `setView` itself, not on its
    callers, so every caller is covered, and it shares ONE "a dialog is open" predicate with the
    loop-panel's Escape deference — two copies disagree about which roles count.
-9. **A dialog the app raises on its own waits until no other dialog is open.** A dialog raised by the
-   app rather than in answer to a press (the setup-check popup is the reference implementation) opens
-   only while `Shell.modalIsOpen()` is false. Otherwise it waits for `Shell.onModalClosed` and checks
-   again, so it never opens over another dialog. It reads that predicate when it is about to open, not
-   when its work began, because another dialog can open meanwhile. This rule governs only the dialog
-   that waits: a system alert raised while it is open (errorDialog) still shows at once. `modalIsOpen()` is
-   item 8's one predicate, and `onModalClosed` fires when that same predicate turns from true to false,
-   so the two members can never disagree about what counts as a dialog. The organism takes both as
-   injected deps (`blockingDialogOpen`, `onBlockingDialogClosed`) and never queries outside its host
-   (§2.2).
+9. **A condition the app notices opens no dialog on its own.** A modal takes keyboard input from the
+   terminal beneath it, so the operator cannot answer the shell or the agent until it closes. The app
+   shows the condition as a control instead, and the dialog opens only when that control is pressed. The
+   setup check's **setup needed** button in the status bar is the reference implementation (§29.1). This
+   rule does not cover a system alert reporting the failure of something the operator just did
+   (errorDialog), which still shows at once.
 10. **A reason a dialog is rebuilt with is part of its description (WCAG 4.1.3).** Sometimes a dialog
-    renders its card again to report why an action failed or was refused: it comes back after stepping
-    aside, or it returns to an earlier step. The reason is then written into its error line as the card
-    is built, and that line is named in the card's `describedById`, so it is read with the dialog when
+    renders its card again to report why an action failed or was refused, or returns to an earlier
+    step. The reason is then written into its error line as the card is built, and that line is named in the card's `describedById`, so it is read with the dialog when
     focus moves in. A `role="alert"` line filled in the same task that mounts the rebuilt card and moves
     focus into it can be dropped by a screen reader: the §4 Alert pattern's host is permanent, and a
     rebuilt card's is not. A reason added to a card already showing still goes into its alert line. The

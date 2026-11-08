@@ -66,8 +66,8 @@ podman machine start
   exits and mask the result (see `e2e/entrypoint.sh`).
 - `--shm-size=1g` avoids Chromium's `/dev/shm` crashes; `--cap-add=SYS_ADMIN` lets the
   Chromium sandbox run under rootless Podman.
-- The startup setup check raises a blocking popup in any repository that is not set up for agent loops, and
-  every e2e launch's isolated home would trip it. So both launch paths (`tests/e2e/registeredElectron.ts` and
+- The setup check shows a setup needed button in the status bar in any directory that is not set up for agent
+  loops, and every e2e launch's isolated home would trip it. So both launch paths (`tests/e2e/registeredElectron.ts` and
   `tests/e2e/controllerHarness.ts`) start the app with `APP_SETUP_CHECK=off` unless the test's own `env` sets
   `APP_SETUP_CHECK`. A test that exercises the check passes `APP_SETUP_CHECK: 'on'` in its launch `env`, as
   `tests/e2e/setupCheck.spec.ts` does through `createSetupCheckMachine()`. A case that restarts the app
