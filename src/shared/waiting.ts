@@ -19,3 +19,7 @@ export function isWaitingValue(value: unknown): value is WaitingValue {
 export function waitingLabel({ program, others }: WaitingValue): string {
   return others > 0 ? `${program} +${others}` : program;
 }
+
+export function sameWaitingValue(a: WaitingValue | null, b: WaitingValue | null): boolean {
+  return a === b || (a !== null && b !== null && a.program === b.program && a.others === b.others);
+}

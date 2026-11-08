@@ -1,5 +1,5 @@
 import type { AgentState } from '../shared/ipc';
-import type { ControllerActivity, WaitingValue } from '../shared/waiting';
+import { sameWaitingValue, type ControllerActivity, type WaitingValue } from '../shared/waiting';
 import { errMsg } from './errno';
 
 export type { ControllerActivity } from '../shared/waiting';
@@ -31,9 +31,7 @@ export interface WaitingDetector {
 }
 
 function sameActivity(a: ControllerActivity, b: ControllerActivity): boolean {
-  if (a.activity === 'waiting' && b.activity === 'waiting') {
-    return a.waiting.program === b.waiting.program && a.waiting.others === b.waiting.others;
-  }
+  if (a.activity === 'waiting' && b.activity === 'waiting') return sameWaitingValue(a.waiting, b.waiting);
   return a.activity === b.activity;
 }
 

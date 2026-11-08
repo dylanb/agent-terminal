@@ -1,6 +1,6 @@
 import type { AgentState } from '../shared/ipc';
 import type { ShadowStatus } from './shadow';
-import type { WaitingValue } from '../shared/waiting';
+import { sameWaitingValue, type WaitingValue } from '../shared/waiting';
 
 export interface WindowStatusUpdate {
   status: ShadowStatus;
@@ -25,9 +25,6 @@ export function waitingBeside(screen: AgentState, waiting: WaitingValue | null):
   return screen === 'active' ? null : waiting;
 }
 
-const sameWaiting = (a: WaitingValue | null, b: WaitingValue | null): boolean =>
-  a === b || (a !== null && b !== null && a.program === b.program && a.others === b.others);
-
 export function createWindowStatus(deps: WindowStatusDeps): WindowStatus {
   let sent: WindowStatusUpdate | null = null;
   const send = (status: ShadowStatus): void => {
@@ -37,7 +34,7 @@ export function createWindowStatus(deps: WindowStatusDeps): WindowStatus {
   return {
     screen: send,
     refresh() {
-      if (sent && !sameWaiting(sent.waiting, waitingBeside(sent.status.agentState, deps.waiting()))) send(sent.status);
+      if (sent && !sameWaitingValue(sent.waiting, waitingBeside(sent.status.agentState, deps.waiting()))) send(sent.status);
     },
   };
 }
