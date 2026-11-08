@@ -82,6 +82,8 @@ import { resolveRuntimeConfig } from './runtimeConfig';
 import { createWaitingDetector } from './waitingDetector';
 import { readProcessTable } from './waitingLookup';
 import { waitingInTable, waitingPlatform } from './waitingRule';
+import type { WaitingValue } from '../shared/waiting';
+import { createWindowStatus } from './windowStatus';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, findRepoRoot, resolveRepoKey } from './repoKey';
@@ -323,13 +325,29 @@ async function createWindow(): Promise<void> {
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
+  // The window's strips follow the latest lookup, never the controller's grace period.
+  const windowWaiting = (): WaitingValue | null => {
+    const shown = waitingDetector.current();
+    return shown.activity === 'waiting' ? shown.waiting : null;
+  };
+  const windowStatus = createWindowStatus({
+    waiting: windowWaiting,
+    deliver: ({ status, waiting }) => {
+      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status, waiting });
+      pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
+    },
+  });
+
   const platformForWaiting = waitingPlatform(process.platform);
   const waitingDetector = createWaitingDetector({
     commands: async (signal) => platformForWaiting === null ? null
       : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting }),
     timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
     lookupTimeoutMs: config.waitingLookupTimeoutMs,
-    onChange: () => refreshControllerStatus(),
+    onChange: () => {
+      refreshControllerStatus();
+      windowStatus.refresh();
+    },
   });
   waitingDetector.screen(agentActivity);
   win.once('closed', () => waitingDetector.dispose());
@@ -338,9 +356,8 @@ async function createWindow(): Promise<void> {
     quietMs: config.quietMs,
     onStatus: (status) => {
       agentActivity = status.agentState;
+      windowStatus.screen(status);
       waitingDetector.screen(status.agentState);
-      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status, waiting: null });
-      pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
       if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
     },
   });
@@ -1042,7 +1059,7 @@ async function createWindow(): Promise<void> {
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
-    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, null);
+    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, windowWaiting());
     const activity = loopActivityFor(repoKey);
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {

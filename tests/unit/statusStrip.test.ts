@@ -36,6 +36,12 @@ describe('the status strip while Waiting (#319 AC11)', () => {
     expect(agentChip(host)).toMatch(/\b(?:waiting|Waiting|WAITING)\b.*\bMainThread \+1\b/);
   });
 
+  it('shows no quiet-for counter after the label while Waiting, so the label never reads as the command\'s age', () => {
+    const { host, strip } = mount();
+    strip.update(update(WAITING));
+    expect(agentChip(host)).not.toMatch(/\bfor \d+s\b/);
+  });
+
   it('reads Waiting when an update brings it, then shows the quiet display it showed before #319 once Waiting ends', () => {
     const { host, strip } = mount();
     strip.update(update(null));

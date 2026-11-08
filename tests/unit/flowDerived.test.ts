@@ -27,6 +27,11 @@ describe('deriveFlowView (§24.2.2 S5 — derived live status)', () => {
     expect(v.derived).toEqual({ activity: 'quiet', waiting: { program: 'MainThread', others: 1 }, todosDone: 1, todosTotal: 2, ready: false });
   });
 
+  it('carries no Waiting value beside an active screen, whatever it is given', () => {
+    const v = deriveFlowView(inProgress, [], 'active', { program: 'MainThread', others: 0 });
+    expect(v.derived).toMatchObject({ activity: 'active', waiting: null });
+  });
+
   it('is ready when every todo is done', () => {
     const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'done')], 'quiet', null);
     expect(v.derived).toEqual({ activity: 'quiet', waiting: null, todosDone: 2, todosTotal: 2, ready: true });
