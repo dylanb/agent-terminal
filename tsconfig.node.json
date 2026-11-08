@@ -36,6 +36,8 @@
     "src/renderer/src/captureTab.ts",
     "src/renderer/src/controllerPanes.ts",
     "src/renderer/src/controllerCard.ts",
+    "src/renderer/src/controllerCardOrder.ts",
+    "src/renderer/src/sortModeControl.ts",
     "src/renderer/src/controllerCardConditions.ts",
     "src/renderer/src/clampedReason.ts",
     "src/renderer/src/controllerFrame.ts",
