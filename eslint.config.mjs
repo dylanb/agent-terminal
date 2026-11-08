@@ -271,7 +271,7 @@ export default [
     rules: pureCoreRules(SETUP_CHECK_CORE_MESSAGE, ['errno']),
   },
   {
-    files: ['src/main/waiting*.ts'],
+    files: WAITING_IO,
     rules: {
       'no-restricted-imports': ['error', { paths: [...WAITING_NEVER_BLOCKS, ...WAITING_PLATFORM_IMPORTS, ...WAITING_TIMER_MODULES.map((name) => ({ name, message: WAITING_NEVER_BLOCKS_MESSAGE }))] }],
       'no-restricted-properties': ['error', ...WAITING_FAMILY_PROPERTIES],
