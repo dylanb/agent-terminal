@@ -1,5 +1,6 @@
 import type { ChannelSpecs, SessionId } from './session';
 import type { Theme } from './settings';
+import type { ControllerActivity } from '../waiting';
 
 export const CONTROLLER_CHANNELS = {
   subscribe: {
@@ -56,7 +57,11 @@ export const CONTROLLER_CHANNELS = {
   },
 } as const satisfies ChannelSpecs;
 
-export type ControllerWorkStatus = {
+export type ControllerWorkActivity = ControllerActivity | { readonly activity: 'unavailable'; readonly waiting?: never };
+
+export type ControllerWorkStatus = ControllerWorkActivity & ControllerWorkDetails;
+
+export type ControllerWorkDetails = {
   unavailableReason?: 'message-too-large';
   flow: { availability: 'loading' | 'unavailable' } | {
     availability: 'known'; name: string; step: string;
@@ -66,7 +71,6 @@ export type ControllerWorkStatus = {
     availability: 'known'; number: number;
     title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
   };
-  activity: 'active' | 'quiet' | 'unavailable';
   attention: null | { status: string; reasons: string[] };
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */

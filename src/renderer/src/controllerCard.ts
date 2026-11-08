@@ -1,4 +1,4 @@
-import { ACTIVITY_WORDS, cardStatus } from '../../shared/controllerCardClassification';
+import { activityLine, cardStatus } from '../../shared/controllerCardClassification';
 import { workConditions, type WorkCondition } from './controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerClearTarget, ControllerWorkStatus } from '../../shared/ipc';
@@ -173,7 +173,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   function workLines(work: ControllerWorkStatus): HTMLElement[] {
     const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
-    return [ticketLine(work), element('p', 'controller-card-line', flow), element('p', 'controller-card-line', ACTIVITY_WORDS[work.activity])];
+    return [ticketLine(work), element('p', 'controller-card-line', flow), element('p', 'controller-card-line', activityLine(work))];
   }
 
   function conditionBox({ statusClass, title, reasons: texts, loopMessageId }: WorkCondition): HTMLElement {

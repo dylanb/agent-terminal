@@ -86,7 +86,8 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 A separate tray app (see [docs/controller.md](docs/controller.md)):
 
 - One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
-- Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
+- Statuses: Working, Waiting, Idle, Needs a human, Flow error, Completed, Disconnected.
+- **Waiting · `<program>`** when the agent's screen is quiet but a command it started (a test run, a build) is still running. It counts as working, and the card reads Idle within about 5 s of the command ending. The terminal's status strip and flow strip show it too. Helpers the agent keeps running never count; if one does, list its program name in `~/.agent-terminal/helper-programs.yaml` (a YAML list, picked up within about 20 s). See [docs/controller.md](docs/controller.md#cards).
 - Each card's header shows the repository, the terminal's title (its PR's or ticket's title, else the one you gave it), its git branch and its status, so sibling checkouts of one repository are told apart even when collapsed. The branch is re-read every five minutes by default (`APP_BRANCH_REFRESH_MS`).
 - An expanded card shows a timeline of its three newest events, newest first with times: notifications, and status changes such as Working, Idle, a flow step or Disconnected. **Clear history** empties it.
 - Cards sort by **Attention** (Errors, Needs a human, Idle & unassigned, Working, each under a heading with its count, longest-waiting first) or **Recently used** (cards you used in the controller first), picked in the window header. The choice survives a restart.
@@ -389,6 +390,7 @@ Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<rep
 | `APP_STARTUP_EXIT_GRACE_MS` | `1000` | A shell that exits sooner than this is treated as a startup failure, and the window stays open to show the diagnostic. |
 | `APP_SHELL_INTEGRATION` | on | `0` disables the bash OSC 133 hooks used for command capture. |
 | `APP_BRANCH_REFRESH_MS` | `300000` | How often a terminal re-reads its git branch for its controller card. A branch switch can take up to this long to show; a change of repository shows at once. Lower it (e.g. `1000`) to follow switches sooner, at the cost of one `git` process per terminal per interval. |
+| `APP_WAITING_LOOKUP_TIMEOUT_MS` | `1000` | How long one process-table lookup for **Waiting** may take before it is abandoned and read as no commands running. Raise it on a heavily loaded machine if a running command flickers between Waiting and Idle. |
 | `APP_AGENT_WAIT_MS` | `60000` | How long a loop turn waits for an agent (`claude`, `codex`, …) to reach the prompt before it stops with an error. Start the agent within this time after starting a flow. A non-finite or non-positive value falls back to the default. |
 | `APP_AGENT_COMMANDS` | `claude,codex` | Comma-separated program names that count as an agent at the terminal's prompt. Loop turns are typed only into one of these, and the setup popup offers Run setup loop only while one is running. Add another agent, or the name of your own wrapper or alias (`cc`). An empty list falls back to the default. |
 | `APP_AUTO_GATE_DECISION_MS` | `300000` | How long the engine may take to decide an `auto` gate before it hands the gate to a human. A non-finite or non-positive value falls back to the default; values above 2147483647 are clamped to it. |
