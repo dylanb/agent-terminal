@@ -18,6 +18,7 @@ import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { FAKE_SPAWN_ARM, fakeSpawnShell } from './fakeProcesses';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -434,6 +435,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
+    fakeSpawnShell(binDir) +
     'while IFS= read -r line; do\n' +
     logInjected +
     '  [ -z "$line" ] && continue\n' +
@@ -442,6 +444,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     repairArm +
     '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${FAKE_SPAWN_ARM}\n` +
     ordered.flatMap(([id, s]) => stepArms(id, s)).join('\n') +
     '\n  esac\n' +
     'done\n';

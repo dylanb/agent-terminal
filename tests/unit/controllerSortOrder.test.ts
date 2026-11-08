@@ -7,7 +7,7 @@ import {
 } from '../helpers/controllerCards';
 import { heading, orderDirectory as d, orderPeer, orderTerminal as t } from '../helpers/controllerCardOrderFixture';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { STATUS_CASES, SUMMARY_LABELS, directoryConflictFixture, type SummaryLabel } from '../helpers/controllerStatusFixture';
+import { STATUS_CASES, WAITING_STATUS_CASES, SUMMARY_LABELS, directoryConflictFixture, type SummaryLabel } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -66,7 +66,7 @@ describe.each(PLACEMENTS)('the controller panes mounted in %s', (_, parent) => {
 
 describe('Attention order', () => {
   it('puts each status case, and a duplicate-directory card, under the heading of its status group', () => {
-    const cases = Object.values(STATUS_CASES);
+    const cases = [...Object.values(STATUS_CASES), ...Object.values(WAITING_STATUS_CASES)];
     const { members } = directoryConflictFixture();
     const terminals = [...cases.map(c => c.terminal), ...members];
     const { host, dispose } = mountControllerPanes({ terminals });

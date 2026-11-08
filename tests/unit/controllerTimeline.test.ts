@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
 import { createControllerTimelines } from '../../src/main/controllerTimeline';
+import { workStatus, type WorkStatusOverrides } from '../helpers/controllerStatusFixture';
 
 const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => {
   const timelines = createControllerTimelines<string>();
@@ -13,10 +14,10 @@ const changes = async (previous: ControllerWorkStatus | undefined, next: Control
 };
 
 const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
-const base = (overrides: Partial<ControllerWorkStatus> = {}): ControllerWorkStatus => ({
+const base = (overrides: WorkStatusOverrides = {}): ControllerWorkStatus => workStatus({
   flow: running,
   ticket: { availability: 'known', number: 301, title: { availability: 'known', text: 'Cards' } },
-  activity: 'active', attention: null, error: null, ...overrides,
+  ...overrides,
 });
 
 it('Working to Idle is one entry naming Idle', async () => {
@@ -114,4 +115,18 @@ it('two dimensions changing in one report give one entry each', async () => {
   const result = await changes(base({ activity: 'active' }), base({ activity: 'quiet', error: { reason: 'Step exited 1' } }));
   expect(result).toHaveLength(2);
   expect(result?.some(text => text.includes('Idle'))).toBe(true);
+});
+
+const waitingOn = (program: string) => base({ activity: 'waiting', waiting: { program, others: 0 } });
+
+it.each([
+  ['Idle to Waiting adds Working', base({ activity: 'quiet' }), waitingOn('node'), ['Working']],
+  ['Activity unavailable to Waiting adds Working', base({ activity: 'unavailable' }), waitingOn('node'), ['Working']],
+  ['Working to Waiting adds nothing', base({ activity: 'active' }), waitingOn('node'), []],
+  ['Waiting to Working adds nothing', waitingOn('node'), base({ activity: 'active' }), []],
+  ['a change of program label while Waiting adds nothing', waitingOn('node'), waitingOn('pytest'), []],
+  ['Waiting to Idle adds Idle', waitingOn('node'), base({ activity: 'quiet' }), ['Idle']],
+  ['Waiting to Activity unavailable adds Activity unavailable', waitingOn('node'), base({ activity: 'unavailable' }), ['Activity unavailable']],
+] as const)('%s', async (_, previous, next, entries) => {
+  expect(await changes(previous, next)).toEqual(entries);
 });

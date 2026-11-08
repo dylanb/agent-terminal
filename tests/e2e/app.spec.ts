@@ -2,7 +2,7 @@ import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -11,6 +11,8 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
+import { PS_ARGS } from '../../src/main/waitingLookup';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -686,6 +688,31 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
     w.setSize(width + 120, height + 80);
   });
   await expect.poll(() => app.evaluate(({ app: a }) => a.isReady()), { timeout: 8000 }).toBe(true);
+});
+
+test('a kept-open window stops reading the process table once its shell exits (#319)', { tag: '@ownapp' }, async () => {
+  const shimDir = mkdtempSync(join(tmpdir(), 'waiting-ps-'));
+  const log = join(shimDir, 'lookups');
+  const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(shimDir, 'ps'), `#!/bin/sh\n[ "$*" = ${shellQuote(PS_ARGS.join(' '))} ] && echo lookup >> ${shellQuote(log)}\nexec ${shellQuote(realPs)} "$@"\n`);
+  chmodSync(join(shimDir, 'ps'), 0o755);
+  const lookups = (): number => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  try {
+    app = await electron.launch({
+      args: launchArgs(),
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+    });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await expect.poll(lookups, { timeout: 20_000 }).toBeGreaterThan(0);
+    await typeCommand('exit');
+    await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+    const atExit = lookups();
+    const closed = await app.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false);
+    expect({ closed, lookupsAfterExit: lookups() - atExit }).toEqual({ closed: false, lookupsAfterExit: 0 });
+  } finally {
+    rmSync(shimDir, { recursive: true, force: true });
+  }
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----

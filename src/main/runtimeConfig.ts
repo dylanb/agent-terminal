@@ -22,6 +22,7 @@ const DEFAULTS = {
   startupExitGraceMs: 1000,
   shellQuitGraceMs: 2000,
   branchRefreshMs: 300_000,
+  waitingLookupTimeoutMs: 1000,
   agentWaitMs: 60_000,
 } as const;
 
@@ -41,6 +42,7 @@ export interface RuntimeConfig {
   shellQuitGraceMs: number;
   branchRefreshMs: number;
   autoGateDecisionMs: number;
+  waitingLookupTimeoutMs: number;
   agentWaitMs: number;
   /** The program names that count as an agent at the terminal's prompt (§27.2). */
   agentCommands: readonly string[];
@@ -84,6 +86,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     shellQuitGraceMs: timerMs(env.APP_SHELL_QUIT_GRACE_MS, DEFAULTS.shellQuitGraceMs),
     branchRefreshMs: timerMs(env.APP_BRANCH_REFRESH_MS, DEFAULTS.branchRefreshMs),
     autoGateDecisionMs: timerMs(env.APP_AUTO_GATE_DECISION_MS, AUTO_GATE_DECISION_DEFAULT_MS),
+    waitingLookupTimeoutMs: timerMs(env.APP_WAITING_LOOKUP_TIMEOUT_MS, DEFAULTS.waitingLookupTimeoutMs),
     agentWaitMs: timerMs(env.APP_AGENT_WAIT_MS, DEFAULTS.agentWaitMs),
     agentCommands: nameList(env.APP_AGENT_COMMANDS, DEFAULT_AGENT_COMMANDS),
   };

@@ -223,7 +223,7 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
 
 const IO_BUILTINS = ['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]);
 /** A decision core in src/main: no I/O built-in, no `process`/`fetch`/`WebSocket` global, no `require` or dynamic
@@ -238,6 +238,36 @@ function pureCoreRules(message, allowedSiblings) {
 }
 const TEST_PROOF_CORE_MESSAGE = 'The test-proof core decides from its seam values only: it reaches processes, the filesystem, the network, git and gh through its injected ports (CLAUDE.md § Test-driven development, injection seams).';
 const SETUP_CHECK_CORE_MESSAGE = 'The setup-check core decides from its seam values only: git, the installer, the capabilities reader, the dismissal store and the environment reach it through createSetupCheck\'s deps, built at the composition root (CLAUDE.md § Test-driven development, injection seams).';
+
+const WAITING_CORE_MESSAGE = 'The Waiting detection core decides from its seam values only: the process table, the helper names, the clock, its timers and the platform reach it as parameters or injected deps, built at the composition root; src/main/waitingLookup.ts and src/main/waitingHelperFile.ts are its I/O.';
+const WAITING_IO = ['src/main/waitingLookup.ts', 'src/main/waitingHelperFile.ts'];
+const WAITING_NEVER_BLOCKS_MESSAGE = 'Waiting detection never blocks the main process: run ps through the asynchronous child_process API, abandoned through an injected bound (an AbortSignal the detector\'s injected timer aborts, passed as execFile\'s signal), never execFile\'s real-time timeout option.';
+const WAITING_NEVER_BLOCKS = ['child_process', 'node:child_process'].map((name) => ({ name, importNames: ['default', 'execFileSync', 'execSync', 'spawnSync'], message: WAITING_NEVER_BLOCKS_MESSAGE }));
+const WAITING_PLATFORM_MESSAGE = 'Waiting detection takes the platform as a parameter; only the composition root src/main/index.ts reads it (CODE-STANDARDS.md § Platform branches).';
+const WAITING_PLATFORM_READS = CONTROLLER_PLATFORM_READS.map((read) => ({ ...read, message: WAITING_PLATFORM_MESSAGE }));
+const WAITING_PLATFORM_IMPORTS = ['os', 'node:os', 'process', 'node:process'].map((name) => ({ name, importNames: ['platform'], message: WAITING_PLATFORM_MESSAGE }));
+const WAITING_TIMERS = ['setTimeout', 'setInterval', 'setImmediate', 'clearTimeout', 'clearInterval', 'clearImmediate'];
+const WAITING_TIMER_MODULES = ['timers', 'timers/promises', 'perf_hooks'].flatMap((name) => [name, `node:${name}`]);
+const WAITING_NO_REAL_TIME_BOUND = [
+  ...['ImportExpression', "CallExpression[callee.name='require']"],
+  "ObjectExpression > Property:matches([key.name='timeout'], [key.value='timeout'])",
+].map((selector) => ({ selector, message: WAITING_NEVER_BLOCKS_MESSAGE }));
+const WAITING_FAMILY_PROPERTIES = [
+  ...WAITING_PLATFORM_READS,
+  ...WAITING_TIMERS.map((property) => ({ object: 'globalThis', property, message: WAITING_NEVER_BLOCKS_MESSAGE })),
+  { object: 'AbortSignal', property: 'timeout', message: WAITING_NEVER_BLOCKS_MESSAGE },
+];
+function waitingCoreRules() {
+  const rules = pureCoreRules(WAITING_CORE_MESSAGE, ['errno', 'waiting*']);
+  const [, imports] = rules['@typescript-eslint/no-restricted-imports'];
+  imports.patterns[0].group.push(...WAITING_IO.map((file) => `./${file.slice('src/main/'.length, -'.ts'.length)}`));
+  const clock = [...WAITING_TIMERS, 'Date', 'performance'];
+  rules['no-restricted-globals'].push(...clock.map((name) => ({ name, message: WAITING_CORE_MESSAGE })));
+  rules['no-restricted-properties'] = ['error', ...WAITING_FAMILY_PROPERTIES, ...clock.map((property) => ({ object: 'globalThis', property, message: WAITING_CORE_MESSAGE }))];
+  const [, paths] = rules['no-restricted-imports'];
+  paths.paths.push(...WAITING_TIMER_MODULES.map((name) => ({ name, message: WAITING_CORE_MESSAGE })));
+  return rules;
+}
 
 const SETUP_DIALOG_DEPS_MESSAGE = 'The setup dialog reaches the app only through its injected deps and its own host (host.ownerDocument), never window or document (UI-STANDARDS.md §2.2).';
 const SETUP_DIALOG_SCREEN_MESSAGE = 'Read the setup dialog by role and name through tests/helpers/setupCheckScreen.ts (UI-STANDARDS.md §3.4 rule 1).';
@@ -329,6 +359,21 @@ export default [
     files: ['src/main/setupCheck.ts'],
     plugins: { '@typescript-eslint': tseslint.plugin },
     rules: pureCoreRules(SETUP_CHECK_CORE_MESSAGE, ['errno']),
+  },
+  {
+    files: WAITING_IO,
+    rules: {
+      'no-restricted-imports': ['error', { paths: [...WAITING_NEVER_BLOCKS, ...WAITING_PLATFORM_IMPORTS, ...WAITING_TIMER_MODULES.map((name) => ({ name, message: WAITING_NEVER_BLOCKS_MESSAGE }))] }],
+      'no-restricted-properties': ['error', ...WAITING_FAMILY_PROPERTIES],
+      'no-restricted-globals': ['error', ...WAITING_TIMERS.map((name) => ({ name, message: WAITING_NEVER_BLOCKS_MESSAGE }))],
+      'no-restricted-syntax': ['error', ...WAITING_NO_REAL_TIME_BOUND],
+    },
+  },
+  {
+    files: ['src/main/waiting*.ts'],
+    ignores: WAITING_IO,
+    plugins: { '@typescript-eslint': tseslint.plugin },
+    rules: waitingCoreRules(),
   },
   {
     files: ['src/renderer/src/setupCheckDialog.ts'],
