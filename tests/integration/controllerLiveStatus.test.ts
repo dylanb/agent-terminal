@@ -9,7 +9,7 @@ import { startControllerTransport } from '../../src/main/controllerTransport';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot } from '../../src/shared/ipc';
 import { installControllerIpc } from '../../src/main/controllerIpc';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
-import { workStatus, type WorkStatus } from '../helpers/controllerStatusFixture';
+import { withActivity, workStatus, type WorkStatus } from '../helpers/controllerStatusFixture';
 import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 
 vi.mock('electron', () => ({ ipcMain: {
@@ -106,7 +106,7 @@ it('isolates registry snapshots and subscribers from each other through nested s
   const stopObserver = server.subscribeTerminals(items => { received = items; });
   try {
     expect(received[0].work).toEqual(work);
-    const updated = workStatus({ ...work, activity: 'quiet' });
+    const updated = withActivity(work, 'quiet');
     await terminal.sendStatus(updated);
     await expect.poll(() => received[0]?.work).toEqual(updated);
   } finally { stopMutator(); stopObserver(); }

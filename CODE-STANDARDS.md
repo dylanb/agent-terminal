@@ -411,6 +411,23 @@ The RED test provokes the failure at each boundary: a rejection, a throw before 
 throw inside the handler's own work, such as a subscriber. It asserts the fallback and the recorded reason.
 Vitest fails a run on an unhandled rejection, so an escape fails the test even where no assertion is reached.
 
+## Background polling has a bounded lifecycle
+
+A background poller MUST bound each lookup and request cancellation when its bound expires, when polling
+is no longer needed, or when the poller is disposed. Cancellation is a request, not proof that the
+dependency stopped: a lookup that never settles must not prevent recovery, and a late result must not
+publish obsolete state or restart stopped polling. Clear pending timers when stopping and make results
+from abandoned attempts inert, including after polling starts again.
+
+Schedule the next lookup only after the previous attempt settles or is abandoned, with the polling gap
+measured from that point. A repeating timer that starts more lookups while earlier ones remain pending
+can accumulate work when the dependency slows down. `src/main/waitingDetector.ts` is the live example;
+the mechanism used to identify an attempt is not part of the contract.
+
+RED tests supply a dependency that never settles and one that answers after cancellation. Assert the
+observable fallback and recovery after timeout, and that late answers cannot replace current state or
+restart polling after shutdown. Cover stopping and restarting while an older attempt is still pending.
+
 ## Never silently swallow an error whose consequence is a state the user cannot recover from
 
 The opposite of the best-effort rule above: there, a failure in an *inessential* effect must be contained;

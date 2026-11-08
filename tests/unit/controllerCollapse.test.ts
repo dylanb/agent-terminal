@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { bodyControlIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusItem } from '../helpers/controllerHistory';
-import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
+import { STATUS_CASES, statusTerminal, withActivity, type StatusCase } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -201,7 +201,7 @@ describe('focus on a card header across a live update', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, working] });
     try {
       header(host, working.launchDirectory)?.focus();
-      service.publish([peer, { ...working, work: { ...working.work, activity: 'quiet' } }]);
+      service.publish([peer, { ...working, work: withActivity(working.work, 'quiet') }]);
       const target = header(host, working.launchDirectory);
       expect(target !== undefined && document.activeElement === target).toBe(true);
     } finally { dispose(); }

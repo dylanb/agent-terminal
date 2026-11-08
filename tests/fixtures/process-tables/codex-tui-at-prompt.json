@@ -1,0 +1,17 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 30193,
+  "note": "Codex 0.167.0 (interactive TUI, started through its pnpm launcher, in a pty shell on macOS) back at its prompt about 10 s after its sleep 15 tool command finished; captured from outside the shell's tree",
+  "rows": [
+    "30193 30190 30193 30251       02:19 zsh             ",
+    "30251 30193 30251 30251       02:17 codex           "
+  ],
+  "expected": {
+    "waiting": null
+  }
+}

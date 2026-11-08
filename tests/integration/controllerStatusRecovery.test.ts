@@ -52,7 +52,7 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
   let release!: (value: string | null) => void;
   const pending = new Promise<string | null>(resolve => { release = resolve; });
   const source = createControllerStatus({
-    current: () => ({ repoKey: repo, flowName: repo, activity: 'quiet', loopMessage: null, view: {
+    current: () => ({ repoKey: repo, flowName: repo, activity: { activity: 'quiet' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: repo === '/old' ? 219 : 220 },
     } }),
     refTitle: async directory => directory === '/old' ? pending : 'CURRENT_TITLE',
