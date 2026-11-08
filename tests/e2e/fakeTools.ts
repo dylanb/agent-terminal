@@ -21,6 +21,14 @@ import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
+/** A Claude Code config dir of a test's own, holding the example loops: an install action writes into it, so a test
+ *  that runs one never shares `exampleConfigDir` with the other tests of its worker. */
+export function seedIsolatedClaudeConfig(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, dir, { recursive: true });
+  return dir;
+}
+
 // The bound on every shim hold, well below the 60 s test ceiling, so a hold nobody releases fails its test on
 // that test's own assertion. Logs `held <pid> <argv>` first, then `released <pid>`, or `expired <pid>` and
 // fails the call.

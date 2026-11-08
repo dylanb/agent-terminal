@@ -5,30 +5,12 @@ import { createShadowModel } from '../../src/main/shadow';
 import { createCommandTracker, type CommandTracker } from '../../src/main/commandTracker';
 import { createCwdTracker } from '../../src/main/cwdTracker';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
+import { ptyCommand } from '../helpers/ptyCommand';
 
 const SCRIPT = path.resolve(__dirname, '../../src/main/assets/shell-integration.bash');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const has = (tool: string): boolean => {
-  try {
-    execFileSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-// The PTY allocator differs by platform: util-linux `script -qec '<cmd>' <file>` creates the
-// child's terminal from a piped stdin, but BSD/macOS `script` accepts neither `-c` nor a non-tty
-// stdin, so on darwin Python's `pty.spawn` allocates the terminal and copies our piped commands in.
-const PTY_DRIVER: { file: string; args: string[] } | null =
-  process.platform === 'darwin'
-    ? has('python3')
-      ? { file: 'python3', args: ['-c', 'import pty; pty.spawn(["bash", "--norc", "-i"])'] }
-      : null
-    : has('script')
-      ? { file: 'script', args: ['-qec', 'bash --norc -i', '/dev/null'] }
-      : null;
+const PTY_DRIVER = ptyCommand(['bash', '--norc', '-i']);
 
 // OSC 133;C (command-start) is emitted via PS0, which exists only in bash >= 4.4 (macOS ships 3.2).
 function bashSupportsPS0(): boolean {

@@ -5,6 +5,7 @@ import { dump, load } from 'js-yaml';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { CLAUDE_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { userConfigAgentsDir } from '../../src/main/userConfig';
+import { SHARED_CONFIG_MARKER } from './fakeClaude';
 
 /** The phase loops a fixture flow binds by name and drives with a round-answering fake agent (§27.5). */
 export const ROUND_PHASE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'] as const;
@@ -57,5 +58,6 @@ export function seedSharedExampleConfig(): string {
   if (agents === null) throw new Error(`no agents directory under ${root}`);
   mkdirSync(agents, { recursive: true });
   for (const agent of planReviewerAgents(bundle, CLAUDE_REVIEWER_AGENT)) writeFileSync(join(agents, agent.rel), agent.bytes());
+  writeFileSync(join(root, SHARED_CONFIG_MARKER), root);
   return root;
 }
