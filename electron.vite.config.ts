@@ -5,6 +5,7 @@ import { APP_ICONS } from './src/main/appIcon';
 import { copyDevIcon } from './src/main/appIconBuild';
 import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2 } from './src/main/exampleAssetsBuild';
 import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
+import { MCP_ENTRY } from './src/main/mcpLauncher';
 
 // After the main bundle is written, copy the app icons and the example trees next to it so the
 // unpackaged runtime resolvers (app.getAppPath()/build/*.png and .../example/{flows,loops-v2,commands})
@@ -39,6 +40,7 @@ export default defineConfig({
           controller: path.resolve(__dirname, 'src/main/controller.ts'),
           // §27.12 — the agent-runnable format checker, resolved at runtime by resolveArtifactCheckScript.
           [ARTIFACT_CHECK_ENTRY]: path.resolve(__dirname, 'src/main/artifactCheckMain.ts'),
+          [MCP_ENTRY]: path.resolve(__dirname, 'src/main/mcpMain.ts'),
         },
       },
     },

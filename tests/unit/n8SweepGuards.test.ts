@@ -83,6 +83,7 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
     'src/main/appIconBuild.ts', // build-time
     'src/main/exampleAssetsBuild.ts', // build-time
     'src/main/artifactCheckMain.ts', // second main-bundle input (electron.vite.config.ts), run by the agent
+    'src/main/mcpMain.ts', // third main-bundle input (electron.vite.config.ts), run by Claude Code as the MCP server and its hooks
     'src/main/testProofMain.ts', // standalone dev-tooling bundle built outside electron.vite.config.ts, run by `pnpm run test:proof`
   ];
 

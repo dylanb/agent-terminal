@@ -1,4 +1,5 @@
 import type { ConfirmDialog } from './confirmDialog';
+import { terminateTodoCount } from '../../shared/terminateCount';
 
 export interface TerminateConfirmDeps {
   todoList: (repoKey: string) => Promise<readonly unknown[]>;
@@ -57,7 +58,7 @@ export function createTerminateConfirm(
       .todoList(repoKey)
       .then((todos) => {
         if (requestGeneration !== generation) return;
-        const n = todos.length; // deterministic activation-time count (#26 AC3)
+        const n = terminateTodoCount(todos); // deterministic activation-time count (#26 AC3)
         dialogOpen = true;
         deps.dialog.render({
           title: 'Terminate flow',

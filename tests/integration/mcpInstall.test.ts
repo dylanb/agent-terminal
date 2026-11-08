@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { installMcpIntegration, removeMcpIntegration, type McpIntegrationTarget } from '../../src/main/mcpInstall';
 import { readFakeClaudeLog, runFakeClaude, seedFakeClaude } from '../helpers/fakeClaudeHarness';
 import { SHARED_CONFIG_MARKER } from '../helpers/fakeClaude';
@@ -95,6 +95,30 @@ describe('installing the Claude Code integration', () => {
     });
   });
 
+  it('writes through a settings file that is a symbolic link, keeping the link, on install and on remove', async () => {
+    const m = machine();
+    seedUserConfig(m);
+    const real = join(m.root, '..', 'dotfiles-settings.json');
+    renameSync(m.settings, real);
+    symlinkSync(real, m.settings);
+    await installMcpIntegration(m.target);
+    const installed = { link: lstatSync(m.settings).isSymbolicLink(), hookEvents: eventsRunning(real, LAUNCH.command) };
+    await removeMcpIntegration(m.target);
+    expect({ installed, removed: { link: lstatSync(m.settings).isSymbolicLink(), settings: readJson(real) } }).toEqual({
+      installed: { link: true, hookEvents: GUARD_HOOK_EVENTS },
+      removed: { link: true, settings: USER_SETTINGS },
+    });
+  });
+
+  it('installs into a configuration directory that is a symbolic link and holds no settings yet', async () => {
+    const m = machine();
+    const real = join(m.root, '..', 'dotfiles-claude');
+    mkdirSync(real);
+    symlinkSync(real, m.root);
+    const result = await installMcpIntegration(m.target);
+    expect({ result, link: lstatSync(m.root).isSymbolicLink(), hookEvents: eventsRunning(join(real, 'settings.json'), LAUNCH.command) }).toEqual({ result: { ok: true }, link: true, hookEvents: GUARD_HOOK_EVENTS });
+  });
+
   it('keeps every other configuration value, and installing again changes nothing', async () => {
     const m = machine();
     seedUserConfig(m);
@@ -128,6 +152,30 @@ describe('installing the Claude Code integration', () => {
     const before = files(m);
     const result = await installMcpIntegration(m.target);
     expect({ result, files: files(m) }).toEqual({ result: { ok: false, error: expect.stringContaining(m.settings) }, files: before });
+  });
+
+  it('fails naming the settings file when a hook group is not in the form Claude Code reads, and writes nothing', async () => {
+    const m = machine();
+    seedUserConfig(m);
+    writeFileSync(m.settings, JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: 'x' }] } }));
+    const before = files(m);
+    const result = await installMcpIntegration(m.target);
+    expect({ result, files: files(m), viaClaudeCode: claudeMcpRuns(m) }).toEqual({ result: { ok: false, error: expect.stringContaining(m.settings) }, files: before, viaClaudeCode: [] });
+  });
+
+  it('never runs a claude named without a path, even one the search path would find, and writes nothing', async () => {
+    const m = machine();
+    const result = await installMcpIntegration({ ...m.target, claude: 'claude', env: { ...m.target.env, PATH: `${dirname(m.log)}:${process.env.PATH}` } });
+    expect({ result, configCreated: existsSync(m.root), ran: readFakeClaudeLog(m.log).length }).toEqual({ result: { ok: false, error: expect.stringContaining('Claude Code was not found') }, configCreated: false, ran: 0 });
+  });
+
+  it('fails naming the settings file when it holds JSON that is not an object, and writes nothing', async () => {
+    const m = machine();
+    seedUserConfig(m);
+    writeFileSync(m.settings, '[]');
+    const before = files(m);
+    const result = await installMcpIntegration(m.target);
+    expect({ result, files: files(m), viaClaudeCode: claudeMcpRuns(m) }).toEqual({ result: { ok: false, error: expect.stringContaining(m.settings) }, files: before, viaClaudeCode: [] });
   });
 
   it('fails naming the settings file when it cannot be read, and writes nothing', async () => {
@@ -167,6 +215,30 @@ describe('installing the Claude Code integration', () => {
       removed: { ok: true },
       afterRemove: { server: undefined, hookEvents: [] },
     });
+  });
+});
+
+describe("a server named agent-terminal that is not the integration's own", () => {
+  const theirs = { type: 'stdio', command: '/opt/someone-else/agent-terminal', args: [] };
+  const seedTheirs = (m: Machine): void => {
+    seedUserConfig(m);
+    writeFileSync(m.state, JSON.stringify({ ...USER_STATE, mcpServers: { ...USER_STATE.mcpServers, 'agent-terminal': theirs } }, null, 2));
+  };
+
+  it('makes install fail naming it, writing nothing', async () => {
+    const m = machine();
+    seedTheirs(m);
+    const before = files(m);
+    const result = await installMcpIntegration(m.target);
+    expect({ result, files: files(m), viaClaudeCode: claudeMcpRuns(m) }).toEqual({ result: { ok: false, error: expect.stringContaining(theirs.command) }, files: before, viaClaudeCode: [] });
+  });
+
+  it('is left alone by remove', async () => {
+    const m = machine();
+    seedTheirs(m);
+    const state = bytes(m.state);
+    const result = await removeMcpIntegration(m.target);
+    expect({ result, state: bytes(m.state), viaClaudeCode: claudeMcpRuns(m) }).toEqual({ result: { ok: true }, state, viaClaudeCode: [] });
   });
 });
 
@@ -210,11 +282,143 @@ describe('removing the Claude Code integration', () => {
     expect({ result, state: bytes(m.state), viaClaudeCode: claudeMcpRuns(m).slice(1) }).toEqual({ result: { ok: false, error: expect.stringContaining(m.settings) }, state, viaClaudeCode: [] });
   });
 
+  it("fails with Claude Code's own reason when it refuses to remove the server, keeping the hooks and the server", async () => {
+    const m = machine();
+    await seedInstalled(m);
+    writeFileSync(join(m.root, SHARED_CONFIG_MARKER), m.root);
+    const before = files(m);
+    const result = await removeMcpIntegration(m.target);
+    expect({ result, files: files(m), registered: servers(m.state)['agent-terminal'] !== undefined }).toEqual({
+      result: { ok: false, error: expect.stringContaining("refusing to remove in the worker's shared Claude Code config") },
+      files: before,
+      registered: true,
+    });
+  });
+
   it('fails saying Claude Code was not found when there is no claude to run, and writes nothing', async () => {
     const m = machine();
     await seedInstalled(m);
     const before = files(m);
     const result = await removeMcpIntegration({ ...m.target, claude: join(m.root, '..', 'nowhere', 'claude') });
     expect({ result, files: files(m) }).toEqual({ result: { ok: false, error: expect.stringContaining('Claude Code') }, files: before });
+  });
+});
+
+describe('a change that stops after Claude Code has changed its server entry', () => {
+  /** A `claude` that does what Claude Code does, then leaves a settings file nobody can read in place of the real one. */
+  function claudeThenBreakSettings(m: Machine, subcommand: string): string {
+    const wrapper = join(dirname(m.log), 'claude-then-break');
+    writeFileSync(wrapper, `#!/bin/sh\n'${m.target.claude}' "$@"\ns=$?\nif [ "$2" = '${subcommand}' ]; then rm -f '${m.settings}'; mkdir '${m.settings}'; fi\nexit $s\n`, { mode: 0o755 });
+    return wrapper;
+  }
+
+  it('install says the server is registered but its hooks are not, and that installing again finishes it', async () => {
+    const m = machine();
+    seedUserConfig(m);
+    const result = await installMcpIntegration({ ...m.target, claude: claudeThenBreakSettings(m, 'add-json') });
+    expect({ result, registered: servers(m.state)['agent-terminal'] !== undefined }).toEqual({
+      result: { ok: false, error: expect.stringMatching(/server was registered.*hooks were not written.*Install again/s) },
+      registered: true,
+    });
+  });
+
+  it('remove says the server is removed but its hooks are not, and that removing again finishes it', async () => {
+    const m = machine();
+    await seedInstalled(m);
+    const result = await removeMcpIntegration({ ...m.target, claude: claudeThenBreakSettings(m, 'remove') });
+    expect({ result, registered: servers(m.state)['agent-terminal'] !== undefined }).toEqual({
+      result: { ok: false, error: expect.stringMatching(/server was removed.*hooks were not removed.*Remove again/s) },
+      registered: false,
+    });
+  });
+});
+
+describe('running the same action again after it stopped part way', () => {
+  const breakSettingsAfter = (m: Machine, subcommand: string): string => {
+    const wrapper = join(dirname(m.log), 'claude-then-break-once');
+    writeFileSync(wrapper, `#!/bin/sh\n'${m.target.claude}' "$@"\ns=$?\nif [ "$2" = '${subcommand}' ]; then rm -f '${m.settings}'; mkdir '${m.settings}'; fi\nexit $s\n`, { mode: 0o755 });
+    return wrapper;
+  };
+  const restoreSettings = (m: Machine, settings: unknown): void => {
+    rmSync(m.settings, { recursive: true, force: true });
+    writeFileSync(m.settings, JSON.stringify(settings, null, 2));
+  };
+
+  it('finishes an install: the hooks are written, and the server is not registered a second time', async () => {
+    const m = machine();
+    seedUserConfig(m);
+    const first = await installMcpIntegration({ ...m.target, claude: breakSettingsAfter(m, 'add-json') });
+    restoreSettings(m, USER_SETTINGS);
+    const again = await installMcpIntegration(m.target);
+    expect({ first: first.ok, again, hookEvents: eventsRunning(m.settings, LAUNCH.command), registrations: claudeMcpRuns(m).filter((r) => r.startsWith('add-json')).length }).toEqual({
+      first: false,
+      again: { ok: true },
+      hookEvents: GUARD_HOOK_EVENTS,
+      registrations: 1,
+    });
+  });
+
+  it("finishes a remove: the integration's hooks are taken out, leaving the operator's settings", async () => {
+    const m = machine();
+    await seedInstalled(m);
+    const installedSettings = readJson(m.settings);
+    const first = await removeMcpIntegration({ ...m.target, claude: breakSettingsAfter(m, 'remove') });
+    restoreSettings(m, installedSettings);
+    const again = await removeMcpIntegration(m.target);
+    expect({ first: first.ok, again, settings: readJson(m.settings), registered: servers(m.state)['agent-terminal'] !== undefined }).toEqual({
+      first: false,
+      again: { ok: true },
+      settings: USER_SETTINGS,
+      registered: false,
+    });
+  });
+});
+
+describe("Claude Code's state file that cannot be read", () => {
+  const breakings: [string, (m: Machine) => void][] = [
+    ['holds invalid JSON', (m) => writeFileSync(m.state, '{ "mcpServers": ')],
+    ['is a directory', (m) => { rmSync(m.state); mkdirSync(m.state); }],
+  ];
+  for (const [how, breakState] of breakings) {
+    it(`fails install and remove naming it when it ${how}, writing nothing and running no claude mcp change`, async () => {
+      const m = machine();
+      await seedInstalled(m);
+      breakState(m);
+      const before = bytes(m.settings);
+      const runsBefore = claudeMcpRuns(m).length;
+      const installed = await installMcpIntegration(m.target);
+      const removed = await removeMcpIntegration(m.target);
+      expect({ installed, removed, settings: bytes(m.settings), newRuns: claudeMcpRuns(m).length - runsBefore }).toEqual({
+        installed: { ok: false, error: expect.stringContaining(m.state) },
+        removed: { ok: false, error: expect.stringContaining(m.state) },
+        settings: before,
+        newRuns: 0,
+      });
+    });
+  }
+});
+
+describe("the settings file's permissions", () => {
+  it('are kept when install and remove rewrite it, and are owner-only when install creates it', async () => {
+    const kept = machine();
+    seedUserConfig(kept);
+    chmodSync(kept.settings, 0o640);
+    await installMcpIntegration(kept.target);
+    const afterInstall = statSync(kept.settings).mode & 0o777;
+    await removeMcpIntegration(kept.target);
+    const created = machine();
+    await installMcpIntegration(created.target);
+    expect({ afterInstall, afterRemove: statSync(kept.settings).mode & 0o777, created: statSync(created.settings).mode & 0o777 }).toEqual({ afterInstall: 0o640, afterRemove: 0o640, created: 0o600 });
+  });
+});
+
+describe('removing the integration from a hook group it shares with an operator hook', () => {
+  it("takes out only its own hook, leaving the operator's in that group", async () => {
+    const m = machine();
+    await seedInstalled(m);
+    const shared = { ...USER_SETTINGS, hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'echo mine' }, { type: 'command', command: `'${LAUNCH.command}' ${LAUNCH.args.join(' ')} --hook` }] }] } };
+    writeFileSync(m.settings, JSON.stringify(shared, null, 2));
+    const result = await removeMcpIntegration(m.target);
+    expect({ result, settings: readJson(m.settings) }).toEqual({ result: { ok: true }, settings: USER_SETTINGS });
   });
 });

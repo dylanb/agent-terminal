@@ -3,6 +3,7 @@ import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -131,6 +132,17 @@ import {
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
 import { createLoopMessages } from './loopMessages';
+import { changeClaudeCodeIntegration } from './mcpIntegration';
+import type { ClaudeCodeIntegrationResult } from '../shared/ipc';
+import { refreshMcpLauncher, resolveMcpScript } from './mcpLauncher';
+import { mcpBuildId } from './mcpBuildId';
+import { openWindowBridge, type WindowBridge } from './mcpWindowBridge';
+import { windowSessionEnv } from './mcpSessionEnv';
+import { catalogView, readLatestRoundReport, readWindowState } from './mcpWindowState';
+import type { WindowRequest } from '../shared/mcpBridge';
+import { isMcpToolName, type McpToolName } from '../shared/mcp';
+import { isValidClaudeCodeIntegration } from './ipcValidation';
+import { errMsg } from './errno';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
@@ -142,7 +154,7 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, createRoundReportReader, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
@@ -230,6 +242,12 @@ async function createWindow(): Promise<void> {
         process.cwd(),
       ),
     })));
+  const mcpInvocation = { execPath: process.execPath, appArgs: [resolveMcpScript(__dirname)] };
+  const claudeCodeContext = { appHome: flowGlobalDir, invocation: mcpInvocation, env: process.env, platform: process.platform };
+  ipcMain.handle(CH.claudeCodeInstall, (_e, m): Promise<ClaudeCodeIntegrationResult> =>
+    isValidClaudeCodeIntegration(m) ? changeClaudeCodeIntegration('install', claudeCodeContext) : Promise.resolve({ ok: false, error: 'invalid install request' }));
+  ipcMain.handle(CH.claudeCodeRemove, (_e, m): Promise<ClaudeCodeIntegrationResult> =>
+    isValidClaudeCodeIntegration(m) ? changeClaudeCodeIntegration('remove', claudeCodeContext) : Promise.resolve({ ok: false, error: 'invalid remove request' }));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
   let finishRegistration!: (accepted: boolean) => void;
@@ -260,6 +278,8 @@ async function createWindow(): Promise<void> {
     finishRegistration(false);
     ipcMain.removeHandler(CH.startupReady);
     ipcMain.removeHandler(CH.cliInstall);
+    ipcMain.removeHandler(CH.claudeCodeInstall);
+    ipcMain.removeHandler(CH.claudeCodeRemove);
   });
   const target = resolveRendererTarget({
     isPackaged: app.isPackaged,
@@ -268,12 +288,32 @@ async function createWindow(): Promise<void> {
   if (target.kind === 'url') await win.loadURL(target.url);
   else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
   if (!await registration || win.isDestroyed()) return;
+  // Launch setup for the Claude Code tools is best-effort: on any failure the terminal still spawns, its sessions
+  // just get no tools.
+  await refreshMcpLauncher(flowGlobalDir, mcpInvocation).catch((error: unknown) =>
+    console.error(`The Claude Code tools' launcher could not be refreshed: ${errMsg(error)}`));
+  let answerMcp: (request: WindowRequest) => Promise<unknown> = async () => {
+    throw new Error('the window is still starting');
+  };
+  const mcpBridge: WindowBridge | null = await (async () => openWindowBridge({
+    appHome: flowGlobalDir,
+    build: mcpBuildId(resolveMcpScript(__dirname)),
+    handle: (request) => answerMcp(request),
+  }))().catch((error: unknown) => {
+    console.error(`The Claude Code tools are off in this window: ${errMsg(error)}`);
+    return null;
+  });
+  const closeMcpBridge = (): void => {
+    mcpBridge?.close().catch((error: unknown) => console.error(`The Claude Code tools' endpoint was not closed: ${errMsg(error)}`));
+  };
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
+    env: windowSessionEnv(process.env, mcpBridge?.endpoint ?? null, { execPath: process.execPath, script: resolveMcpScript(__dirname) }),
   });
   if (win.isDestroyed()) {
     ptyProcess.kill();
+    closeMcpBridge();
     return;
   }
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
@@ -1304,6 +1344,32 @@ async function createWindow(): Promise<void> {
     () => app.quit(),
   ));
 
+  const listFlowCatalog = (repoKey: string): FlowCatalogListResult =>
+    catalogListResult(() => listCatalog({ worktreeDir: repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(repoKey, choices)));
+  const windowId = randomUUID();
+  const readRoundReport = createRoundReportReader((line) => console.error(line));
+  const latestRoundReport = (repoKey: string, view: FlowStateView): Promise<unknown> => readLatestRoundReport(repoKey, view, readRoundReport);
+  const readMcpWindowState = async (): Promise<unknown> => {
+    const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
+    const view = withDerived(repoKey, flow.state(repoKey));
+    const catalog = listFlowCatalog(repoKey);
+    refreshControllerStatus();
+    return readWindowState({
+      windowId,
+      repoKey,
+      view,
+      loopMessage: currentWork?.loopMessage ?? null,
+      todos: todoStore.list(repoKey),
+      latestRoundReport: await latestRoundReport(repoKey, view),
+      ...catalogView(catalog),
+    });
+  };
+  const mcpOperations: Record<McpToolName, (args: unknown) => Promise<unknown>> = { read_state: readMcpWindowState };
+  answerMcp = async (request) => {
+    if (!isMcpToolName(request.tool)) throw new Error(`no window operation for ${request.tool}`);
+    return mcpOperations[request.tool](request.args);
+  };
+
   const disposeIpc = registerIpcListeners(
     ipcMain,
     {
@@ -1578,9 +1644,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowListCatalog(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:listCatalog request' };
         }
-        return catalogListResult(() =>
-          listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
-        );
+        return listFlowCatalog(m.repoKey);
       },
       [CH.flowConfirmRunPickup]: (_e, m): Promise<ConfirmRunPickupResult> =>
         isValidFlowConfirmRunPickup(m) && knownRepoKeys.has(m.repoKey)
@@ -1644,6 +1708,7 @@ async function createWindow(): Promise<void> {
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
       unregisterController,
+      closeMcpBridge,
       () => disposeIpc(),
       () => ptyProcess.kill(),
       () => scanner.dispose(),

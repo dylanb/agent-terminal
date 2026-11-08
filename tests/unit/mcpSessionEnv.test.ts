@@ -23,6 +23,19 @@ describe("the environment a window's terminal spawns with", () => {
   });
 });
 
+describe("the window's own build in its terminal's environment", () => {
+  it("names this window's build beside its endpoint, and drops an outer window's when this window's setup failed", () => {
+    const runtime = { execPath: '/apps/inner/agent-terminal', script: '/apps/inner/mcp.js' };
+    const outer = windowSessionEnv({ PATH: '/usr/bin' }, '/app-home/mcp/outer.sock', { execPath: '/apps/outer/agent-terminal', script: '/apps/outer/mcp.js' });
+    const inner = windowSessionEnv(outer, '/app-home/mcp/inner.sock', runtime);
+    const failed = windowSessionEnv(outer, null, runtime);
+    expect({ inner: Object.keys(inner).filter((k) => inner[k]?.includes('/apps/')).map((k) => inner[k]).sort(), failed }).toEqual({
+      inner: [runtime.execPath, runtime.script].sort(),
+      failed: { PATH: '/usr/bin' },
+    });
+  });
+});
+
 describe('the acknowledgement timeout a call waits for its window', () => {
   it('is the named default when the setting is absent or not a positive whole number of milliseconds', () => {
     const settings = [undefined, '', 'soon', '0', '-5', '2.5', '250ms'];
@@ -31,5 +44,11 @@ describe('the acknowledgement timeout a call waits for its window', () => {
 
   it('is the value APP_MCP_ACK_TIMEOUT_MS sets', () => {
     expect(mcpAckTimeoutMs({ [APP_MCP_ACK_TIMEOUT_ENV]: '250' })).toBe(250);
+  });
+});
+
+describe('an acknowledgement timeout set past what a timer can wait', () => {
+  it('waits the longest a timer can, never firing at once', () => {
+    expect(mcpAckTimeoutMs({ [APP_MCP_ACK_TIMEOUT_ENV]: '99999999999' })).toBe(2_147_483_647);
   });
 });

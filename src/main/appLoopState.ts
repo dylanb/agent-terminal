@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { lstatSync, readFileSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
@@ -332,6 +333,27 @@ export function roundReportFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR);
   if (jail === null) return null;
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+}
+
+/** Reads one review round's report, or null when it is absent or cannot be read; a report that cannot be read is
+ *  logged once per distinct reason. */
+export function createRoundReportReader(log: (line: string) => void): (repoDir: string, round: number) => Promise<unknown> {
+  const logged = new Set<string>();
+  return async (repoDir, round) => {
+    const file = roundReportFile(repoDir, round);
+    if (file === null) return null;
+    try {
+      return JSON.parse(await readFile(file, 'utf8')) as unknown;
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return null;
+      const line = `The round report ${file} was not read: ${errMsg(error)}`;
+      if (!logged.has(line)) {
+        logged.add(line);
+        log(line);
+      }
+      return null;
+    }
+  };
 }
 
 /** §28.5.5 — the confined path of the raw captured run kept beside the phase result at `resultPath`, which is

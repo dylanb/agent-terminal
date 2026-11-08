@@ -68,6 +68,8 @@ const TERMINAL_WIRE_NAMES = {
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
   cliInstall: 'cli:install',
+  claudeCodeInstall: 'claudeCode:install',
+  claudeCodeRemove: 'claudeCode:remove',
   installExamplesPreview: 'examples:preview',
   installExamplesApply: 'examples:apply',
   setupStatus: 'setup:status',

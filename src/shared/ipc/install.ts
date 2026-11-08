@@ -5,6 +5,14 @@ export const INSTALL_CHANNELS = {
     name: 'cli:install',
     does: 'The renderer asks main to install the agent-terminal launch shim onto PATH for the running build, even before controller registration.',
   },
+  claudeCodeInstall: {
+    name: 'claudeCode:install',
+    does: "The renderer asks main to register the agent-terminal MCP server and its hooks in the user's Claude Code configuration.",
+  },
+  claudeCodeRemove: {
+    name: 'claudeCode:remove',
+    does: "The renderer asks main to take the agent-terminal MCP server and its hooks out of the user's Claude Code configuration.",
+  },
   installExamplesPreview: {
     name: 'examples:preview',
     does: 'The renderer asks which bundled example files already exist and differ at each destination, without writing anything.',
@@ -28,6 +36,18 @@ export interface CliInstallMsg {
 export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
+
+// ---- Claude Code integration install (#322) ----
+
+/** claudeCode:install and claudeCode:remove request: no payload beyond the session; main computes the target from
+ *  the running build and the user's Claude Code configuration. */
+export interface ClaudeCodeIntegrationMsg {
+  sessionId: SessionId;
+}
+
+/** `ok` once Claude Code's configuration holds (or no longer holds) the integration's entries; `!ok` with the reason
+ *  when nothing was written, or when the change stopped part way and says so. */
+export type ClaudeCodeIntegrationResult = { ok: true } | { ok: false; error: string };
 
 // ---- Install bundled examples (§18.1/§23.4/§27.15) ----
 
@@ -138,6 +158,12 @@ export type InstallExamplesResult =
 export interface CliApi {
   /** Install the `agent-terminal` launch shim onto PATH, reconciling to the running build. */
   install(): Promise<CliInstallResult>;
+}
+
+/** The Claude Code integration's install and remove actions: the Settings molecule's only seam to them. */
+export interface ClaudeCodeApi {
+  install(): Promise<ClaudeCodeIntegrationResult>;
+  remove(): Promise<ClaudeCodeIntegrationResult>;
 }
 
 /** Install bundled examples (§18.1/§23.4/§27.15): the settings organism's only seam to the install action.

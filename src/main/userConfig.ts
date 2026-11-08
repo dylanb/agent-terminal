@@ -29,6 +29,14 @@ export function userConfigRootFrom(
   return path.isAbsolute(root) ? root : null;
 }
 
+/** Claude Code's own state file, where `claude mcp` keeps user-scope servers: inside the CLAUDE_CONFIG_DIR override
+ *  when one is set, else `<home>/.claude.json`. `null` under the same absolute-path gate as the root. */
+export function userClaudeStateFileFrom(env: NodeJS.ProcessEnv, home: string): string | null {
+  const override = trimmed(env.CLAUDE_CONFIG_DIR);
+  const file = override ? path.join(override, '.claude.json') : path.join(home, '.claude.json');
+  return path.isAbsolute(file) ? file : null;
+}
+
 export function userConfigRoot(configDir?: string): string | null {
   return userConfigRootFrom(process.env, os.homedir(), configDir);
 }

@@ -28,3 +28,14 @@ describe('what a tool call returns for each outcome of its window call', () => {
     });
   });
 });
+
+describe('the outcome kind a tool result carries', () => {
+  it('names success, app unreachable and result unknown apart', () => {
+    const kindOf = (result: McpToolResult): unknown => (JSON.parse(text(result)) as { kind?: unknown }).kind;
+    expect({
+      answered: kindOf(toolResult({ kind: 'answered', value: { window: { id: 'window-7' } } })),
+      unreachable: kindOf(toolResult({ kind: 'app-unreachable', reason: 'no window to reach' })),
+      unknown: kindOf(toolResult({ kind: 'result-unknown', reason: 'the connection was lost' })),
+    }).toEqual({ answered: 'success', unreachable: 'app-unreachable', unknown: 'result-unknown' });
+  });
+});

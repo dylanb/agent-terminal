@@ -16,7 +16,7 @@ export { CONTROLLER_CHANNELS, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAU
 
 import type { ControllerApi } from './ipc/controller';
 import type { FlowApi, FlowAppBootstrapConflictMsg, FlowBootstrapErrorMsg, FlowEpicPromotionPreviewMsg, FlowRevealLoopMsg, FlowStateChangedMsg } from './ipc/flow';
-import type { CliApi, ExamplesApi } from './ipc/install';
+import type { ClaudeCodeApi, CliApi, ExamplesApi } from './ipc/install';
 import type { CwdChangedMsg, MonitorApi, MonitorClearedMsg, MonitorEventMsg, MonitorEventRemovedMsg, MonitorUpdateMsg } from './ipc/monitor';
 import type { MenuEditMsg, PtyDataMsg, PtyExitMsg, TermApi } from './ipc/terminal';
 import type { ViewerApi, ViewerChangedMsg } from './ipc/viewer';
@@ -75,6 +75,7 @@ declare global {
     viewer: ViewerApi;
     flow: FlowApi;
     cli: CliApi;
+    claudeCode: ClaudeCodeApi;
     examples: ExamplesApi;
     setup: SetupApi;
     controller: ControllerApi;

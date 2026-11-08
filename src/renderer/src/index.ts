@@ -37,7 +37,7 @@ import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
 import { createCliInstallAction } from './cliInstallAction';
-import { createMcpInstallAction, type McpIntegrationOutcome } from './mcpInstallAction';
+import { createMcpInstall } from './mcpInstall';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
@@ -90,8 +90,10 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
-const notBuilt = async (): Promise<McpIntegrationOutcome> => ({ ok: false, error: 'not built' });
-createMcpInstallAction(document.getElementById('mcp-install-view')!, { install: notBuilt, remove: notBuilt });
+createMcpInstall(document.getElementById('mcp-install-view')!, {
+  install: () => window.claudeCode.install(),
+  remove: () => window.claudeCode.remove(),
+});
 const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>

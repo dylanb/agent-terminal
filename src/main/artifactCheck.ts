@@ -3,8 +3,7 @@
 // hands the agent a command that runs those SAME predicates, so "I checked it" and "the engine accepts it"
 // cannot disagree. The argv writer (artifactCheckCommand) and its reader (runArtifactCheck) live here together.
 
-import path from 'node:path';
-import { shellQuote } from '../shared/shellQuote';
+import { bundledScript, nodeModeCommand, type NodeModeRuntime } from './nodeMode';
 import { roundReportProblems } from '../shared/roundReport';
 import { consolidatorOutputProblems } from '../shared/consolidatorOutput';
 import { goalLegEnd } from '../shared/goalProgress';
@@ -44,14 +43,11 @@ export const ARTIFACT_CHECK_ENTRY = 'artifactCheck';
 export const ARTIFACT_CHECK_PASSED = 'OK';
 
 /** How to run the bundled checker: the app binary in plain-Node mode, and the checker script beside main. */
-export interface ArtifactCheckRuntime {
-  execPath: string;
-  script: string;
-}
+export type ArtifactCheckRuntime = NodeModeRuntime;
 
 /** The checker script's path, beside the main bundle that the build emits it next to. */
 export function resolveArtifactCheckScript(mainDir: string): string {
-  return path.join(mainDir, `${ARTIFACT_CHECK_ENTRY}.js`);
+  return bundledScript(mainDir, ARTIFACT_CHECK_ENTRY);
 }
 
 const csv = (items: string[]): string => items.join(',');
@@ -98,7 +94,7 @@ function resultProblems(rel: string, content: string, captured: string | null, [
 /** The shell command line the agent runs from the repo root to check `check`'s file (CWE-78: every operand
  *  is quoted through the shared primitive). */
 export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: ArtifactCheck): string {
-  return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
+  return nodeModeCommand(runtime.execPath, [runtime.script, ...checkArgv(check)]);
 }
 
 const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}] | ${CAPABILITIES}\n`;

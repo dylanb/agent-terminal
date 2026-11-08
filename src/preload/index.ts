@@ -9,6 +9,8 @@ import {
   type ArtifactTree,
   type CliApi,
   type CliInstallResult,
+  type ClaudeCodeApi,
+  type ClaudeCodeIntegrationResult,
   type ExamplesApi,
   type SetupApi,
   type SetupDismissReply,
@@ -223,6 +225,11 @@ export const cliApi: CliApi = {
   install: () => ipcRenderer.invoke(CH.cliInstall, { sessionId: SESSION_ID }) as Promise<CliInstallResult>,
 };
 
+export const claudeCodeApi: ClaudeCodeApi = {
+  install: () => ipcRenderer.invoke(CH.claudeCodeInstall, { sessionId: SESSION_ID }) as Promise<ClaudeCodeIntegrationResult>,
+  remove: () => ipcRenderer.invoke(CH.claudeCodeRemove, { sessionId: SESSION_ID }) as Promise<ClaudeCodeIntegrationResult>,
+};
+
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
@@ -248,6 +255,7 @@ if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
   contextBridge.exposeInMainWorld('viewer', viewerApi);
   contextBridge.exposeInMainWorld('flow', flowApi);
   contextBridge.exposeInMainWorld('cli', cliApi);
+  contextBridge.exposeInMainWorld('claudeCode', claudeCodeApi);
   contextBridge.exposeInMainWorld('examples', examplesApi);
   contextBridge.exposeInMainWorld('setup', setupApi);
 }

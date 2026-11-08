@@ -15,6 +15,7 @@ import type {
 import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
+import { flowPickerEntry, flowPickerSelected } from '../../shared/flowPickerEntry';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
 import { createPressGroup } from './pressable';
@@ -363,8 +364,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
   const unavailableRow = (entry: Extract<CatalogEntry, { available: false }>): Row => ({
     kind: 'unavailable',
-    key: entry.label,
-    name: entry.label,
+    ...flowPickerEntry(entry),
     origin: entry.origin,
     reason: entry.reason,
   });
@@ -375,10 +375,9 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       const { id } = entry;
       return {
         kind: 'choice',
-        key: id,
-        name: id,
+        ...flowPickerEntry(entry),
         origin: entry.origin,
-        selected: selected.kind === 'value' && id === selected.id,
+        selected: flowPickerSelected(selected) === id,
         choose: () => pick(id),
       };
     });

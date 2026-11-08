@@ -3,6 +3,7 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
+import { terminateOffered } from '../shared/terminateCount';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -13,7 +14,6 @@ import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
-import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
@@ -867,9 +867,11 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       const { machine } = machineFor(k);
       const status = machine.state().status;
       try {
-        if (status === 'in_progress' || status === 'done') machine.terminate();
-        else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
-        else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
+        // Startedness decides only the error case, so it is read only there.
+        const runStarted = status === 'error' ? worktreeStartedness(k) : 'started';
+        if (!terminateOffered({ status, runStarted })) return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
+        if (status === 'error') makeStore(k).clearProgression();
+        else machine.terminate();
       } catch (e) {
         const reason = displaySafeEcho(`The run could not be terminated: ${errMsg(e)}`, MAX_ECHOED_REASON_LENGTH);
         return { outcome: 'refused', cause: 'failed', reason, view: stateWithNotice(k, reason) };

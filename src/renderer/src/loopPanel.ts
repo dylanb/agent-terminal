@@ -9,11 +9,11 @@
 
 import type { FlowAutoGateView, FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
-import { loopGateActionable } from '../../shared/loopGate';
+import { loopGateDecidable, loopRouteOutTurn, shownErrorReason, shownVerdictRows } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
-import { autoHaltReasonText, failedEffectNotice } from '../../shared/gateAuthority';
+import { failedEffectNotice, shownAutoHaltReason } from '../../shared/gateAuthority';
 import { captureSubtreeFocus } from './dom';
 import { createPressGroup, onPress, type PressGroup } from './pressable';
 
@@ -148,15 +148,14 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
    *  is added INSIDE the surviving live region so it announces as an addition (WCAG SC 4.1.3); on a first
    *  render the region is built with the row already present, so that render is silent (§K.5). `anchor` is
    *  the iteration row when a round has run, else the status row (a run-less §27 failure carries no iteration).
-   *  The reason is repo-sourced, so it is stripped of display-unsafe bytes before the live region (CWE-117),
-   *  above both branches so create and patch are covered alike. */
-  const syncReasonRow = (ldl: HTMLElement, anchor: HTMLElement, reason: string | undefined): void => {
+   *  The reason is repo-sourced, so both callers pass it through `shownErrorReason`, which strips display-unsafe
+   *  bytes (CWE-117). */
+  const syncReasonRow = (ldl: HTMLElement, anchor: HTMLElement, clean: string | null): void => {
     const existing = ldl.querySelector<HTMLElement>('[data-loop-reason]');
-    if (!reason) {
+    if (clean === null) {
       existing?.remove();
       return;
     }
-    const clean = stripDisplayControlChars(reason);
     if (existing) {
       const v = existing.querySelector('.lv')!;
       if (v.textContent !== clean) v.textContent = clean;
@@ -174,12 +173,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
    *  (WCAG 4.1.2). */
   const syncAppRouteOut = (body: HTMLElement, loop: FlowLoopView): void => {
     const existing = body.querySelector<HTMLElement>('[data-app-route-out-group]');
-    if (loop.status !== 'error' || !loop.appTurn || !deps.appRouteOut) {
+    const turn = loopRouteOutTurn(loop);
+    if (turn === null || !deps.appRouteOut) {
       existing?.remove();
       return;
     }
     if (existing) return;
-    const { step, turnKey } = loop.appTurn;
+    const { step, turnKey } = turn;
     // A display-only stripped copy for the accessible names; the dispatch keeps the RAW step, which the
     // receiver matches against persisted step identity (§6) — stripping there would dispatch an unmatchable id.
     const stepLabel = stripDisplayControlChars(step);
@@ -244,28 +244,24 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
    *  region so they are announced as additions when the consolidator routes to the gate (WCAG 4.1.3). Added
    *  after the reason anchor, ahead of any pr/branch rows, and removed in place when they fall away. */
   const syncVerdictRows = (ldl: HTMLElement, anchor: HTMLElement, loop: FlowLoopView): void => {
-    syncNamedRow(ldl, anchor, 'loopVerdict', 'verdict', loop.verdict);
-    syncNamedRow(ldl, anchor, 'loopVerdictReason', 'verdict reason', loop.verdictReason);
+    for (const row of shownVerdictRows(loop)) syncNamedRow(ldl, anchor, row.key, row.label, row.value);
   };
 
   /** Add / update / remove a keyed detail row in `ldl`, anchored after `anchor`. `datasetKey` is the
-   *  camelCase name; the matching `data-*` attribute is its kebab form. The value (verdict / verdict reason)
-   *  is repo-sourced, so it is stripped of display-unsafe bytes before the live region (CWE-117), above both
-   *  branches so create and patch are covered alike. */
-  const syncNamedRow = (ldl: HTMLElement, anchor: HTMLElement, datasetKey: string, label: string, value: string | undefined): void => {
+   *  camelCase name; the matching `data-*` attribute is its kebab form. A null value removes the row. */
+  const syncNamedRow = (ldl: HTMLElement, anchor: HTMLElement, datasetKey: string, label: string, value: string | null): void => {
     const attr = `data-${datasetKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
     const existing = ldl.querySelector<HTMLElement>(`[${attr}]`);
-    if (!value) {
+    if (value === null) {
       existing?.remove();
       return;
     }
-    const clean = stripDisplayControlChars(value);
     if (existing) {
       const v = existing.querySelector('.lv')!;
-      if (v.textContent !== clean) v.textContent = clean;
+      if (v.textContent !== value) v.textContent = value;
       return;
     }
-    const rowEl = detailRow(doc, label, clean);
+    const rowEl = detailRow(doc, label, value);
     rowEl.dataset[datasetKey] = '';
     anchor.after(rowEl);
   };
@@ -405,7 +401,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       for (const { reason, detail } of ag.haltReasons) {
         const li = doc.createElement('li');
         li.dataset.autoHaltReason = reason;
-        li.textContent = stripDisplayControlChars(autoHaltReasonText({ reason, detail }));
+        li.textContent = shownAutoHaltReason({ reason, detail });
         halt.append(li);
       }
       nodes.push(halt);
@@ -433,7 +429,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         const iter = String(loop.iteration);
         if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
       }
-      syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
+      syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, shownErrorReason(loop));
       syncVerdictRows(liveLoop.ldl, liveLoop.reasonAnchor, loop);
       if (liveLoop.autoGate && loop.autoGate) syncAutoGate(liveLoop.autoGate, loop.autoGate);
       syncAppRouteOut(liveLoop.body, loop);
@@ -533,7 +529,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow?.querySelector('.lv') ?? null, ldl, reasonAnchor, body, autoGate: null };
       // §27.12 — WHY a turn stopped, adjacent to `status: error`. Present only in error; the surviving run
       // state drops the reason on recovery.
-      syncReasonRow(ldl, reasonAnchor, loop.errorReason);
+      syncReasonRow(ldl, reasonAnchor, shownErrorReason(loop));
       // §27.6/AC5 — the consolidator verdict + reason, adjacent to the status/iteration rows.
       syncVerdictRows(ldl, reasonAnchor, loop);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
@@ -617,7 +613,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // §27 run-less def or a display-only preview — shows the read-only row above but no clickable control,
       // because a button with no turn identity to carry would be inert (WCAG 4.1.2).
       const appTurn = loop.appTurn;
-      if (appTurn && deps.appGateDecision && loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop)) {
+      if (appTurn && deps.appGateDecision && loopGateDecidable(loop)) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
         // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose

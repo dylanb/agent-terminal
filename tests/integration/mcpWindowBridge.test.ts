@@ -137,6 +137,14 @@ describe('a call from the MCP server to its window', () => {
     expect((await pending).kind).toBe('result-unknown');
   });
 
+  it("carries the window's own reason when the operation it started fails", async () => {
+    const window = await bridge(appHome(), async () => {
+      throw new Error('the round report could not be parsed');
+    });
+    const outcome = await call(window.endpoint);
+    expect(outcome).toEqual({ kind: 'result-unknown', reason: expect.stringContaining('the round report could not be parsed') });
+  });
+
   it("is app unreachable when the window runs another build, and the window never runs it", async () => {
     let ran = 0;
     const window = await bridge(appHome(), async () => {

@@ -24,6 +24,7 @@ import {
   type ClipboardWriteMsg,
   type CaptureLastMsg,
   type CliInstallMsg,
+  type ClaudeCodeIntegrationMsg,
   type InstallExamplesPreviewMsg,
   type InstallExamplesApplyMsg,
   type DismissAllMsg,
@@ -110,6 +111,10 @@ export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
 }
 
 export function isValidCliInstall(m: unknown): m is CliInstallMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidClaudeCodeIntegration(m: unknown): m is ClaudeCodeIntegrationMsg {
   return isRecord(m) && isLiveSession(m);
 }
 

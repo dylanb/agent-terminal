@@ -6,6 +6,7 @@ import {
   isValidCapture,
   isValidCaptureLast,
   isValidCliInstall,
+  isValidClaudeCodeIntegration,
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
@@ -516,6 +517,10 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCliInstall({ sessionId: sid })).toBe(true);
     expect(isValidCliInstall({ sessionId: 'other' })).toBe(false);
     expect(isValidCliInstall(null)).toBe(false);
+  });
+
+  it('accepts a claudeCode:install or claudeCode:remove for the live session and rejects a wrong/missing session', () => {
+    expect([{ sessionId: sid }, { sessionId: 'other' }, {}, null].map(isValidClaudeCodeIntegration)).toEqual([true, false, false, false]);
   });
 
   it('accepts a viewer:read with a string relPath and rejects missing/non-string relPath or wrong session', () => {

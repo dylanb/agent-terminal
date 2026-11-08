@@ -1,3 +1,5 @@
+import { stripDisplayControlChars } from './controlChars';
+
 // §27.9.1 N9b.1 / N9b.6 / N9b.9.
 export const GATE_AUTHORITIES = ['human', 'auto'] as const;
 export type GateAuthority = (typeof GATE_AUTHORITIES)[number];
@@ -47,6 +49,11 @@ export function autoHaltReasonText(r: { reason: AutoHaltReason; detail?: string 
   const letter = AUTO_HALT[r.reason].letter;
   const label = letter === null ? AUTO_HALT[r.reason].label : `(${letter}) ${AUTO_HALT[r.reason].label}`;
   return r.detail === undefined ? label : `${label}: ${r.detail}`;
+}
+
+/** A halt reason as the gate panel shows it. */
+export function shownAutoHaltReason(r: { reason: AutoHaltReason; detail?: string }): string {
+  return stripDisplayControlChars(autoHaltReasonText(r));
 }
 
 export function autoHaltLetter(reason: AutoHaltReason): AutoHaltLetter | null {

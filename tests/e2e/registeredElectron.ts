@@ -14,6 +14,12 @@ import { APP_MCP_ACK_TIMEOUT_ENV } from '../../src/shared/mcp';
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 const controllers = new Map<string, { ready: Promise<Transport>; users: number }>();
 const launched = new WeakMap<ElectronApplication, Transport>();
+const disposed = new WeakMap<Transport, Promise<void>>();
+function disposeOnce(transport: Transport): Promise<void> {
+  const done = disposed.get(transport) ?? transport.dispose();
+  disposed.set(transport, done);
+  return done;
+}
 /** An MCP call the app acknowledges slowly under load is never reported as "app unreachable" in an e2e: only a launch
  *  that sets `APP_MCP_ACK_TIMEOUT_MS` to a value other than the shell's (the timeout's own tests) gets a reachable one. */
 const MCP_ACK_OUT_OF_REACH_MS = String(60 * 60 * 1000);
@@ -41,6 +47,8 @@ export function controllerOf(app: ElectronApplication) {
   if (!transport) throw new Error('This app was not launched through registeredElectron');
   const terminal = () => transport.terminals().find(item => item.status !== 'disconnected');
   return {
+    /** Stops the controller this app registered with, so the app runs on with none connected. */
+    disconnect: (): Promise<void> => disposeOnce(transport),
     loopMessage: (): ControllerLoopMessage | null | undefined => terminal()?.work?.loopMessage,
     dismissLoopMessage(messageId: string) {
       const id = terminal()?.id;
@@ -96,7 +104,7 @@ export const electron = {
       released = true;
       if (--controller.users === 0) {
         controllers.delete(home);
-        await (await controller.ready).dispose();
+        await disposeOnce(await controller.ready);
       }
       if (isolatedHome) rmSync(isolatedHome, { recursive: true, force: true });
       if (isolatedClaudeConfig) rmSync(isolatedClaudeConfig, { recursive: true, force: true });

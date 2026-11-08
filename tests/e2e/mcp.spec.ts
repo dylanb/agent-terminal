@@ -1,6 +1,6 @@
 import { electron, controllerOf } from './registeredElectron';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -205,6 +205,18 @@ test('outside agent-terminal the installed server lists no tools and its hooks p
   });
 });
 
+test("inside the window the installed hooks run the window's build and print nothing", { tag: '@ownapp' }, async () => {
+  const m = machine();
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await typeCommand('claude -p in-the-window');
+  await expect.poll(() => ended(m)).toBe(1);
+  const hooks = ourHooks(sessions(m)[0]);
+  await inSettings('Remove', /removed/i);
+  expect.soft({ ourHooksRan: hooks.length > 0, noisyHooks: hooks.filter((h) => h.exit !== 0 || h.stdout !== '' || h.stderr !== '') }).toEqual({ ourHooksRan: true, noisyHooks: [] });
+});
+
 /** Copies the build file by file into writable directories of its own, so the copy can be removed afterwards. It
  *  lives under the gitignored `out/`, a tmpfs under the Podman harness, so an interrupted run leaves no copy in the checkout. */
 function copyTree(from: string, to: string, skip: (name: string) => boolean = () => false): void {
@@ -238,13 +250,15 @@ test('a session whose window is gone is told the app is unreachable', { tag: '@o
   const m = machine();
   await launch(m);
   await inSettings('Install', /installed/i);
+  const endpoints = readdirSync(windowBridgeDir(m.appHome)).map((name) => join(windowBridgeDir(m.appHome), name));
+  expect(endpoints).toHaveLength(1);
   await app?.close();
   app = undefined;
 
-  const orphaned = { PATH: process.env.PATH, HOME: m.home, CLAUDE_CONFIG_DIR: m.config, FAKE_CLAUDE_LOG: m.claude.logFile, [MCP_WINDOW_ENV]: join(m.home, 'gone.sock') };
+  const orphaned = { PATH: process.env.PATH, HOME: m.home, CLAUDE_CONFIG_DIR: m.config, FAKE_CLAUDE_LOG: m.claude.logFile, [MCP_WINDOW_ENV]: endpoints[0] };
   await runFakeClaude(m.claude.command, ['-p', 'mcp read_state {}'], { env: orphaned, cwd: m.repo, signal: AbortSignal.timeout(60_000) });
   const result = readCalls(sessions(m).at(-1))[0]?.result;
-  expect.soft({ isError: result?.isError, text: (result?.content ?? []).map((c) => c.text ?? '').join('\n') }).toEqual({ isError: true, text: expect.stringMatching(/app unreachable/i) });
+  expect.soft({ endpointLeft: existsSync(endpoints[0]), isError: result?.isError, text: (result?.content ?? []).map((c) => c.text ?? '').join('\n') }).toEqual({ endpointLeft: false, isError: true, text: expect.stringMatching(/app unreachable/i) });
 });
 
 test("a session's server gives up as app unreachable after the APP_MCP_ACK_TIMEOUT_MS its own session sets", { tag: '@ownapp' }, async () => {
@@ -306,6 +320,16 @@ test("a window whose bridge cannot open still runs its terminal, and its session
   expect.soft({ terminalEchoed, tools: listedTools(sessions(m)[0]), outerConnections }).toEqual({ terminalEchoed: 1, tools: [], outerConnections: 0 });
 });
 
+test('a window whose launcher cannot be refreshed still runs its terminal', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const launcherDir = join(m.appHome, '.agent-terminal', 'claude-code');
+  mkdirSync(dirname(launcherDir), { recursive: true });
+  symlinkSync(temp('agent-term-e2e-mcp-elsewhere-'), launcherDir);
+  await launch(m);
+  await typeCommand('echo terminal-still-works');
+  await expect.poll(() => page.locator('.xterm-rows > div').filter({ hasText: /^\s*terminal-still-works\s*$/ }).count()).toBe(1);
+});
+
 test('a failed install from Settings shows its reason and changes no configuration', { tag: '@ownapp' }, async () => {
   const m = machine();
   const settings = join(m.config, 'settings.json');
@@ -355,8 +379,8 @@ const latestReport = (repo: string): unknown => {
 
 type ReadState = {
   repo?: { key?: string } | null;
-  flow?: { selected?: string | null; step?: string };
-  gate?: { step?: string; turn?: string | null; options?: string[]; engineDeciding?: boolean } | null;
+  flow?: { selected?: string | null; step?: string; steps?: string[]; status?: string; runStarted?: boolean };
+  gate?: { step?: string; turn?: string | null; options?: string[]; reasons?: string[]; engineDeciding?: boolean } | null;
   todos?: { id: string; text: string; status: string }[];
   loopMessage?: unknown;
   roundReport?: unknown;
@@ -427,6 +451,16 @@ test("an engine-driven session lists the tools, reads its window in the engine's
   const gateTurn = /^turn_key: (\S+)$/m.exec(readFileSync(runStateFile, 'utf8'))?.[1];
   const shownStep = await page.locator('#flow-strip .stn.active .nm').textContent();
   const shownDeciding = (await page.locator('#loop-panel [data-auto-deciding]').count()) > 0;
+  const shownReasons = await page.locator('#loop-panel').evaluate((panel) => {
+    const row = (attr: string): string[] => {
+      const el = panel.querySelector(`[${attr}]`);
+      return el ? [`${el.querySelector('.lk')?.textContent ?? ''}: ${el.querySelector('.lv')?.textContent ?? ''}`] : [];
+    };
+    return [...[...panel.querySelectorAll('[data-auto-halt-reason]')].map((li) => li.textContent ?? ''), ...row('data-loop-verdict'), ...row('data-loop-verdict-reason')];
+  });
+  const shownSteps = (await page.locator('#flow-strip .stn .nm').allTextContents()).slice(1, -1);
+  const shownInProgress = (await page.locator('#flow-strip .stn.active').count()) > 0;
+  const shownTerminate = await page.locator('#flow-strip .flow-terminate').isVisible();
   const reportsDir = join(m.repo, '.agent-terminal', 'loop', 'reports');
   expect.soft({ secondRound: existsSync(join(reportsDir, '2.json')), roundsDiffer: existsSync(join(reportsDir, '2.json')) && JSON.stringify(readJson(join(reportsDir, '1.json'))) !== JSON.stringify(readJson(join(reportsDir, '2.json'))) }).toEqual({ secondRound: true, roundsDiffer: true });
   await page.locator('#qs').click();
@@ -447,7 +481,10 @@ test("an engine-driven session lists the tools, reads its window in the engine's
     repo: atGate?.repo,
     selected: atGate?.flow?.selected,
     step: atGate?.flow?.step,
-    gate: atGate?.gate && { step: atGate.gate.step, turn: atGate.gate.turn, options: [...(atGate.gate.options ?? [])].sort(), engineDeciding: atGate.gate.engineDeciding },
+    steps: atGate?.flow?.steps,
+    inProgress: atGate?.flow?.status === 'in_progress',
+    runStarted: atGate?.flow?.runStarted,
+    gate: atGate?.gate && { step: atGate.gate.step, turn: atGate.gate.turn, options: [...(atGate.gate.options ?? [])].sort(), reasons: atGate.gate.reasons, engineDeciding: atGate.gate.engineDeciding },
     todos: atGate?.todos,
     roundReport: atGate?.roundReport,
     loopMessage: atGate?.loopMessage,
@@ -456,7 +493,10 @@ test("an engine-driven session lists the tools, reads its window in the engine's
     repo: { key: m.repo },
     selected: pickerSelected,
     step: shownStep,
-    gate: { step: 'plan', turn: gateTurn, options: [...shownOptions].sort(), engineDeciding: shownDeciding },
+    steps: shownSteps,
+    inProgress: shownInProgress,
+    runStarted: shownTerminate,
+    gate: { step: 'plan', turn: gateTurn, options: [...shownOptions].sort(), reasons: shownReasons, engineDeciding: shownDeciding },
     todos: shownTodos,
     roundReport: latestReport(m.repo),
     loopMessage: controllerOf(app as ElectronApplication).loopMessage() ?? null,
@@ -507,6 +547,23 @@ test("a read's loop message is the one the controller card shows, also once a fa
     whileFailed: shownWhileFailed,
     recovered: controllerOf(app as ElectronApplication).loopMessage() ?? null,
   });
+});
+
+test("a read gives the window's loop message with no controller connected", { tag: '@ownapp' }, async () => {
+  const m = machine({ agent: { work: 'ask' } });
+  seedGateFlow(m.repo);
+  ownPlanLoop(m.config);
+  await launch(m, { APP_TURN_TIMEOUT_MS: '4000' });
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+  await controllerOf(app as ElectronApplication).disconnect();
+  await page.locator('#flow-strip .flow-control').click();
+  await expect(page.locator('[data-status-alert]')).toContainText('error', { timeout: 30_000 });
+
+  await expect.poll(async () => (await readInSession(m))?.loopMessage ?? null, { timeout: 30_000 }).toEqual(expect.objectContaining({ kind: 'error', reason: expect.stringMatching(/\S/) }));
 });
 
 test('a read before Start names the flow the picker has selected, among the flows it lists', { tag: '@ownapp' }, async () => {

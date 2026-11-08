@@ -27,7 +27,7 @@ it('exposes only the narrow controller API to the controller window', async () =
 it('preserves the terminal window APIs without the controller role', async () => {
   process.argv = argv.filter(value => value !== '--agent-terminal-controller-window');
   await import('../../src/preload/index');
-  expect([...exposed.keys()].sort()).toEqual(['cli', 'examples', 'flow', 'monitor', 'setup', 'term', 'viewer']);
+  expect([...exposed.keys()].sort()).toEqual(['claudeCode', 'cli', 'examples', 'flow', 'monitor', 'setup', 'term', 'viewer']);
 });
 
 
