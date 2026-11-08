@@ -56,11 +56,12 @@ test('a quiet agent with a command running reads Waiting on its card and counts 
     const control = terminal.page.locator('#flow-strip .flow-control');
     await control.click();
     await expect(control).toHaveText('Advance');
+    const card = await expandCard(controller.page, repo);
+    await expect(statusRowLocator(card)).toHaveText('Idle', { timeout: STATUS_BUDGET_MS });
     for (const [name, group] of [['caffeinate', 'agent'], ['codex-code-mode-host', 'own'], [COMMAND, 'session']] as const) {
       await typeLine(terminal.page, fakeSpawnLine(name, group));
       await fakeProcessPid(binDir, name);
     }
-    const card = await expandCard(controller.page, repo);
 
     await expect.soft(statusRowLocator(card)).toHaveText(`Waiting · ${COMMAND}`, { timeout: STATUS_BUDGET_MS });
     await expect.soft.poll(() => workingShown(controller.page), { timeout: STATUS_BUDGET_MS }).toEqual([]);

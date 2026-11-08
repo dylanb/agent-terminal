@@ -75,6 +75,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     shellQuitGraceMs: timerMs(env.APP_SHELL_QUIT_GRACE_MS, DEFAULTS.shellQuitGraceMs),
     branchRefreshMs: timerMs(env.APP_BRANCH_REFRESH_MS, DEFAULTS.branchRefreshMs),
     autoGateDecisionMs: timerMs(env.APP_AUTO_GATE_DECISION_MS, AUTO_GATE_DECISION_DEFAULT_MS),
-    waitingLookupTimeoutMs: DEFAULTS.waitingLookupTimeoutMs,
+    waitingLookupTimeoutMs: timerMs(env.APP_WAITING_LOOKUP_TIMEOUT_MS, DEFAULTS.waitingLookupTimeoutMs),
   };
 }

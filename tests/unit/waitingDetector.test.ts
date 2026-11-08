@@ -85,6 +85,19 @@ describe('the controller activity while the screen is quiet', () => {
     detector.dispose();
   });
 
+  it('leaves Waiting within 5 s of the last command exiting just after the screen went quiet', async () => {
+    const flipped = 10_000;
+    const exited = flipped + 500;
+    const { detector, published } = harness((now) => (now < exited ? NODE : null));
+    detector.screen('active');
+    await runTo(flipped);
+    detector.screen('quiet');
+    await runTo(exited + AC_BOUND_MS);
+    expect({ waited: published.some(({ activity }) => activity.activity === 'waiting'), now: detector.current() })
+      .toEqual({ waited: true, now: { activity: 'quiet' } });
+    detector.dispose();
+  });
+
   it.each([
     ['every lookup finds none', null],
     ['every lookup fails', 'fail'],
@@ -162,6 +175,120 @@ describe('the controller activity while the screen is changing', () => {
     await runTo(flip + 20_000);
     expect({ inFlight, now: detector.current(), waiting: published.filter((a) => a.activity === 'waiting').length })
       .toEqual({ inFlight: true, now: { activity: 'active' }, waiting: 0 });
+    detector.dispose();
+  });
+});
+
+describe('the controller activity\'s lookups and failures', () => {
+  const timers = { setTimer: (cb: () => void, ms: number) => setTimeout(cb, ms), clearTimer: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+  const lookupTimeoutMs = resolveRuntimeConfig({}).waitingLookupTimeoutMs;
+
+  /** A detector whose every lookup never answers on its own, with each lookup's signal kept. */
+  function hangingDetector(onChange: (activity: ControllerActivity) => void = () => {}) {
+    const signals: AbortSignal[] = [];
+    const detector = createWaitingDetector({
+      commands(signal) {
+        signals.push(signal);
+        return new Promise(() => {});
+      },
+      timers, lookupTimeoutMs, onChange,
+    });
+    return { detector, signals };
+  }
+
+  it('abandons a lookup that misses its bound, and one still running when the screen turns active or the detector is disposed', async () => {
+    const timedOut = hangingDetector();
+    timedOut.detector.screen('quiet');
+    await runTo(lookupTimeoutMs * 3);
+    const flipped = hangingDetector();
+    flipped.detector.screen('quiet');
+    flipped.detector.screen('active');
+    const disposed = hangingDetector();
+    disposed.detector.screen('quiet');
+    disposed.detector.dispose();
+    const allAborted = (signals: AbortSignal[]) => signals.length > 0 && signals.every((s) => s.aborted);
+    const settledLookups = timedOut.signals.slice(0, -1);
+    expect({ timedOut: allAborted(settledLookups), flipped: allAborted(flipped.signals), disposed: allAborted(disposed.signals) })
+      .toEqual({ timedOut: true, flipped: true, disposed: true });
+    timedOut.detector.dispose();
+    flipped.detector.dispose();
+  });
+
+  it('reads Idle and runs no lookup once disposed, even while Waiting', async () => {
+    const { detector, lookups } = harness(() => NODE);
+    detector.screen('quiet');
+    await runTo(AC_BOUND_MS);
+    const before = detector.current();
+    detector.dispose();
+    const disposedAt = Date.now();
+    await runTo(disposedAt + 20_000);
+    expect({ before, after: detector.current(), lookupsAfter: lookups.filter((at) => at > disposedAt).length })
+      .toEqual({ before: WAITING_NODE, after: { activity: 'quiet' }, lookupsAfter: 0 });
+  });
+
+  it('logs a repeated lookup failure once, and again only after a lookup succeeds', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { detector } = harness((_, call) => (call === 3 ? null : 'fail'));
+      detector.screen('quiet');
+      await runTo(20_000);
+      detector.dispose();
+      expect(errors.mock.calls.map(([message]) => String(message))).toEqual([
+        expect.stringContaining('ps exited 1'), expect.stringContaining('ps exited 1'),
+      ]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('keeps looking, and shows what it finds, after a listener throws', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const PYTEST: WaitingValue = { program: 'pytest', others: 0 };
+      let answer: WaitingValue | null = null;
+      let thrown = false;
+      const detector = createWaitingDetector({
+        commands: () => Promise.resolve(answer),
+        timers, lookupTimeoutMs,
+        onChange: (activity) => {
+          if (activity.activity === 'waiting' && !thrown) {
+            thrown = true;
+            throw new Error('listener broke');
+          }
+        },
+      });
+      detector.screen('active');
+      detector.screen('quiet');
+      await runTo(AC_BOUND_MS);
+      answer = NODE;
+      await runTo(AC_BOUND_MS * 2);
+      answer = PYTEST;
+      await runTo(AC_BOUND_MS * 3);
+      expect({ thrown, now: detector.current() }).toEqual({ thrown: true, now: { activity: 'waiting', waiting: PYTEST } });
+      detector.dispose();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+describe('what the controller activity shows while quiet', () => {
+  it('follows a change of program or count while it stays Waiting', async () => {
+    const changed = 20_000;
+    const { detector, published } = harness((now) => (now < changed ? { program: 'node', others: 1 } : { program: 'pytest', others: 0 }));
+    detector.screen('quiet');
+    await runTo(changed + AC_BOUND_MS);
+    expect({ first: published.some(({ activity }) => activity.activity === 'waiting' && activity.waiting.program === 'node' && activity.waiting.others === 1), now: detector.current() })
+      .toEqual({ first: true, now: { activity: 'waiting', waiting: { program: 'pytest', others: 0 } } });
+    detector.dispose();
+  });
+
+  it('shows a terminal that starts quiet with no command as Idle from the start, never Working', async () => {
+    const { detector, published } = harness(() => null);
+    detector.screen('quiet');
+    await runTo(AC_BOUND_MS);
+    expect({ working: published.some(({ activity }) => activity.activity === 'active'), now: detector.current() })
+      .toEqual({ working: false, now: { activity: 'quiet' } });
     detector.dispose();
   });
 });

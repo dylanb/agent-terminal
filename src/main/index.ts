@@ -79,6 +79,9 @@ import { createTodoStore } from './todoStore';
 import { createUiSettingsStore } from './uiSettings';
 import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
+import { createWaitingDetector } from './waitingDetector';
+import { readProcessTable } from './waitingLookup';
+import { waitingInTable, waitingPlatform } from './waitingRule';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, findRepoRoot, resolveRepoKey } from './repoKey';
@@ -320,10 +323,22 @@ async function createWindow(): Promise<void> {
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
+  const platformForWaiting = waitingPlatform(process.platform);
+  const waitingDetector = createWaitingDetector({
+    commands: async (signal) => platformForWaiting === null ? null
+      : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting }),
+    timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+    lookupTimeoutMs: config.waitingLookupTimeoutMs,
+    onChange: () => refreshControllerStatus(),
+  });
+  waitingDetector.screen(agentActivity);
+  win.once('closed', () => waitingDetector.dispose());
+
   const shadow = createShadowModel({
     quietMs: config.quietMs,
     onStatus: (status) => {
       agentActivity = status.agentState;
+      waitingDetector.screen(status.agentState);
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
       if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
@@ -971,7 +986,7 @@ async function createWindow(): Promise<void> {
     current: () => {
       const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
       const load = resolveActiveDefinition(repoKey);
-      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
+      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: waitingDetector.current(), loopMessage: loopMessages.current() };
     },
     refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
     branch: repoKey => readBranchLabel(repoKey),
@@ -1288,6 +1303,8 @@ async function createWindow(): Promise<void> {
   ptyProcess.onExit(({ exitCode }) => {
     shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
+    waitingDetector.dispose(); // its pid may be reused, so a kept-open window must stop reading the table
+    refreshControllerStatus();
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();

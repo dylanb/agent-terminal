@@ -3,11 +3,18 @@ import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_STATUS_BYTES, supportsControllerNotifications, type ControllerNotificationSource, type ControllerMessage, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_WAITING_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_STATUS_BYTES, supportsControllerNotifications, type ControllerNotificationSource, type ControllerMessage, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
 export const CONTROLLER_RETRY_DELAY_MS = 5_000;
+
+type OlderWork = Omit<ControllerWorkStatus, 'loopMessage' | 'title' | 'branch'>;
+
+/** An older controller rejects the Waiting activity, so it is shown as Working with no program. */
+function withoutWaiting({ waiting: _waiting, ...work }: OlderWork): OlderWork {
+  return work.activity === 'waiting' ? { ...work, activity: 'active' } : work;
+}
 
 export function registerControllerTerminal(
   appHome: string,
@@ -52,7 +59,8 @@ export function registerControllerTerminal(
         return;
       }
       sendingStatus = true;
-      const { loopMessage, title, branch, ...older } = work;
+      const { loopMessage, title, branch, ...rest } = work;
+      const older = controllerMinor >= CONTROLLER_WAITING_MINOR ? rest : withoutWaiting(rest);
       const withMessage = controllerMinor >= CONTROLLER_LOOP_MESSAGE_MINOR ? { ...older, loopMessage } : older;
       const shared = controllerMinor >= CONTROLLER_IDENTITY_MINOR ? { ...withMessage, title, branch } : withMessage;
       current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: shared }), error => {
