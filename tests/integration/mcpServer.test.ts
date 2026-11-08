@@ -48,6 +48,18 @@ describe("the agent-terminal MCP server's tool calls", () => {
     expect({ inherited, windowCalls: windowCalls() }).toEqual({ inherited: expect.stringContaining('"constructor"'), windowCalls: 0 });
   });
 
+  it('outside a window lists no tools and rejects a call, naming the tool', async () => {
+    const server = createMcpServer({ endpoint: null, build: 'b', ackTimeoutMs: 5_000, timers: createVirtualClock() });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test', version: '1' });
+    await client.connect(clientSide);
+    cleanup.push(() => client.close());
+    const { tools } = await client.listTools();
+    const call = await rejection(client.callTool({ name: 'read_state', arguments: {} }));
+    expect({ tools, call }).toEqual({ tools: [], call: expect.stringContaining('read_state') });
+  });
+
   it('hands a valid call to the window and returns its answer', async () => {
     const { client, windowCalls } = await session();
     const result = await client.callTool({ name: 'read_state', arguments: {} });

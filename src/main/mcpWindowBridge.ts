@@ -46,21 +46,19 @@ export async function openWindowBridge(opts: {
       }
       if (stage === 'call' && message?.type === 'call') {
         stage = 'answering';
-        let answering: Promise<unknown>;
-        try {
-          answering = opts.handle(message.request);
-        } catch (error) {
-          answering = Promise.reject(error);
-        }
-        answering.then(
-          (value) => {
-            if (!socket.destroyed) socket.end(encodeBridgeMessage({ type: 'result', value }));
-          },
-          (error: unknown) => {
-            console.error(`MCP ${message.request.tool} call failed in the window: ${errMsg(error)}`);
-            if (!socket.destroyed) socket.end(encodeBridgeMessage({ type: 'failed', reason: errMsg(error) }));
-          },
-        );
+        const { request } = message;
+        Promise.resolve()
+          .then(() => opts.handle(request))
+          .then((value) => encodeBridgeMessage({ type: 'result', value }))
+          .then(
+            (line) => {
+              if (!socket.destroyed) socket.end(line);
+            },
+            (error: unknown) => {
+              console.error(`MCP ${request.tool} call failed in the window: ${errMsg(error)}`);
+              if (!socket.destroyed) socket.end(encodeBridgeMessage({ type: 'failed', reason: errMsg(error) }));
+            },
+          );
         return;
       }
       if (stage !== 'answering') socket.destroy();
