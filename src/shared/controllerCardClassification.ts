@@ -1,4 +1,4 @@
-import type { ControllerWorkStatus } from './ipc';
+import type { ControllerWorkActivity, ControllerWorkStatus } from './ipc';
 import type { ControllerDirectoryCard } from './controllerCards';
 import { waitingLabel } from './waiting';
 
@@ -18,9 +18,9 @@ const WORKING: Readonly<Record<ControllerWorkStatus['activity'], boolean>> = {
   active: true, waiting: true, quiet: false, unavailable: false,
 };
 
-export function activityLine(work: Pick<ControllerWorkStatus, 'activity' | 'waiting'>): string {
+export function activityLine(work: ControllerWorkActivity): string {
   const word = ACTIVITY_WORDS[work.activity];
-  return work.activity === 'waiting' && work.waiting ? `${word} · ${waitingLabel(work.waiting)}` : word;
+  return work.activity === 'waiting' ? `${word} · ${waitingLabel(work.waiting)}` : word;
 }
 
 const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];

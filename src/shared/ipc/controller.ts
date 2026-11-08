@@ -1,6 +1,6 @@
 import type { ChannelSpecs, SessionId } from './session';
 import type { Theme } from './settings';
-import type { WaitingValue } from '../waiting';
+import type { ControllerActivity } from '../waiting';
 
 export const CONTROLLER_CHANNELS = {
   subscribe: {
@@ -49,10 +49,8 @@ export const CONTROLLER_CHANNELS = {
   },
 } as const satisfies ChannelSpecs;
 
-/** The work status's activity, with the Waiting value exactly when it is waiting. */
-export type ControllerWorkActivity =
-  | { activity: 'active' | 'quiet' | 'unavailable'; waiting?: never }
-  | { activity: 'waiting'; waiting: WaitingValue };
+/** The work status's activity: the Waiting detector's, or unavailable when the controller cannot read it. */
+export type ControllerWorkActivity = ControllerActivity | { readonly activity: 'unavailable'; readonly waiting?: never };
 
 export type ControllerWorkStatus = ControllerWorkActivity & ControllerWorkDetails;
 

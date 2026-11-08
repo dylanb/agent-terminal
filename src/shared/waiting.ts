@@ -6,8 +6,7 @@ export interface WaitingValue {
 
 /** What the controller reports for the terminal's activity: the screen's, or Waiting while the screen is quiet. */
 export type ControllerActivity =
-  | { readonly activity: 'active' }
-  | { readonly activity: 'quiet' }
+  | { readonly activity: 'active' | 'quiet'; readonly waiting?: never }
   | { readonly activity: 'waiting'; readonly waiting: WaitingValue };
 
 export function isWaitingValue(value: unknown): value is WaitingValue {

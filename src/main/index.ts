@@ -1076,7 +1076,7 @@ async function createWindow(): Promise<void> {
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
-    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, windowStatus.waiting());
+    const base = deriveFlowView(view, todoStore.list(repoKey), windowStatus.shown());
     const activity = loopActivityFor(repoKey);
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {

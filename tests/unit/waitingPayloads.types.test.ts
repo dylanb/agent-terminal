@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ControllerWorkStatus, FlowDerived, MonitorUpdateMsg } from '../../src/shared/ipc';
+import type { ControllerWorkActivity, ControllerWorkStatus, FlowDerived, MonitorUpdateMsg } from '../../src/shared/ipc';
+import type { ControllerActivity } from '../../src/shared/waiting';
 import { isControllerWorkStatus } from '../../src/shared/controllerStatus';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
@@ -18,6 +19,14 @@ describe('the controller work status', () => {
     // @ts-expect-error a Waiting value beside another activity
     const beside: ControllerWorkStatus = { ...base, activity: 'active', waiting: NODE };
     expect([waiting, quiet, bare, beside].map(isControllerWorkStatus)).toEqual([true, true, false, false]);
+  });
+
+  it('takes every activity the Waiting detector reports, and the detector never reports unavailable', () => {
+    const detected: ControllerActivity[] = [{ activity: 'active' }, { activity: 'quiet' }, { activity: 'waiting', waiting: NODE }];
+    const sent: ControllerWorkActivity[] = detected;
+    // @ts-expect-error unavailable is the controller's own activity, never the detector's
+    const unavailable: ControllerActivity = { activity: 'unavailable' };
+    expect([sent.length, unavailable.activity]).toEqual([3, 'unavailable']);
   });
 });
 

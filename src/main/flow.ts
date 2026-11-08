@@ -6,9 +6,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, ScreenWaiting, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
-import type { WaitingValue } from '../shared/waiting';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
@@ -30,11 +29,11 @@ import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
  * passes through untouched. Pure — the input view is never mutated.
  */
-export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity: AgentState, waiting: WaitingValue | null): FlowStateView {
+export function deriveFlowView(view: FlowStateView, todos: TodoItem[], screen: ScreenWaiting): FlowStateView {
   if (view.status !== 'in_progress') return view;
   const todosTotal = todos.length;
   const todosDone = todos.filter((t) => t.status === 'done').length;
-  const live = activity === 'active' ? { activity, waiting: null } : { activity, waiting };
+  const live = screen.agentState === 'active' ? { activity: screen.agentState, waiting: null } : { activity: screen.agentState, waiting: screen.waiting };
   return { ...view, derived: { ...live, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 

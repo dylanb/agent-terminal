@@ -67,6 +67,25 @@ describe('the window status (#319 AC6, AC11)', () => {
     expect(delivered).toHaveLength(2);
   });
 
+  it('reports the screen activity and the Waiting value it last delivered, for the flow strip', () => {
+    const { window, setWaiting } = harness();
+    setWaiting({ program: 'node', others: 0 });
+    const shown = [window.shown()];
+    window.screen(quiet(1));
+    shown.push(window.shown());
+    window.screen(ACTIVE);
+    shown.push(window.shown());
+    window.screen(quiet(2));
+    setWaiting(null);
+    shown.push(window.shown());
+    expect(shown).toEqual([
+      { agentState: 'quiet', waiting: null },
+      { agentState: 'quiet', waiting: { program: 'node', others: 0 } },
+      { agentState: 'active', waiting: null },
+      { agentState: 'quiet', waiting: null },
+    ]);
+  });
+
   it('delivers nothing before the first screen status', () => {
     const { delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });
