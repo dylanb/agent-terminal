@@ -326,3 +326,118 @@ describe('what the controller activity shows while quiet', () => {
     detector.dispose();
   });
 });
+
+describe('the lifecycle of a delayed Waiting lookup', () => {
+  const POLL_GAP_MS = 1000;
+  const PYTEST: WaitingValue = { program: 'pytest', others: 1 };
+
+  function delayed(lookupTimeoutMs = 5000) {
+    const requests: Array<{ at: number; resolve: (value: WaitingValue | null) => void }> = [];
+    const published: ControllerActivity[] = [];
+    const detector = createWaitingDetector({
+      commands: () => new Promise((resolve) => { requests.push({ at: Date.now(), resolve }); }),
+      timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      lookupTimeoutMs,
+      onChange: (activity) => published.push(activity),
+    });
+    return { detector, requests, published };
+  }
+
+  it('keeps a newer result when an abandoned lookup answers after its timeout', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { detector, requests, published } = delayed(200);
+    try {
+      detector.screen('quiet');
+      await vi.advanceTimersByTimeAsync(200 + POLL_GAP_MS);
+      requests[1].resolve(PYTEST);
+      await vi.advanceTimersByTimeAsync(0);
+      requests[0].resolve(NODE);
+      await vi.advanceTimersByTimeAsync(0);
+      expect({ current: detector.current(), published }).toEqual({
+        current: { activity: 'waiting', waiting: PYTEST },
+        published: [{ activity: 'waiting', waiting: PYTEST }],
+      });
+    } finally {
+      detector.dispose();
+      errors.mockRestore();
+    }
+  });
+
+  it('a pending answer after disposal neither publishes nor starts another lookup', async () => {
+    const { detector, requests, published } = delayed();
+    detector.screen('quiet');
+    detector.dispose();
+    requests[0].resolve(NODE);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect({ current: detector.current(), published, started: requests.map((request) => request.at) })
+      .toEqual({ current: { activity: 'quiet' }, published: [], started: [0] });
+  });
+
+  it('keeps the restarted poller current when the previous quiet period answers late', async () => {
+    const { detector, requests, published } = delayed();
+    try {
+      detector.screen('quiet');
+      detector.screen('active');
+      detector.screen('quiet');
+      requests[1].resolve(PYTEST);
+      await vi.advanceTimersByTimeAsync(0);
+      requests[0].resolve(NODE);
+      await vi.advanceTimersByTimeAsync(POLL_GAP_MS);
+      expect({ current: detector.current(), published, started: requests.map((request) => request.at) }).toEqual({
+        current: { activity: 'waiting', waiting: PYTEST },
+        published: [{ activity: 'active' }, { activity: 'waiting', waiting: PYTEST }],
+        started: [0, 0, POLL_GAP_MS],
+      });
+    } finally {
+      detector.dispose();
+    }
+  });
+
+  it('waits for a slow lookup to settle before starting the polling gap', async () => {
+    const { detector, requests } = delayed();
+    try {
+      detector.screen('quiet');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(requests.map((request) => request.at)).toEqual([0]);
+      requests[0].resolve(NODE);
+      await vi.advanceTimersByTimeAsync(POLL_GAP_MS - 1);
+      expect(requests.map((request) => request.at)).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect({ current: detector.current(), started: requests.map((request) => request.at) })
+        .toEqual({ current: WAITING_NODE, started: [0, 2500] });
+    } finally {
+      detector.dispose();
+    }
+  });
+});
+
+describe('the outer activity snapshot', () => {
+  it.each(['activity', 'waiting'] as const)('isolates edits to %s through readers and listeners in every activity', async (field) => {
+    const { detector, published } = harness(() => NODE);
+    const edit = (value: ControllerActivity): void => {
+      Reflect.set(value, field, field === 'activity' ? 'edited' : { program: 'edited', others: 99 });
+    };
+    try {
+      edit(detector.current());
+      expect(detector.current()).toEqual({ activity: 'quiet' });
+      detector.screen('active');
+      edit(detector.current());
+      expect({ current: detector.current(), delivered: published[0].activity })
+        .toEqual({ current: { activity: 'active' }, delivered: { activity: 'active' } });
+      edit(published[0].activity);
+      expect(detector.current()).toEqual({ activity: 'active' });
+      detector.screen('quiet');
+      await runTo(AC_BOUND_MS);
+      edit(detector.current());
+      expect({ current: detector.current(), delivered: published[published.length - 1].activity })
+        .toEqual({ current: WAITING_NODE, delivered: WAITING_NODE });
+      edit(published[published.length - 1].activity);
+      expect(detector.current()).toEqual(WAITING_NODE);
+      detector.dispose();
+      edit(detector.current());
+      expect(detector.current()).toEqual({ activity: 'quiet' });
+    } finally {
+      detector.dispose();
+    }
+  });
+});

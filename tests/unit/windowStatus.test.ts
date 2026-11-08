@@ -114,3 +114,23 @@ describe('the window status (#319 AC6, AC11)', () => {
     expect(delivered).toEqual([]);
   });
 });
+
+it.each(['agentState', 'waiting'] as const)('isolates outer screen field %s in initial, active and Waiting snapshots', (field) => {
+  const { window, delivered, setWaiting } = harness();
+  const edit = (value: object): void => {
+    Reflect.set(value, field, field === 'agentState' ? 'edited' : { program: 'edited', others: 99 });
+  };
+  edit(window.shown());
+  expect(window.shown()).toEqual({ agentState: 'quiet', waiting: null });
+  window.screen(ACTIVE);
+  edit(window.shown());
+  edit(delivered[0]);
+  expect(window.shown()).toEqual({ agentState: 'active', waiting: null });
+  window.screen(quiet(1));
+  setWaiting({ program: 'node', others: 0 });
+  edit(window.shown());
+  edit(delivered[delivered.length - 1]);
+  expect(window.shown()).toEqual({ agentState: 'quiet', waiting: { program: 'node', others: 0 } });
+  window.screen(quiet(2));
+  expect(delivered[delivered.length - 1]).toEqual({ ...quiet(2), waiting: { program: 'node', others: 0 } });
+});
