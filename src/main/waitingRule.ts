@@ -11,6 +11,8 @@ export interface ProcessTableReading {
   /** The terminal's shell, whose foreground program is the agent. */
   readonly shellPid: number;
   readonly platform: WaitingPlatform;
+  /** Program names the operator's helper file lists, beside the built-in ones. */
+  readonly helpers?: readonly string[];
 }
 
 /** The `ps` argv whose output `waitingInTable` reads. */

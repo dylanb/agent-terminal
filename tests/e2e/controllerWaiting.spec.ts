@@ -219,3 +219,38 @@ test('with Waiting showing before Start, Start still injects the turn and the tu
     }
   }
 });
+
+test('naming a running helper in the operator\'s helper file makes a terminal Waiting only because of it read Idle, with no restart', { tag: '@ownapp' }, async () => {
+  test.setTimeout(240_000);
+  const h = await createControllerDesktopHarness();
+  const binDir = mkdtempSync(join(tmpdir(), 'waiting-helper-file-'));
+  const repo = h.fixture.repositories[0];
+  const helper = 'my-lsp';
+  try {
+    seedFakeAgentSteps(binDir, {});
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    seedTrustedFlow(h.fixture.home, repo, 'waiting-helper-file', autoGateFlowYaml([{ id: 'implement', kind: 'manual' }], 'waiting-helper-file'));
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\n');
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    const terminal = await h.launch(terminalTarget, repo, { env: { PATH: `${binDir}:${h.fixture.env.PATH ?? process.env.PATH}`, ...SLOW_LOOKUP_ENV } });
+    await hostFakeAgent(terminal.page, repo);
+    const control = terminal.page.locator('#flow-strip .flow-control');
+    await control.click();
+    await expect(control).toHaveText('Advance');
+    const card = await expandCard(controller.page, repo);
+    await typeLine(terminal.page, fakeSpawnLine(helper, 'session'));
+    await fakeProcessPid(binDir, helper);
+    await expect(statusRowLocator(card)).toHaveText(`Waiting · ${helper}`, { timeout: STATUS_BUDGET_MS });
+
+    mkdirSync(join(h.fixture.home, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(h.fixture.home, '.agent-terminal', 'helper-programs.yaml'), `- ${helper}\n`);
+    await expect.soft(statusRowLocator(card)).toHaveText('Idle', { timeout: STATUS_BUDGET_MS });
+    expect.soft(fakeProcessRunning(binDir, helper)).toBe(true);
+  } finally {
+    try { await stopAllFakeProcesses(binDir); }
+    finally {
+      try { await h.dispose(); }
+      finally { rmSync(binDir, { recursive: true, force: true }); }
+    }
+  }
+});

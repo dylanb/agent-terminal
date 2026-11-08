@@ -141,3 +141,41 @@ describe.each(PLATFORMS)('the Waiting rule on helpers\' descendants and long-run
     expect(waitingInTable(tree.stdout(), { shellPid: tree.shell.pid, platform })).toEqual({ program: 'pytest', others: 2 });
   });
 });
+
+describe.each(PLATFORMS)('the Waiting rule on the operator\'s helper names on %s', (platform) => {
+  it('never counts a process the operator lists, beside the built-in ones, by its own name or as the program its shell runs, and still counts one it does not', () => {
+    const direct = agentTree(platform);
+    direct.tree.spawn(direct.agent, 'my-lsp', COMMAND);
+    direct.tree.spawn(direct.agent, 'codex-code-mode-host', COMMAND);
+    direct.tree.spawn(direct.agent, 'pytest', COMMAND);
+    const viaShell = agentTree(platform);
+    viaShell.tree.spawn(viaShell.tree.spawn(viaShell.agent, 'sh', COMMAND), 'my-lsp');
+    const unlisted = agentTree(platform);
+    unlisted.tree.spawn(unlisted.agent, 'my-lsp', COMMAND);
+    const nested = agentTree(platform);
+    nested.tree.spawn(nested.tree.spawn(nested.agent, 'pytest', COMMAND), 'my-lsp');
+    const noneListed = agentTree(platform);
+    noneListed.tree.spawn(noneListed.agent, 'codex-code-mode-host', COMMAND);
+    noneListed.tree.spawn(noneListed.agent, 'pytest', COMMAND);
+    expect({
+      direct: waitingInTable(direct.tree.stdout(), { shellPid: direct.tree.shell.pid, platform, helpers: ['my-lsp'] }),
+      viaShell: waitingInTable(viaShell.tree.stdout(), { shellPid: viaShell.tree.shell.pid, platform, helpers: ['my-lsp'] }),
+      unlisted: waitingInTable(unlisted.tree.stdout(), { shellPid: unlisted.tree.shell.pid, platform, helpers: ['other-lsp'] }),
+      nested: waitingInTable(nested.tree.stdout(), { shellPid: nested.tree.shell.pid, platform, helpers: ['my-lsp'] }),
+      noneListed: waitingInTable(noneListed.tree.stdout(), { shellPid: noneListed.tree.shell.pid, platform, helpers: [] }),
+    }).toEqual({ direct: { program: 'pytest', others: 0 }, viaShell: null, unlisted: { program: 'my-lsp', others: 0 }, nested: { program: 'pytest', others: 0 }, noneListed: { program: 'pytest', others: 0 } });
+  });
+
+  it('matches a listed name exactly, after cutting one longer than the OS name limit to that limit', () => {
+    const read = (program: string, helpers: readonly string[]) => {
+      const { tree, agent } = agentTree(platform);
+      tree.spawn(agent, program, COMMAND);
+      return waitingInTable(tree.stdout(), { shellPid: tree.shell.pid, platform, helpers });
+    };
+    expect({
+      longListed: read('my-language-server', ['my-language-server']),
+      prefixListed: read('pytest', ['pytes']),
+      longerListed: read('pytest', ['pytest-x']),
+    }).toEqual({ longListed: null, prefixListed: { program: 'pytest', others: 0 }, longerListed: { program: 'pytest', others: 0 } });
+  });
+});
