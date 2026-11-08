@@ -6,6 +6,7 @@ import type { LoopActivity } from '../loopActivity';
 import type { HeldRunView } from '../runHold';
 import type { RunIdentity } from '../runIdentity';
 import type { AgentState } from './monitor';
+import type { WaitingValue } from '../waiting';
 import type { ChannelSpecs, SessionId } from './session';
 
 export const FLOW_CHANNELS = {
@@ -135,6 +136,8 @@ export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
  *  the gate-readiness signal. Present only while `status === 'in_progress'`. */
 export interface FlowDerived {
   activity: AgentState;
+  /** Null whenever `activity` is `active`. */
+  waiting: WaitingValue | null;
   todosDone: number;
   todosTotal: number;
   ready: boolean;

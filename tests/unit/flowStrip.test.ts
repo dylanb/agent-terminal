@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
-import type { AgentState, FlowAutoGateView, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import type { AgentState, FlowAutoGateView, FlowDerived, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
@@ -600,7 +600,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           position: 1,
           total: 1,
           status: 'in_progress',
-          derived: { activity: 'active', todosDone: 2, todosTotal: 5, ready: false },
+          derived: { activity: 'active', waiting: null, todosDone: 2, todosTotal: 5, ready: false },
         }),
       ),
       start: vi.fn(),
@@ -619,6 +619,61 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(text.toLowerCase()).toContain('active');
   });
 
+  describe('the derived line while Waiting (#319 AC11)', () => {
+    const waitingView = (derived: FlowDerived): FlowStateView => ({
+      stepName: '/repo-step', runStarted: 'never-started' as const, steps: ['/repo-step'], position: 1, total: 1, status: 'in_progress', derived,
+    });
+    const stripOver = (read: () => FlowStateView, at: HTMLElement) => {
+      let fire = (): void => {};
+      const deps = {
+        state: vi.fn(async () => read()), start: vi.fn(), advance: vi.fn(), restart: vi.fn(), undo: vi.fn(), terminate: vi.fn(),
+        provideInput: vi.fn(), onStatusBar: vi.fn(),
+        onStateChanged: vi.fn((cb: () => void) => {
+          fire = cb;
+          return () => {};
+        }),
+      };
+      createFlowStrip(at, deps).onRepoChanged('/repo');
+      return () => fire();
+    };
+    const derivedLine = (at: HTMLElement): string | null => at.querySelector<HTMLElement>('.flow-derived')?.textContent ?? null;
+    const shownAlone = async (derived: FlowDerived): Promise<string | null> => {
+      const fresh = document.createElement('div');
+      document.body.append(fresh);
+      stripOver(() => waitingView(derived), fresh);
+      await vi.waitFor(() => expect(derivedLine(fresh)).toContain(`${derived.todosDone} / ${derived.todosTotal}`));
+      return derivedLine(fresh);
+    };
+    const WAITING = { program: 'MainThread', others: 1 };
+
+    it('reads Waiting with the label in its own case when the first view is already Waiting', async () => {
+      stripOver(() => waitingView({ activity: 'quiet', waiting: WAITING, todosDone: 2, todosTotal: 5, ready: false }), host);
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('2 / 5'));
+      expect(derivedLine(host)).toMatch(/\b(?:waiting|Waiting|WAITING)\b.*\bMainThread \+1\b/);
+    });
+
+    it('reads Waiting when a push brings it, then shows the quiet display it showed before #319 once Waiting ends', async () => {
+      let derived: FlowDerived = { activity: 'quiet', waiting: null, todosDone: 0, todosTotal: 4, ready: false };
+      const push = stripOver(() => waitingView(derived), host);
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('0 / 4'));
+
+      derived = { activity: 'quiet', waiting: WAITING, todosDone: 1, todosTotal: 4, ready: false };
+      push();
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('1 / 4'));
+      const whileWaiting = derivedLine(host);
+
+      derived = { activity: 'quiet', waiting: null, todosDone: 3, todosTotal: 4, ready: false };
+      push();
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('3 / 4'));
+      const afterWaiting = derivedLine(host);
+
+      expect({ whileWaiting, afterWaiting }).toEqual({
+        whileWaiting: expect.stringMatching(/\b(?:waiting|Waiting|WAITING)\b.*\bMainThread \+1\b/),
+        afterWaiting: await shownAlone(derived),
+      });
+    });
+  });
+
   it('re-pulls flow:state when main emits flow:onStateChanged — the push path (§24.2.2 S5)', async () => {
     let fire = (): void => {};
     let done = 0;
@@ -630,7 +685,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           position: 1,
           total: 1,
           status: 'in_progress',
-          derived: { activity: 'quiet', todosDone: done, todosTotal: 3, ready: false },
+          derived: { activity: 'quiet', waiting: null, todosDone: done, todosTotal: 3, ready: false },
         }),
       ),
       start: vi.fn(),
@@ -1822,7 +1877,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         position: 1,
         total: 1,
         status: 'in_progress',
-        derived: { activity, todosDone: 1, todosTotal: 3, ready: false },
+        derived: { activity, waiting: null, todosDone: 1, todosTotal: 3, ready: false },
       }));
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(control()).not.toBeNull());
@@ -1845,7 +1900,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         position: 1,
         total: 1,
         status: 'in_progress',
-        derived: { activity: 'active', todosDone: done, todosTotal: 3, ready: false },
+        derived: { activity: 'active', waiting: null, todosDone: done, todosTotal: 3, ready: false },
       }));
       createFlowStrip(host, { ...deps, onTerminate: vi.fn() }).onRepoChanged('/repo');
       await vi.waitFor(() => expect(host.querySelector('.flow-terminate')).not.toBeNull());
@@ -1898,7 +1953,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
               position: 1,
               total: 1,
               status: 'in_progress',
-              derived: { activity: 'active', todosDone: 1, todosTotal: 3, ready: false },
+              derived: { activity: 'active', waiting: null, todosDone: 1, todosTotal: 3, ready: false },
             },
       );
       createFlowStrip(host, deps).onRepoChanged('/repo');

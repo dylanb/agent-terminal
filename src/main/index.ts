@@ -339,7 +339,7 @@ async function createWindow(): Promise<void> {
     onStatus: (status) => {
       agentActivity = status.agentState;
       waitingDetector.screen(status.agentState);
-      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
+      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status, waiting: null });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
       if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
     },
@@ -1042,7 +1042,7 @@ async function createWindow(): Promise<void> {
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
-    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity);
+    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, null);
     const activity = loopActivityFor(repoKey);
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {

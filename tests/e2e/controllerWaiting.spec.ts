@@ -98,6 +98,84 @@ test('a quiet agent with a command running reads Waiting on its card and counts 
   }
 });
 
+type ShownActivity = { agentState: string; program: string | null };
+type MonitorRecordingWindow = Window & { monitorUpdates?: ShownActivity[]; flowViews?: ShownActivity[] };
+
+test('the status strip and the flow strip read Waiting with the program label while a command runs, and their quiet display once it ends', { tag: '@ownapp' }, async () => {
+  test.setTimeout(240_000);
+  const h = await createControllerDesktopHarness();
+  const binDir = mkdtempSync(join(tmpdir(), 'waiting-window-'));
+  const repo = h.fixture.repositories[0];
+  try {
+    seedFakeAgentSteps(binDir, {});
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    seedTrustedFlow(h.fixture.home, repo, 'waiting-window', autoGateFlowYaml([{ id: 'implement', kind: 'manual' }], 'waiting-window'));
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\n');
+    await h.launch(controllerTarget, h.fixture.nonGit);
+    const { page } = await h.launch(terminalTarget, repo, { env: { PATH: `${binDir}:${h.fixture.env.PATH ?? process.env.PATH}`, ...SLOW_LOOKUP_ENV } });
+    await hostFakeAgent(page, repo);
+    const control = page.locator('#flow-strip .flow-control');
+    await control.click();
+    await expect(control).toHaveText('Advance');
+    const agentChip = page.locator('#monitor-status').getByText(/^agent:/);
+    const derivedLine = page.locator('#flow-strip').getByText(/^\d+ \/ \d+ done\b/);
+    await expect(agentChip).toContainText('quiet', { timeout: STATUS_BUDGET_MS });
+    await expect(derivedLine).toContainText('quiet', { timeout: STATUS_BUDGET_MS });
+    const quietDerivedLine = await derivedLine.innerText();
+    await page.evaluate(directory => {
+      const seen: ShownActivity[] = [];
+      const views: ShownActivity[] = [];
+      (window as MonitorRecordingWindow).monitorUpdates = seen;
+      (window as MonitorRecordingWindow).flowViews = views;
+      window.monitor.onUpdate(msg => seen.push({ agentState: msg.agentState, program: msg.waiting?.program ?? null }));
+      window.flow.onStateChanged(() => {
+        void window.flow.state(directory).then(view => {
+          if (view.derived) views.push({ agentState: view.derived.activity, program: view.derived.waiting?.program ?? null });
+        }, () => {});
+      });
+    }, repo);
+
+    await typeLine(page, fakeSpawnLine(COMMAND, 'session'));
+    await fakeProcessPid(binDir, COMMAND);
+    const shownWaiting = new RegExp(String.raw`\b(?:waiting|Waiting|WAITING)\b.*\b${COMMAND}\b`);
+    await expect.soft(agentChip).toHaveText(shownWaiting, { timeout: STATUS_BUDGET_MS });
+    await expect.soft(derivedLine).toHaveText(shownWaiting, { timeout: STATUS_BUDGET_MS });
+
+    const updates = () => page.evaluate(() => (window as MonitorRecordingWindow).monitorUpdates ?? []);
+    const flowViews = () => page.evaluate(() => (window as MonitorRecordingWindow).flowViews ?? []);
+    const beforeFlip = { updates: (await updates()).length, views: (await flowViews()).length };
+    await typeLine(page, 'screen-change');
+    const afterFlip = (seen: ShownActivity[]) => ({
+      sawActive: seen.some(shown => shown.agentState === 'active'),
+      activeCarryingWaiting: seen.filter(shown => shown.agentState === 'active' && shown.program !== null),
+      latest: seen.at(-1) ?? null,
+    });
+    const flipOutcome = { activeCarryingWaiting: [], latest: { agentState: 'quiet', program: COMMAND } };
+    // A flow view is pulled after its change signal, so it may resolve after the screen is quiet again.
+    await expect.soft.poll(async () => {
+      const { sawActive: _pulledInTime, ...views } = afterFlip((await flowViews()).slice(beforeFlip.views));
+      return { monitorUpdates: afterFlip((await updates()).slice(beforeFlip.updates)), flowViews: views };
+    }, { timeout: STATUS_BUDGET_MS }).toEqual({ monitorUpdates: { sawActive: true, ...flipOutcome }, flowViews: flipOutcome });
+
+    await stopFakeProcess(binDir, COMMAND);
+    await expect.soft.poll(async () => ({
+      agentChip: await agentChip.innerText(),
+      derivedLine: await derivedLine.innerText(),
+      sawWaiting: (await updates()).some(update => update.program === COMMAND),
+    }), { timeout: STATUS_BUDGET_MS }).toEqual({
+      agentChip: expect.stringMatching(/^agent: quiet for \d+s$/),
+      derivedLine: quietDerivedLine,
+      sawWaiting: true,
+    });
+  } finally {
+    try { await stopAllFakeProcesses(binDir); }
+    finally {
+      try { await h.dispose(); }
+      finally { rmSync(binDir, { recursive: true, force: true }); }
+    }
+  }
+});
+
 test('with Waiting showing before Start, Start still injects the turn and the turn still stalls at the watchdog limit', { tag: '@ownapp' }, async () => {
   test.setTimeout(240_000);
   const h = await createControllerDesktopHarness();

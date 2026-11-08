@@ -2,6 +2,7 @@ import type { ChannelSpecs, SessionId } from './session';
 import type { UiSettings } from './settings';
 import type { PtyExitMsg } from './terminal';
 import type { TodoItem, TodoSource, TodoStatus, TodoTemplateList } from './todo';
+import type { WaitingValue } from '../waiting';
 
 export const MONITOR_CHANNELS = {
   monitorCapture: {
@@ -183,6 +184,8 @@ export interface MonitorUpdateMsg {
   bracketedPaste: boolean;
   agentState: AgentState;
   quietSince: number | null;
+  /** Null whenever `agentState` is `active`. */
+  waiting: WaitingValue | null;
 }
 
 export interface AgentInjectMsg {

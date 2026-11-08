@@ -18,35 +18,40 @@ const inProgress: FlowStateView = { stepName: 's', runStarted: 'never-started' a
 
 describe('deriveFlowView (§24.2.2 S5 — derived live status)', () => {
   it('augments an in_progress view with activity + n/m done + not-ready', () => {
-    const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'active'), todo('c', 'done')], 'active');
-    expect(v.derived).toEqual({ activity: 'active', todosDone: 2, todosTotal: 3, ready: false });
+    const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'active'), todo('c', 'done')], 'active', null);
+    expect(v.derived).toEqual({ activity: 'active', waiting: null, todosDone: 2, todosTotal: 3, ready: false });
+  });
+
+  it('carries the Waiting value beside the screen activity, which keeps its meaning', () => {
+    const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'active')], 'quiet', { program: 'MainThread', others: 1 });
+    expect(v.derived).toEqual({ activity: 'quiet', waiting: { program: 'MainThread', others: 1 }, todosDone: 1, todosTotal: 2, ready: false });
   });
 
   it('is ready when every todo is done', () => {
-    const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'done')], 'quiet');
-    expect(v.derived).toEqual({ activity: 'quiet', todosDone: 2, todosTotal: 2, ready: true });
+    const v = deriveFlowView(inProgress, [todo('a', 'done'), todo('b', 'done')], 'quiet', null);
+    expect(v.derived).toEqual({ activity: 'quiet', waiting: null, todosDone: 2, todosTotal: 2, ready: true });
   });
 
   it('is ready (vacuously) with no todos', () => {
-    const v = deriveFlowView(inProgress, [], 'quiet');
-    expect(v.derived).toEqual({ activity: 'quiet', todosDone: 0, todosTotal: 0, ready: true });
+    const v = deriveFlowView(inProgress, [], 'quiet', null);
+    expect(v.derived).toEqual({ activity: 'quiet', waiting: null, todosDone: 0, todosTotal: 0, ready: true });
   });
 
   it('counts in_progress todos as outstanding (not done)', () => {
-    const v = deriveFlowView(inProgress, [todo('a', 'in_progress'), todo('b', 'done')], 'quiet');
+    const v = deriveFlowView(inProgress, [todo('a', 'in_progress'), todo('b', 'done')], 'quiet', null);
     expect(v.derived).toMatchObject({ todosDone: 1, todosTotal: 2, ready: false });
   });
 
   it('is pure: same inputs → equal output, and the input view is untouched', () => {
     const todos = [todo('a', 'active')];
-    expect(deriveFlowView(inProgress, todos, 'active')).toEqual(deriveFlowView(inProgress, todos, 'active'));
+    expect(deriveFlowView(inProgress, todos, 'active', null)).toEqual(deriveFlowView(inProgress, todos, 'active', null));
     expect(inProgress.derived).toBeUndefined();
   });
 
   it('passes a non-in_progress view through unchanged (no step is being worked)', () => {
     const notStarted: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'not_started' };
-    expect(deriveFlowView(notStarted, [todo('a', 'active')], 'active')).toEqual(notStarted);
+    expect(deriveFlowView(notStarted, [todo('a', 'active')], 'active', null)).toEqual(notStarted);
     const done: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'done' };
-    expect(deriveFlowView(done, [], 'quiet').derived).toBeUndefined();
+    expect(deriveFlowView(done, [], 'quiet', null).derived).toBeUndefined();
   });
 });
