@@ -200,6 +200,22 @@ lexical escape (CWE-22), a symlink the caller would follow out (CWE-59), and a l
 the read (CWE-367). It lives in `src/main/`, not `src/shared/`, because it needs `node:fs` and `src/shared/`
 must stay renderer-importable.
 
+## Who can write a path — `src/main/ownerOnlyPath.ts`, never inline
+
+Code that trusts a location not to be swapped by another local user (a folder it reuses, a file the app will
+launch, a private directory it keeps a socket in) decides it through this module, never an inline mode or owner
+test. Three inline copies of this check had drifted apart: one checked the owner and no ancestors, two checked
+ancestors and no owner, and each walked symlinks differently. A path is safe only when the user or root owns it
+and no group or other user can write it, because a path's owner can always replace it.
+
+- `ownerOnlyChain(start, uid, stopAt?)` judges the real folder and every real ancestor, so a symlink cannot hide
+  an open folder (CWE-59).
+- `ownerOnlyPath(p, uid)` judges one file.
+- `isPrivateDirectory(stats, uid)` is the stricter check for a directory only the user may even read.
+
+Each result names its outcome (`ownerOnly`, `othersCanWrite`, `ownedByAnother`, `unreadable`), and a caller
+handles every one: the fix a user is told differs by outcome, and an unreadable path fails closed.
+
 ## Errno narrowing and error messages — `src/main/errno.ts`, never inline
 
 A caught value raises two questions — "which errno?" and "what do I tell the user?" — both answered by one

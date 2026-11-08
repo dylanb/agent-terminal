@@ -26,7 +26,7 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 **Prerequisite:** install both apps and the tools they need, as described in [Install](#install), including [Before you use it](#before-you-use-it).
 
 1. **Launch the controller and Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
-2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux, read [The `agent-terminal` command](#the-agent-terminal-command) first: the `.deb` needs `~/.local/bin` on your `PATH`, and an AppImage alone cannot keep a working command.
+2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux with AppImages, read [The `agent-terminal` command](#the-agent-terminal-command) first.
 3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
 4. **Pick a flow and start it.** Open a terminal in your repo (`agent-terminal ~/path/to/repo`), choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`.
 5. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
@@ -164,15 +164,14 @@ Assets: `agent-terminal-<version>-arm64.dmg`, `agent-terminal-<version>-arm64-ma
 Assets: `agent-terminal_<version>_amd64.deb`, `agent-terminal-<version>.AppImage`, and the same two files for `agent-terminal-controller`.
 
 - **`.deb`** (Debian, Ubuntu): run `sudo apt install ./agent-terminal_<version>_amd64.deb ./agent-terminal-controller_<version>_amd64.deb` from the download folder. Launch each app from your applications menu.
-- **`.AppImage`**: run `chmod +x agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage`, then start each file (`./agent-terminal-<version>.AppImage`).
+- **`.AppImage`**: run `chmod u+x,go-w agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage` (executable, and writable only by you), then start each file (`./agent-terminal-<version>.AppImage`).
 
 #### The `agent-terminal` command
 
 Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. To install it, open **Settings → Command line → Install** in the app, or use the install button on the "Startup paused" card.
 
 - It goes to `~/.local/bin` (then `~/bin`) when that folder is already on the app's own `PATH` when it starts, and only you can write to it. Otherwise it goes to `~/.agent-terminal/bin`, and a block is added to your shell profile that appends that folder to `PATH`. Either way, open a new shell afterwards.
-- **Linux `.deb`:** the package also links `/usr/bin/agent-terminal` to the app itself, which is not the command. So the command must go to `~/.local/bin`, which a stock Ubuntu profile puts on `PATH` before `/usr/bin` once the folder exists. Create it (`mkdir -p ~/.local/bin`), log out and back in so the desktop session, and the app launched from it, picks it up, then install the command. In a new shell, `command -v agent-terminal` should print a path under your home folder. If it prints `/usr/bin/agent-terminal`, the app did not see `~/.local/bin`: check that `echo $PATH` lists it before `/usr/bin`, log out and back in, and install again.
-- **Linux `.AppImage`:** a command installed from an AppImage stops working when that app exits, so there is no working command with an AppImage alone. Use the `.deb` if you want the command.
+- **Linux `.AppImage`:** the command launches the AppImage file. Keep the terminal and controller AppImages together in a folder only you can write to (Install refuses a folder, or a parent folder, that others can write or that another user owns, and an AppImage file that others can write: run `chmod go-w` on the file), either with the release file names or both renamed the same way (`agent-terminal-controller` replacing `agent-terminal` at the start of the name), because `--controller` starts the sibling file. A newer AppImage with the same file name keeps the command working. If you move or rename the file, reinstall the command.
 
 #### Before you use it
 
@@ -185,6 +184,7 @@ Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` 
 2. Relaunch both apps (macOS may block the replaced apps again; repeat the first-launch step).
 3. Open **Settings → Install examples** to pick up updated flows and loops. It previews the changes and asks before replacing any file you changed.
 4. If the apps moved, reinstall the `agent-terminal` command.
+5. Upgrading a Linux `.deb` from v0.2.0 or earlier: choose **Settings → Command line → Install** once. Until then plain `agent-terminal` does nothing, though `agent-terminal --controller` works.
 
 > **`simple-dev-v1`** (see [Bundled flows](#bundled-flows)) is not yet in a published release. It is available when built from source.
 

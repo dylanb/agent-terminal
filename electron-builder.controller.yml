@@ -6,9 +6,11 @@ directories:
 extraMetadata:
   name: agent-terminal-controller
   main: out/main/controller.js
+  desktopName: agent-terminal-controller.desktop
 mac:
   icon: build/controller-icon.png
 linux:
+  executableName: agent-terminal-controller
   icon: build/controller-icon.png
 # Appended to the base config's extraResources; the packaged controller reads them back through
 # resolveWindowIconPath.
