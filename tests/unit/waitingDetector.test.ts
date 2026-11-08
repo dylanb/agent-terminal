@@ -273,13 +273,17 @@ describe('the controller activity\'s lookups and failures', () => {
 });
 
 describe('what the controller activity shows while quiet', () => {
-  it('follows a change of program or count while it stays Waiting', async () => {
+  it.each([
+    ['program and count', { program: 'node', others: 1 }, { program: 'pytest', others: 0 }],
+    ['count only', { program: 'node', others: 1 }, { program: 'node', others: 0 }],
+    ['program only', { program: 'node', others: 0 }, { program: 'pytest', others: 0 }],
+  ] as const)('follows a change of %s while it stays Waiting', async (_, before, afterChange) => {
     const changed = 20_000;
-    const { detector, published } = harness((now) => (now < changed ? { program: 'node', others: 1 } : { program: 'pytest', others: 0 }));
+    const { detector, published } = harness((now) => (now < changed ? before : afterChange));
     detector.screen('quiet');
     await runTo(changed + AC_BOUND_MS);
-    expect({ first: published.some(({ activity }) => activity.activity === 'waiting' && activity.waiting.program === 'node' && activity.waiting.others === 1), now: detector.current() })
-      .toEqual({ first: true, now: { activity: 'waiting', waiting: { program: 'pytest', others: 0 } } });
+    expect({ first: published.some(({ activity }) => activity.activity === 'waiting' && activity.waiting.program === before.program && activity.waiting.others === before.others), now: detector.current() })
+      .toEqual({ first: true, now: { activity: 'waiting', waiting: afterChange } });
     detector.dispose();
   });
 
