@@ -45,6 +45,7 @@ export type PromptSource =
   | { kind: 'typed' }
   | { kind: 'queued' }
   | { kind: 'sdk' }
+  | { kind: 'scheduled' }
   | { kind: 'task-notification'; producer: string }
   | { kind: 'peer'; name: string; senderTaskId: string };
 
@@ -62,6 +63,7 @@ const SOURCE_FIELDS: { [K in PromptSource['kind']]: (source: Extract<PromptSourc
   typed: () => ({ origin: { kind: 'human' }, promptSource: 'typed', turnOrigin: 'human' }),
   queued: () => ({ origin: { kind: 'human' }, promptSource: 'queued', turnOrigin: 'human' }),
   sdk: () => ({ promptSource: 'sdk', turnOrigin: 'sdk' }),
+  scheduled: () => ({ origin: { kind: 'scheduled' }, promptSource: 'system', turnOrigin: 'scheduled' }),
   'task-notification': (s) => ({ origin: { kind: 'task-notification', producer: s.producer }, promptSource: 'system', turnOrigin: 'task_notification' }),
   peer: (s) => ({ origin: { kind: 'peer', name: s.name, senderTaskId: s.senderTaskId }, promptSource: 'system', turnOrigin: 'peer' }),
 };

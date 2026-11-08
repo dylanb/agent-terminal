@@ -144,3 +144,16 @@ export function composeHumanDecisionRunners<View>(autoGate: AutoGate, deps: Huma
     },
   };
 }
+
+export interface HumanApproveDeps {
+  /** Why the repository's pending pickup confirmation holds every gate decision, or null when none is pending. */
+  pickupHold: (repoKey: string) => string | null;
+  bindingOf: (repoKey: string, step: string) => LoopBinding | null;
+  approve: (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome>;
+}
+
+/** The human approve both the gate's Approve control and the MCP approve run, with its outcome. It tells the gate of
+ *  the decision before it refuses for a pickup hold or a retired binding: N9b.5(e) counts a refused attempt. */
+export function composeHumanApprove(_autoGate: Pick<AutoGate, 'humanDecision'>, _deps: HumanApproveDeps): (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome> {
+  return async () => ({ kind: 'refused', reason: 'not built' });
+}

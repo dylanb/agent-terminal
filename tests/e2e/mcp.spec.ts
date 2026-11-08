@@ -8,18 +8,21 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { PLAN_V2_ROSTER, seedFakeAgentV2, seedFakeGhGit, seedIsolatedClaudeConfig, writeCatalogEntry, type FakeWorkMode } from './fakeTools';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 import { dump, load } from 'js-yaml';
-import { readFakeClaudeLog, runFakeClaude, seedFakeClaude, type SeededFakeClaude } from '../helpers/fakeClaudeHarness';
+import { readFakeClaudeLog, resultText, runFakeClaude, seedFakeClaude, type SeededFakeClaude } from '../helpers/fakeClaudeHarness';
 import type { FakeClaudeRecord, McpCallResult } from '../helpers/fakeClaude';
 import { snapshotTree } from '../helpers/treeSnapshot';
 import { distinctTodos } from '../helpers/todoFixtures';
 import { APP_MCP_ACK_TIMEOUT_ENV, MCP_WINDOW_ENV } from '../../src/shared/mcp';
 import { windowBridgeDir } from '../../src/main/mcpWindowBridge';
+import { readGateRunState, writeGateRunState } from '../../src/main/gateRunState';
+import { gateDecisionKind, parseAutoHaltReasons } from '../../src/shared/audit';
+import { auditGateEntries, seedTrustedFlow } from './autoGateHarness';
 
 // The Claude Code integration (#322, slice 1): the operator installs it from Settings, and every Claude Code session
 // in the window — typed or engine-driven — lists the agent-terminal tools and reads its own window's state.
 
 const SERVER = 'agent-terminal';
-const SLICE_TOOLS = ['read_state'];
+const SLICE_TOOLS = ['approve', 'read_state'];
 const USER_STATE = { numStartups: 3, mcpServers: { mine: { type: 'stdio', command: 'my-server', args: [] } } };
 const USER_SETTINGS = { theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] } };
 const APP_ARTIFACT_REL = '.agent-terminal/loop/artifacts/plan.md';
@@ -54,7 +57,7 @@ interface Machine {
 
 /** A temp home, a separate temp app home, a Claude Code config of the test's own holding the operator's own entries, a repository with a
  *  `.gitignore`, and the fake `claude` first on PATH. */
-function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; reviews?: ('full' | 'needs-human')[] }; gitignore?: boolean } = {}): Machine {
+function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; reviews?: ('full' | 'needs-human')[] }; gitignore?: boolean; hold?: string } = {}): Machine {
   const home = temp('agent-term-e2e-mcp-home-');
   const appHome = temp('agent-term-e2e-mcp-app-home-');
   const config = seedIsolatedClaudeConfig('agent-term-e2e-mcp-config-');
@@ -67,7 +70,7 @@ function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; rev
   const { binDir, logFile: ghLog } = seedFakeGhGit('agent-term-e2e-mcp-bin-');
   temps.push(binDir);
   if (opts.agent) seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: opts.agent.work ?? 'complete', review: 'full', ...(opts.agent.verdicts ? { verdicts: opts.agent.verdicts } : {}), ...(opts.agent.reviews ? { reviews: opts.agent.reviews } : {}) });
-  const claude = seedFakeClaude(binDir, opts.agent ? { agent: join(binDir, 'fake-agent') } : {});
+  const claude = seedFakeClaude(binDir, { ...(opts.agent ? { agent: join(binDir, 'fake-agent') } : {}), ...(opts.hold ? { hold: opts.hold } : {}) });
   return { home, appHome, config, repo, binDir, ghLog, claude };
 }
 
@@ -120,7 +123,7 @@ function sessions(m: Machine): FakeClaudeRecord[][] {
 
 const ended = (m: Machine): number => sessions(m).filter((s) => s.some((r) => r.event === 'session-end')).length;
 const listedTools = (records: FakeClaudeRecord[] | undefined): string[] | undefined =>
-  records?.flatMap((r) => (r.event === 'tools' && r.server === SERVER ? [r.tools] : []))[0];
+  records?.flatMap((r) => (r.event === 'tools' && r.server === SERVER ? [[...r.tools].sort()] : []))[0];
 const readCalls = (records: FakeClaudeRecord[] | undefined): Extract<FakeClaudeRecord, { event: 'call' }>[] =>
   (records ?? []).filter((r): r is Extract<FakeClaudeRecord, { event: 'call' }> => r.event === 'call' && r.tool === 'read_state');
 const resultState = (result: McpCallResult | undefined): Record<string, unknown> | undefined => {
@@ -361,14 +364,14 @@ function seedGateFlow(repo: string): void {
 }
 
 /** The fixture's own plan loop: no pickup, so an approve with no pull request posts its notice, and a work prompt that
- *  makes the engine's turn read the window. */
-function ownPlanLoop(config: string): void {
+ *  makes the engine's turn read the window, then make `calls`. */
+function ownPlanLoop(config: string, calls: string[] = []): void {
   const dir = join(config, 'loops-v2', 'plan-loop');
   const defPath = join(dir, 'plan-loop.yaml');
   const def = load(readFileSync(defPath, 'utf8')) as { pickup?: unknown; work: { recipe: string } };
   delete def.pickup;
   writeFileSync(defPath, dump(def));
-  appendFileSync(join(dir, def.work.recipe), '\nmcp read_state {}\n');
+  appendFileSync(join(dir, def.work.recipe), ['', 'mcp read_state {}', ...calls, ''].join('\n'));
 }
 
 const latestReport = (repo: string): unknown => {
@@ -589,4 +592,290 @@ test('a read before Start names the flow the picker has selected, among the flow
   await expect.poll(() => ended(m)).toBe(1);
   const state = resultState(readCalls(sessions(m)[0])[0]?.result) as ReadState | undefined;
   expect.soft({ selected: state?.flow?.selected, startable: state?.startable }).toEqual({ selected: 'picker-other', startable: pickerEntries });
+});
+
+// Approve through MCP and the human-started-turn guard (#322, slice 2).
+
+type ApproveRecord = Extract<FakeClaudeRecord, { event: 'call' | 'call-unsent' | 'call-lost' }>;
+const approveRecords = (records: FakeClaudeRecord[] | undefined): ApproveRecord[] =>
+  (records ?? []).filter((r): r is ApproveRecord => (r.event === 'call' || r.event === 'call-unsent' || r.event === 'call-lost') && r.tool === 'approve');
+const stopCount = (records: FakeClaudeRecord[] | undefined): number => (records ?? []).filter((r) => r.event === 'stop').length;
+
+/** The ticket's refusal reasons, each as the wording its message carries. */
+const REFUSAL_WORDING = {
+  'not this window': /not this session.s window/i,
+  'origin undetermined': /turn origin could not be determined/i,
+  'not human-started': /not a human-started turn/i,
+  'no gate waiting': /no gate waiting/i,
+  'not valid': /not valid in the current state/i,
+} as const;
+
+/** `taken` for a success, else the one refusal reason the result names. */
+function outcomeOf(record: ApproveRecord | undefined): string {
+  if (record === undefined) return 'no approve call';
+  if (record.event !== 'call') return `not answered: ${record.reason}`;
+  if (record.result === undefined) return `rejected: ${record.error ?? ''}`;
+  const said = resultText(record.result);
+  if (!record.result.isError) return 'taken';
+  const named = Object.entries(REFUSAL_WORDING).filter(([, wording]) => wording.test(said)).map(([name]) => name);
+  return named.length === 1 ? named[0] : `unrecognised: ${said}`;
+}
+
+const approveCall = (target: { window?: string; repo?: string; step: string; turn: string }, firstKey: 'window' | 'repo' = 'window'): string => {
+  const window = target.window ?? '$read_state.window.id';
+  const repo = target.repo ?? '$read_state.repo.key';
+  const args = firstKey === 'window' ? { window, repo, step: target.step, turn: target.turn } : { repo, window, step: target.step, turn: target.turn };
+  return `mcp approve ${JSON.stringify(args)}`;
+};
+const AT_THE_GATE = { step: '$read_state.gate.step', turn: '$read_state.gate.turn' };
+const NO_GATE = { step: 'plan', turn: 'work' };
+/** A todo's approve starts with its repository, so the terminal shows when the Insert has landed. */
+const TODO_MARK = 'mcp approve {"repo"';
+
+/** Inserts `text` as a todo from the todo tab, as the operator does, then submits it with Enter. */
+async function insertTodoAndSubmit(text: string): Promise<void> {
+  const appEl = page.locator('#app');
+  if (!(await page.locator('#tab-todo').isVisible())) await page.locator('#qs').click();
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill(text);
+  await page.locator('#todo-add-btn').click();
+  await page.locator('.todo').filter({ hasText: text }).getByRole('button', { name: 'Send todo to agent' }).click();
+  await expect(page.locator('.xterm-rows')).toContainText(TODO_MARK);
+  await page.keyboard.press('Enter');
+  if (/drawer-open/.test((await appEl.getAttribute('class')) ?? '')) await page.locator('#qs').click();
+}
+
+async function pasteAndSubmit(text: string): Promise<void> {
+  await (app as ElectronApplication).evaluate(({ clipboard }, t) => clipboard.writeText(t), text);
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+V');
+  await page.keyboard.press('Enter');
+}
+
+/** Submits one prompt in the window's interactive session, the `index`th session the fake ran, and returns the
+ *  outcome of the last approve that prompt's turn made. */
+async function approveTurn(m: Machine, submit: () => Promise<void>, index = 0): Promise<string> {
+  const session = (): FakeClaudeRecord[] | undefined => sessions(m)[index];
+  const stopsBefore = stopCount(session());
+  const approvesBefore = approveRecords(session()).length;
+  await submit();
+  await expect.poll(() => stopCount(session())).toBe(stopsBefore + 1);
+  return outcomeOf(approveRecords(session()).slice(approvesBefore).at(-1));
+}
+
+test("tracer: a typed approve in the engine-driven session closes the gate and advances the flow, while the engine's own turn and a submitted todo are refused as not human-started and leave the gate as it was", { tag: '@ownapp' }, async () => {
+  const m = machine({ agent: { verdicts: [verdictOutput('clean')] } });
+  seedGateFlow(m.repo);
+  ownPlanLoop(m.config, [approveCall(NO_GATE)]);
+  const runStateFile = join(m.repo, '.agent-terminal', 'loop', 'run-state.yaml');
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+  await page.locator('#flow-strip .flow-control').click();
+  await expect.poll(() => (existsSync(runStateFile) ? readFileSync(runStateFile, 'utf8') : ''), { timeout: 40_000 }).toContain('verdict: clean');
+  await page.locator('#flow-strip .loopstat').click();
+  await expect(page.locator('#loop-panel [data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  const engineTurns = approveRecords(sessions(m)[0]).map(outcomeOf);
+
+  const shown = async () => ({
+    step: await page.locator('#flow-strip .stn.active .nm').textContent(),
+    approveOffered: await page.locator('#loop-panel [data-gate-option="approve"]').isVisible(),
+    runState: readFileSync(runStateFile, 'utf8'),
+    loopMessage: controllerOf(app as ElectronApplication).loopMessage() ?? null,
+  });
+  await approveTurn(m, () => typeCommand('mcp read_state {}'));
+  const beforeTodo = await shown();
+  const todo = await approveTurn(m, () => insertTodoAndSubmit(approveCall(AT_THE_GATE, 'repo')));
+  const afterTodo = await shown();
+  const typed = await approveTurn(m, () => typeCommand(approveCall(AT_THE_GATE)));
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('done', { timeout: 15_000 });
+  expect.soft({
+    engineTurns: [...new Set(engineTurns)],
+    todo,
+    unchangedByTodo: afterTodo,
+    typed,
+    approveStillOffered: await page.locator('#loop-panel [data-gate-option="approve"]').isVisible(),
+    sideEffect: controllerOf(app as ElectronApplication).loopMessage()?.reason,
+  }).toEqual({
+    engineTurns: ['not human-started'],
+    todo: 'not human-started',
+    unchangedByTodo: beforeTodo,
+    typed: 'taken',
+    approveStillOffered: false,
+    sideEffect: expect.stringContaining('no PR to mark ready'),
+  });
+});
+
+test('with no gate waiting, an approve from a typed, pasted, post-/clear or post-/compact prompt gets past the guard to "no gate waiting", while a submitted todo is not human-started and another window is refused first', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+  const starts = (cause: string): number => (sessions(m)[0] ?? []).filter((r) => r.event === 'session' && r.cause === cause).length;
+
+  await approveTurn(m, () => typeCommand('mcp read_state {}'));
+  const typed = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
+  const otherWindow = await approveTurn(m, () => typeCommand(approveCall({ ...NO_GATE, window: 'another-window' })));
+  const pasted = await approveTurn(m, () => pasteAndSubmit(approveCall(NO_GATE)));
+  const todo = await approveTurn(m, () => insertTodoAndSubmit(approveCall(NO_GATE, 'repo')));
+  await typeCommand('/clear');
+  await expect.poll(() => starts('clear')).toBe(1);
+  await approveTurn(m, () => typeCommand('mcp read_state {}'));
+  const afterClear = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
+  await typeCommand('/compact');
+  await expect.poll(() => starts('compact')).toBe(1);
+  const afterCompact = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
+  expect.soft({ typed, otherWindow, pasted, todo, afterClear, afterCompact }).toEqual({
+    typed: 'no gate waiting',
+    otherWindow: 'not this window',
+    pasted: 'no gate waiting',
+    todo: 'not human-started',
+    afterClear: 'no gate waiting',
+    afterCompact: 'no gate waiting',
+  });
+});
+
+test('a -p, piped or launch prompt is not human-started, nor is a prompt typed into the turn a launch prompt started, nor a -p session run beside a human-started turn, while a read works there and the next typed prompt is human', { tag: '@ownapp' }, async () => {
+  const hold = join(temp('agent-term-e2e-mcp-hold-'), 'hold');
+  const m = machine({ hold });
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  const prompt = (call: string): string => `$'mcp read_state {}\\n${call}'`;
+  const headless = async (command: string): Promise<{ read: boolean | undefined; approve: string }> => {
+    const endedBefore = ended(m);
+    await typeCommand(command);
+    await expect.poll(() => ended(m)).toBe(endedBefore + 1);
+    const records = sessions(m).at(-1);
+    return { read: readCalls(records)[0]?.result?.isError === false, approve: outcomeOf(approveRecords(records).at(-1)) };
+  };
+  const print = await headless(`claude -p ${prompt(approveCall(NO_GATE))}`);
+  const printOtherWindow = await headless(`claude -p ${prompt(approveCall({ ...NO_GATE, window: 'another-window' }))}`);
+  const piped = await headless(`printf '%s\\n' 'mcp read_state {}' '${approveCall(NO_GATE)}' | claude`);
+
+  writeFileSync(hold, '');
+  const sessionsBefore = sessions(m).length;
+  await typeCommand(`claude ${prompt(approveCall(NO_GATE))}`);
+  await expect.poll(() => sessions(m)[sessionsBefore]?.some((r) => r.event === 'held') ?? false).toBe(true);
+  const launched = (): FakeClaudeRecord[] | undefined => sessions(m)[sessionsBefore];
+  const launchTurn = outcomeOf(approveRecords(launched()).at(-1));
+  const joinedBefore = approveRecords(launched()).length;
+  await typeCommand(approveCall(NO_GATE));
+  await expect.poll(() => launched()?.some((r) => r.event === 'prompt' && r.source === 'queued') ?? false).toBe(true);
+  rmSync(hold);
+  await expect.poll(() => stopCount(launched())).toBe(1);
+  const joined = outcomeOf(approveRecords(launched()).slice(joinedBefore).at(-1));
+  const typedNext = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)), sessionsBefore);
+
+  writeFileSync(hold, '');
+  const heldBefore = (launched() ?? []).filter((r) => r.event === 'held').length;
+  await typeCommand('mcp read_state {}');
+  await expect.poll(() => (launched() ?? []).filter((r) => r.event === 'held').length).toBe(heldBefore + 1);
+  const [endpoint] = readdirSync(windowBridgeDir(m.appHome)).map((name) => join(windowBridgeDir(m.appHome), name));
+  const beside = { PATH: `${m.binDir}:${process.env.PATH}`, HOME: m.home, CLAUDE_CONFIG_DIR: m.config, FAKE_CLAUDE_LOG: m.claude.logFile, [MCP_WINDOW_ENV]: endpoint };
+  await runFakeClaude(m.claude.command, ['-p', `mcp read_state {}\n${approveCall(NO_GATE)}`], { env: beside, cwd: m.repo, signal: AbortSignal.timeout(60_000) });
+  const besideHumanTurn = outcomeOf(approveRecords(sessions(m).at(-1)).at(-1));
+  rmSync(hold);
+  expect.soft({ print, printOtherWindow, piped, launchTurn, joined, typedNext, besideHumanTurnRefused: ['not human-started', 'origin undetermined', 'not this window'].includes(besideHumanTurn) ? true : besideHumanTurn }).toEqual({
+    print: { read: true, approve: 'not human-started' },
+    printOtherWindow: { read: true, approve: 'not this window' },
+    piped: { read: true, approve: 'not human-started' },
+    launchTurn: 'not human-started',
+    joined: 'not human-started',
+    typedNext: 'no gate waiting',
+    besideHumanTurnRefused: true,
+  });
+});
+
+test("an approve typed while the relaunched run's pickup waits for confirmation is refused as not valid, naming the confirmation, and leaves the gate as it was", { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 150_000);
+  const m = machine({ agent: { verdicts: [verdictOutput('clean')] } });
+  seedGateFlow(m.repo);
+  const loopDir = join(m.repo, '.agent-terminal', 'loop');
+  const runStateFile = join(loopDir, 'run-state.yaml');
+  const flowStateFile = join(m.repo, '.agent-terminal', 'flow-state.yaml');
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+  await page.locator('#flow-strip .flow-control').click();
+  await expect.poll(() => (existsSync(runStateFile) ? readFileSync(runStateFile, 'utf8') : ''), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readFileSync(`${m.ghLog}.pr-created`, 'utf8').trim()).toBe('4242');
+  await app?.close();
+  app = undefined;
+  rmSync(join(loopDir, 'run-pickup.yaml'));
+
+  await launch(m, { FAKE_GH_BRANCH_PR: '4242' });
+  await typeCommand(`cd "${m.repo}"`);
+  const confirmDialog = page.getByRole('alertdialog').filter({ hasText: 'ticket and pull request' });
+  await expect(confirmDialog).toBeVisible({ timeout: 15_000 });
+  await confirmDialog.getByRole('button', { name: 'Not now' }).click();
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(2);
+  await approveTurn(m, () => typeCommand('mcp read_state {}'), 1);
+  const shown = () => ({
+    runState: readFileSync(runStateFile, 'utf8'),
+    flowState: readFileSync(flowStateFile, 'utf8'),
+    loopMessage: controllerOf(app as ElectronApplication).loopMessage() ?? null,
+    prReady: readFileSync(m.ghLog, 'utf8').includes('gh pr ready'),
+  });
+  const before = shown();
+  const outcome = await approveTurn(m, () => typeCommand(approveCall({ step: 'plan', turn: 'consolidate-plan' })), 1);
+  const record = approveRecords(sessions(m)[1]).at(-1);
+  const said = record?.event === 'call' && record.result !== undefined ? resultText(record.result) : '';
+  expect({ outcome, namesConfirmation: said.includes('Confirm the run'), after: shown() }).toEqual({ outcome: 'not valid', namesConfirmation: true, after: { ...before, prReady: false } });
+});
+
+test('an approve typed at a halted auto gate showing a failed effect is a human decision: it clears the marker, so the run it ends reports no failed effect', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 150_000);
+  const m = machine({ agent: { verdicts: [verdictOutput('stop for a human')] } });
+  seedGateFlow(m.repo);
+  rmSync(join(m.repo, '.agent-terminal', 'flow.yaml'));
+  seedTrustedFlow(
+    m.appHome,
+    m.repo,
+    'v2-auto-gate',
+    'name: v2-auto-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    gate_authority: auto\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+  );
+  ownPlanLoop(m.config);
+  const runStateFile = join(m.repo, '.agent-terminal', 'loop', 'run-state.yaml');
+  const flowStateFile = join(m.repo, '.agent-terminal', 'flow-state.yaml');
+  const autoHalts = (): (string[] | null)[] =>
+    auditGateEntries(m.appHome, m.repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt').map((e) => parseAutoHaltReasons(e.cmd));
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+  await page.locator('#flow-strip .flow-control').click();
+  await expect.poll(() => (existsSync(runStateFile) ? readFileSync(runStateFile, 'utf8') : ''), { timeout: 40_000 }).toContain('verdict: stop for a human');
+  await expect.poll(() => autoHalts().flat(), { timeout: 10_000 }).toContain('stop-for-a-human');
+  await app?.close();
+  app = undefined;
+  const persisted = readGateRunState(m.repo);
+  if (persisted.kind !== 'ok') throw new Error(`gate-run.yaml is ${persisted.kind}`);
+  writeGateRunState(m.repo, { ...persisted.state, failedEffect: { state: 'set', detail: 'the issue body could not be updated', reported: false } });
+
+  await launch(m);
+  await typeCommand(`cd "${m.repo}"`);
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(2);
+  await approveTurn(m, () => typeCommand('mcp read_state {}'), 1);
+  const haltsBefore = autoHalts().length;
+  const outcome = await approveTurn(m, () => typeCommand(approveCall(AT_THE_GATE)), 1);
+  const after = readGateRunState(m.repo);
+  expect({
+    outcome,
+    step: /^step: (\S+)$/m.exec(readFileSync(flowStateFile, 'utf8'))?.[1],
+    failedEffect: after.kind === 'ok' ? after.state.failedEffect : after.kind,
+    haltsSinceApprove: autoHalts().slice(haltsBefore),
+  }).toEqual({ outcome: 'taken', step: 'done', failedEffect: null, haltsSinceApprove: [] });
 });

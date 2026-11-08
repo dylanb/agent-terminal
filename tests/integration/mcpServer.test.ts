@@ -42,6 +42,12 @@ describe("the agent-terminal MCP server's tool calls", () => {
     });
   });
 
+  it('rejects an approve missing the step it acts on, naming it, and never reaches the window', async () => {
+    const { client, windowCalls } = await session();
+    const noStep = await rejection(client.callTool({ name: 'approve', arguments: { window: 'window-1', repo: '/repo', turn: 'consolidate-plan' } }));
+    expect({ noStep, windowCalls: windowCalls() }).toEqual({ noStep: expect.stringMatching(/\bstep\b/), windowCalls: 0 });
+  });
+
   it('rejects an argument whose name every object inherits, naming it, and never reaches the window', async () => {
     const { client, windowCalls } = await session();
     const inherited = await rejection(client.callTool({ name: 'read_state', arguments: { constructor: 1 } }));
@@ -58,6 +64,22 @@ describe("the agent-terminal MCP server's tool calls", () => {
     const { tools } = await client.listTools();
     const call = await rejection(client.callTool({ name: 'read_state', arguments: {} }));
     expect({ tools, call }).toEqual({ tools: [], call: expect.stringContaining('read_state') });
+  });
+
+  it('hands the window the Claude Code session the call comes from', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'atsrv-'));
+    cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+    const callers: unknown[] = [];
+    const window = await openWindowBridge({ appHome: home, build: 'b', handle: async (_request, caller) => (callers.push(caller), {}) });
+    cleanup.push(() => window.close());
+    const server = createMcpServer({ endpoint: window.endpoint, build: 'b', ackTimeoutMs: 5_000, timers: createVirtualClock(), caller: { session: 4242 } });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test', version: '1' });
+    await client.connect(clientSide);
+    cleanup.push(() => client.close());
+    await client.callTool({ name: 'read_state', arguments: {} });
+    expect(callers).toEqual([{ session: 4242 }]);
   });
 
   it('hands a valid call to the window and returns its answer', async () => {

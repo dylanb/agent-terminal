@@ -1,13 +1,13 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_SERVER_NAME } from '../shared/mcp';
-import type { AckTimers } from '../shared/mcpBridge';
+import type { AckTimers, McpCaller } from '../shared/mcpBridge';
 import { invalidToolArguments, mcpToolDefinitions, toolResult } from './mcpTools';
 import { callWindow } from './mcpWindowClient';
 
 /** The MCP server one Claude Code session runs. `endpoint` is the session's window, or null outside agent-terminal,
- *  where it lists no tools. */
-export function createMcpServer<H>(opts: { endpoint: string | null; build: string; ackTimeoutMs: number; timers: AckTimers<H> }): Server {
+ *  where it lists no tools; `caller` is that session. */
+export function createMcpServer<H>(opts: { endpoint: string | null; build: string; ackTimeoutMs: number; timers: AckTimers<H>; caller?: McpCaller }): Server {
   const server = new Server({ name: MCP_SERVER_NAME, version: opts.build }, { capabilities: { tools: {} } });
   const { endpoint } = opts;
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: endpoint === null ? [] : mcpToolDefinitions() }));

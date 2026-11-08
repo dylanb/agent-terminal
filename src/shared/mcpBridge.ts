@@ -4,6 +4,11 @@ export interface WindowRequest {
   args: unknown;
 }
 
+/** The Claude Code session a call comes from: its process id, or null when the server could not tell. */
+export interface McpCaller {
+  session: number | null;
+}
+
 /** `app-unreachable`: the window never started the operation. `result-unknown`: the connection was lost after it
  *  started, so it may have run. */
 export type WindowCallOutcome =

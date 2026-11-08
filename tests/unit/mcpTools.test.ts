@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mcpToolNames, toolResult, type McpToolResult } from '../../src/main/mcpTools';
+import { invalidToolArguments, mcpToolNames, toolResult, type McpToolResult } from '../../src/main/mcpTools';
 
 const CLAUDE_CODE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,128}$/;
 const text = (result: McpToolResult): string => result.content.map((c) => c.text).join('\n');
@@ -7,8 +7,26 @@ const text = (result: McpToolResult): string => result.content.map((c) => c.text
 describe('the tools the agent-terminal MCP server lists', () => {
   it('are the tools this build supports, each named as Claude Code accepts', () => {
     const names = mcpToolNames();
-    expect(names).toEqual(['read_state']);
+    expect([...names].sort()).toEqual(['approve', 'read_state']);
     expect(names.filter((name) => !CLAUDE_CODE_TOOL_NAME.test(name))).toEqual([]);
+  });
+});
+
+describe("the arguments approve takes", () => {
+  const TARGET = { window: 'window-1', repo: '/repo', step: 'plan', turn: 'consolidate-plan' };
+  it('are the window, repository, step and turn of the gate, each named when it is missing or not a string', () => {
+    const { step: _step, ...noStep } = TARGET;
+    expect({
+      valid: invalidToolArguments('approve', TARGET),
+      noStep: invalidToolArguments('approve', noStep),
+      numericTurn: invalidToolArguments('approve', { ...TARGET, turn: 7 }),
+      extra: invalidToolArguments('approve', { ...TARGET, option: 'polish' }),
+    }).toEqual({
+      valid: null,
+      noStep: expect.stringContaining('step'),
+      numericTurn: expect.stringContaining('turn'),
+      extra: expect.stringContaining('"option"'),
+    });
   });
 });
 

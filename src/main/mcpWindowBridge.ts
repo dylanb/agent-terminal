@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
-import { bridgeLineReader, encodeBridgeMessage, type WindowRequest } from '../shared/mcpBridge';
+import { bridgeLineReader, encodeBridgeMessage, type McpCaller, type WindowRequest } from '../shared/mcpBridge';
 import { errMsg, isErrno } from './errno';
 import { preparePrivateDir } from './ownedDir';
 
@@ -21,7 +21,7 @@ export function windowBridgeDir(appHome: string): string {
 export async function openWindowBridge(opts: {
   appHome: string;
   build: string;
-  handle: (request: WindowRequest) => Promise<unknown>;
+  handle: (request: WindowRequest, caller: McpCaller) => Promise<unknown>;
 }): Promise<WindowBridge> {
   const dir = windowBridgeDir(opts.appHome);
   if (!await preparePrivateDir(dir)) throw new Error(`The MCP endpoint directory ${dir} must be owned by the current user with permissions 0700.`);
@@ -48,7 +48,7 @@ export async function openWindowBridge(opts: {
         stage = 'answering';
         const { request } = message;
         Promise.resolve()
-          .then(() => opts.handle(request))
+          .then(() => opts.handle(request, { session: null }))
           .then((value) => encodeBridgeMessage({ type: 'result', value }))
           .then(
             (line) => {
