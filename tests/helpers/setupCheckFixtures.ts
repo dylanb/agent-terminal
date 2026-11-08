@@ -1,4 +1,13 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type {
+  DestRelativePath,
+  InstallDestinationId,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+  InstallPreviewId,
+  RetiredExample,
+  SetupDismissReply,
+  SetupStatusReply,
+} from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
@@ -45,16 +54,58 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
   entries,
 });
 
+const EMPTY_REPORT = { created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] };
+
+export const cleanPreview = (id: string): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: [{ destination: 'flow', conflict: false }],
+  retired: [],
+  retiredFallback: null,
+});
+
+export const differingPreview = (id: string, differing: InstallDestinationId[]): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: differing.map((destination) => ({
+    destination,
+    conflict: true as const,
+    files: [`${destination}-file.yaml` as DestRelativePath],
+  })),
+  retired: [],
+  retiredFallback: null,
+});
+
+export const retiredPreview = (id: string): InstallExamplesPreview => ({
+  ok: true,
+  previewId: id as InstallPreviewId,
+  destinations: [{ destination: 'flow', conflict: false }],
+  retired: [{ destination: 'flow', rel: 'old-flow' as DestRelativePath } satisfies RetiredExample],
+  retiredFallback: null,
+});
+
+export const installSucceeded = (): InstallExamplesResult => ({ ok: true, ...EMPTY_REPORT });
+export const installFailed = (error: string): InstallExamplesResult => ({ ok: false, error, ...EMPTY_REPORT });
+
+export interface InstallRequest {
+  previewId: string;
+  replace: InstallDestinationId[];
+  removeRetired: boolean;
+}
+
+type ScriptedPreview = InstallExamplesPreview | { reject: string };
+type ScriptedInstall = InstallExamplesResult | { reject: string };
+
 type Scripted = SetupStatusReply | { reject: string };
 type ScriptedDismiss = SetupDismissReply | { reject: string };
+type ScriptedSetupRun = SetupFlowRun | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
- *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
- *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
+ *  whatever `landFocusOn` names, as the composition root's fallback does. Every status request is
+ *  recorded by repository; `examples` scripts the preview and install replies and records each install request. Each `dismiss` call is recorded, and answers the
  *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
- *  by repository, and answers the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued;
- *  each `announce` is recorded. */
+ *  by repository, and answers (or rejects with) the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -62,15 +113,21 @@ export function fakeSetupDeps() {
   let blocking = false;
   const closedListeners = new Set<() => void>();
   let landing: HTMLElement | null = null;
-  const installOpens: unknown[] = [];
-  let atInstallOpen: () => unknown = () => null;
+  const statusRequests: string[] = [];
+  const previewReplies: ScriptedPreview[] = [];
+  const installReplies: ScriptedInstall[] = [];
+  const installRequests: InstallRequest[] = [];
+  let previewCount = 0;
+  let previewHold: Promise<void> | null = null;
+  let installHold: Promise<void> | null = null;
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
   const setupRuns: string[] = [];
-  const setupRunReplies: SetupFlowRun[] = [];
-  const announcements: Array<{ title: string; message: string }> = [];
+  const setupRunReplies: ScriptedSetupRun[] = [];
+  let setupRunHold: Promise<void> | null = null;
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
+      statusRequests.push(repoKey);
       const held = holds.get(repoKey);
       if (held !== undefined) {
         holds.delete(repoKey);
@@ -88,15 +145,32 @@ export function fakeSetupDeps() {
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
-    openInstallExamples: () => {
-      installOpens.push(atInstallOpen());
+    previewExamples: async () => {
+      previewCount += 1;
+      const held = previewHold;
+      previewHold = null;
+      if (held !== null) await held;
+      const next = previewReplies.shift() ?? { ok: false as const, error: 'no preview scripted' };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
+    },
+    installExamples: async (previewId, choice) => {
+      installRequests.push({ previewId, replace: [...choice.replace], removeRetired: choice.removeRetired });
+      const held = installHold;
+      installHold = null;
+      if (held !== null) await held;
+      const next = installReplies.shift() ?? installFailed('no install scripted');
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
     },
     runSetupFlow: async (repoKey) => {
       setupRuns.push(repoKey);
-      return setupRunReplies.shift() ?? { ok: true };
-    },
-    announce: (title, message) => {
-      announcements.push({ title, message });
+      const held = setupRunHold;
+      setupRunHold = null;
+      if (held !== null) await held;
+      const next = setupRunReplies.shift() ?? { ok: true };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -129,22 +203,40 @@ export function fakeSetupDeps() {
     },
     /** Every dismissal the dialog asked to record, in order. */
     dismissals: (): SetupDismissal[] => [...dismissals],
-    /** What each `openInstallExamples` call records about the moment it was made. */
-    whenInstallOpens(probe: () => unknown): void {
-      atInstallOpen = probe;
+    statusRequests: (): string[] => [...statusRequests],
+    examples: {
+      preview(...replies: ScriptedPreview[]): void {
+        previewReplies.push(...replies);
+      },
+      install(...replies: ScriptedInstall[]): void {
+        installReplies.push(...replies);
+      },
+      holdPreview(): () => void {
+        let release!: () => void;
+        previewHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
+      },
+      holdInstall(): () => void {
+        let release!: () => void;
+        installHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
+      },
+      requests: (): InstallRequest[] => installRequests.map((r) => ({ ...r, replace: [...r.replace] })),
+      previews: (): number => previewCount,
     },
-    /** One record per `openInstallExamples` call, in order. */
-    installOpens: (): unknown[] => [...installOpens],
     setupFlow: {
       /** Queue the results the next `runSetupFlow` calls get, in order. */
-      answer(...results: SetupFlowRun[]): void {
+      answer(...results: ScriptedSetupRun[]): void {
         setupRunReplies.push(...results);
+      },
+      hold(): () => void {
+        let release!: () => void;
+        setupRunHold = new Promise<void>((resolve) => (release = resolve));
+        return release;
       },
       /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
       runs: (): string[] => [...setupRuns],
     },
-    /** Every message `announce` showed, in order. */
-    announcements: (): Array<{ title: string; message: string }> => [...announcements],
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {
       landing = el;
