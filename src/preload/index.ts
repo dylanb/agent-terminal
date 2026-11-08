@@ -11,6 +11,8 @@ import {
   type CliInstallResult,
   type ExamplesApi,
   type SetupApi,
+  type HostedAgentState,
+  type SetupAgentStateChangedMsg,
   type SetupDismissReply,
   type SetupStatusReply,
   type InstallExamplesPreview,
@@ -238,6 +240,12 @@ export const examplesApi: ExamplesApi = {
 export const setupApi: SetupApi = {
   status: (repoKey) => ipcRenderer.invoke(CH.setupStatus, { sessionId: SESSION_ID, repoKey }) as Promise<SetupStatusReply>,
   dismiss: (dismissal) => ipcRenderer.invoke(CH.setupDismiss, { sessionId: SESSION_ID, dismissal }) as Promise<SetupDismissReply>,
+  agentState: () => ipcRenderer.invoke(CH.setupAgentState, { sessionId: SESSION_ID }) as Promise<HostedAgentState>,
+  onAgentStateChanged: (cb) => {
+    const h = (_e: unknown, m: SetupAgentStateChangedMsg): void => cb(m.state);
+    ipcRenderer.on(CH.setupAgentStateChanged, h);
+    return () => ipcRenderer.removeListener(CH.setupAgentStateChanged, h);
+  },
 };
 
 if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {

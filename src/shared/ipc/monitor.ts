@@ -177,6 +177,10 @@ export interface RepoInfo {
 
 export type AgentState = 'active' | 'quiet';
 
+/** Whether an agent is at the terminal's prompt (§27.2): `absent` is a bare shell, `idle` is an agent waiting
+ *  for input, `busy` is one producing output. */
+export type HostedAgentState = 'idle' | 'busy' | 'absent';
+
 export interface MonitorUpdateMsg {
   sessionId: SessionId;
   altScreen: boolean;

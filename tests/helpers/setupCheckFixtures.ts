@@ -8,6 +8,7 @@ import type {
   SetupDismissReply,
   SetupStatusReply,
 } from '../../src/shared/ipc';
+import type { HostedAgentState } from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
@@ -101,17 +102,15 @@ type ScriptedDismiss = SetupDismissReply | { reject: string };
 type ScriptedSetupRun = SetupFlowRun | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
- *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
+ *  answers a failed reply. `onFocusLost` lands focus on
  *  whatever `landFocusOn` names, as the composition root's fallback does. Every status request is
  *  recorded by repository; `examples` scripts the preview and install replies and records each install request. Each `dismiss` call is recorded, and answers the
  *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. Each `runSetupFlow` call is recorded
- *  by repository, and answers (or rejects with) the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued. */
+ *  by repository, and answers (or rejects with) the next result `setupFlow.answer` queued, or `{ ok: true }` when none is queued; each reason `onSetupLoopFailed` reports is recorded. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
   const holds = new Map<string, Promise<void>>();
-  let blocking = false;
-  const closedListeners = new Set<() => void>();
   let landing: HTMLElement | null = null;
   const statusRequests: string[] = [];
   const previewReplies: ScriptedPreview[] = [];
@@ -125,6 +124,9 @@ export function fakeSetupDeps() {
   const setupRuns: string[] = [];
   const setupRunReplies: ScriptedSetupRun[] = [];
   let setupRunHold: Promise<void> | null = null;
+  const setupLoopFailures: string[] = [];
+  let agentState: HostedAgentState = 'idle';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       statusRequests.push(repoKey);
@@ -172,12 +174,15 @@ export function fakeSetupDeps() {
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
-    onFocusLost: () => landing?.focus(),
-    blockingDialogOpen: () => blocking,
-    onBlockingDialogClosed: (cb) => {
-      closedListeners.add(cb);
-      return () => closedListeners.delete(cb);
+    onSetupLoopFailed: (reason) => {
+      setupLoopFailures.push(reason);
     },
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
+    onFocusLost: () => landing?.focus(),
   };
   return {
     deps,
@@ -236,24 +241,19 @@ export function fakeSetupDeps() {
       },
       /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
       runs: (): string[] => [...setupRuns],
+      /** Each reason the dialog reported a setup loop that did not start for, in order. */
+      failures: (): string[] => [...setupLoopFailures],
+    },
+    /** The agent at the terminal's prompt; one is there and idle, unless a test says otherwise. */
+    agent: {
+      set(state: HostedAgentState): void {
+        agentState = state;
+        for (const cb of [...agentListeners]) cb(state);
+      },
     },
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {
       landing = el;
-    },
-    /** Another app dialog, which the setup dialog must not open over. */
-    otherDialog: {
-      open(): void {
-        blocking = true;
-      },
-      close(): void {
-        blocking = false;
-        for (const cb of [...closedListeners]) cb();
-      },
-      /** Closes the open dialog with another opening in its place, so a close is signalled while one stays open. */
-      replace(): void {
-        for (const cb of [...closedListeners]) cb();
-      },
     },
   };
 }

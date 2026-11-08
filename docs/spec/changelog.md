@@ -2,6 +2,32 @@
 
 §23.5: the `.deb` linked `/usr/bin/agent-terminal` to the app, shadowing the installed command, and a command installed from an AppImage pointed at a mount that vanished on exit. The terminal's Linux executable is now `agent-terminal-app` and the controller's `.desktop` file `agent-terminal-controller.desktop` (both `.deb`s used to install `agent-terminal.desktop`). An app running from an AppImage installs a command that launches the AppImage file; `--controller` launches the sibling AppImage named by replacing the leading `agent-terminal` with `agent-terminal-controller`. A command whose AppImage is gone prints its path and says to reinstall; Install refuses an AppImage in a folder, or under an ancestor, that others can write, and an AppImage file that others can write (operator decision 2026-11-07), telling the user to run `chmod go-w` on it. Install also refuses any of those, and a reused `~/.local/bin` or `~/bin`, owned by anyone but the user or root (operator decision 2026-11-07); every such check now goes through `src/main/ownerOnlyPath.ts`. An installed command is not rewritten on upgrade, so the Linux binary path must stay stable. `.deb` users upgrading from v0.2.0 or earlier reinstall the command once; until then plain launch does nothing and `--controller` works. No IPC change.
 
+## #222 — Controller cards sort by attention or recent use, and hold still while used
+
+§23.6: the controller's cards were in registration order. They now sort in **Attention** order by default (Errors, Needs a human, Idle & unassigned, Working, each under a level-2 heading with its count, longest in its state first), or in **Recently used** order (cards used through their own controls in this controller run, most recent first, then the rest in Attention order), chosen with a "Sort cards" radio group in the window header and named by a sentence beneath it. Each card header shows its controller-observed time in state ("waiting 41m", "running 34m", "for 3m"), restarted when its status group changes or a disconnected card reconnects. While the pointer is over a card, or focus is inside it with the window focused, the whole list is frozen and that card shows " · position held"; statuses and counts still update, arrivals go last, removals close up, and the list re-sorts when the last hold ends. None of this is announced. The sort order is saved in its own file, `controller-sort.json`, in the controller's app data beside the theme and window placement; a missing or damaged file means Attention. "No feature state is saved by either application" now excepts the controller's own window preferences. New IPC channels `controller:getSortMode` and `controller:setSortMode`; no protocol change.
+
+## The setup check moves to a setup needed button in the status bar
+
+§22.3.1/§29.1/§29.3/§29.5 (operator decision 2026-11-08): the setup popup opened on its own at startup and on entering a repository, and while it was open the terminal took no input, so an operator whose shell was asking a question at startup could not answer it. Its timing rules (the once-per-session check, the queue of popups, the wait for other dialogs, stepping aside for Run setup loop and returning when an agent went idle) kept failing in new ways. Now:
+
+- the popup never opens on its own. The status bar shows a **setup needed** button, before the work's name, while the latest check of the terminal's directory lists anything, and pressing it opens the popup (§22.3.1, §29.1);
+- the check runs at startup and on every change of the terminal's repository key, inside a repository or not, and closing the popup checks again, so the button goes once nothing is listed (§29.1);
+- Run setup loop closes the popup and starts the flow; the popup does not come back. A refused start shows its reason in the app's error dialog. Once the flow has started, the check no longer counts the entries it fixes for the rest of the app session (§29.5);
+- an agent starting at the prompt never opens the popup; an open popup still offers Run setup loop only while an agent is there (§29.5);
+- UI-STANDARDS.md §5 item 9 now says a condition the app notices opens no dialog on its own, and `Shell.modalIsOpen()`/`Shell.onModalClosed`, which only the self-opening popup used, are removed.
+
+## Run setup loop waits for an agent, and a loop turn waits for one before failing
+
+§27.2/§29.3/§29.5 (operator decision 2026-11-07): Run setup loop was offered before Claude Code or Codex was running. Its first turn found no agent at the prompt and stopped in `error` at once, and the popup, which blocks the terminal, gave the operator no chance to start one. A fresh shell also read as an agent being present until it had run a command: the shell integration marked only the prompts after the first. Now:
+
+- the shell integration marks the first prompt too, so a fresh shell reads as a bare shell (§27.2);
+- an agent is at the prompt only when the running command line starts a listed agent program, `claude` or `codex` by default (`APP_AGENT_COMMANDS` overrides the list); before, any running command counted, so a turn could be typed into an editor or a dev server, and a short `cd` brought the popup back over the terminal (§27.2);
+- the setup popup offers Run setup loop only while an agent is at the terminal's prompt, following it as it starts and leaves, and otherwise says to start one;
+- a popup closed while Run setup loop waited for an agent comes back once when the agent is idle at its prompt, listing only the entries the setup flow fixes;
+- a loop turn that finds no agent at the prompt waits for one, for sixty seconds by default (`APP_AGENT_WAIT_MS` overrides it), injects once the agent is at its prompt, and stops in `error` only if none has arrived; it still never types the prompt into the shell.
+
+IPC: `setup:agentState` (the renderer asks whether an agent is at the prompt, idle or busy) and `setup:agentStateChanged` (main reports a change).
+
 ## #317 — The setup popup keeps its buttons inside the dialog and stays open until the operator dismisses it
 
 §29.1/§29.3/§29.5/§18.1 (operator decision 2026-11-07): the popup's controls sat on one line wider than its card, so some were painted outside it and could not be pressed, and the popup closed after Install/update examples or Run setup loop although other entries still needed an action. Now:

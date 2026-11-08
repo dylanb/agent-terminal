@@ -98,8 +98,25 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
+    engine.onAgentWaitElapsed();
 
     expect(engine.liveErrorFor(h.repo)?.reason).toBe('no hosted agent at the prompt');
+  });
+
+  it('a turn entered before the agent starts injects once the agent is at its prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    h.hosted = 'absent';
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(false);
+
+    h.hosted = 'idle';
+    engine.onInjectable();
+    engine.onInjectable();
+    engine.onAgentWaitElapsed();
+
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
   });
 
   it('refuses the turn when the Codex agent of a reviewer is not installed, and says how to install it', () => {

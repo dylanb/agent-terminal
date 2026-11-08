@@ -60,6 +60,7 @@ import {
   type UiSetSettingsMsg,
   type ViewerReadMsg,
   type ViewerTreeMsg,
+  type SetupAgentStateMsg,
   type SetupDismissMsg,
   type SetupStatusMsg,
 } from '../shared/ipc';
@@ -217,6 +218,10 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
 
 export function isValidSetupStatus(m: unknown): m is SetupStatusMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+export function isValidSetupAgentState(m: unknown): m is SetupAgentStateMsg {
+  return isRecord(m) && isLiveSession(m);
 }
 
 export function isValidSetupDismiss(m: unknown): m is SetupDismissMsg {
