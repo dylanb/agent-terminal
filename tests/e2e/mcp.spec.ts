@@ -22,7 +22,7 @@ import { auditGateEntries, seedTrustedFlow } from './autoGateHarness';
 // in the window — typed or engine-driven — lists the agent-terminal tools and reads its own window's state.
 
 const SERVER = 'agent-terminal';
-const SLICE_TOOLS = ['approve', 'choose_flow', 'dismiss_loop_message', 'polish', 'read_state', 'redo', 'request_changes', 'retry', 'start', 'terminate'];
+const SLICE_TOOLS = ['approve', 'capture_report', 'choose_flow', 'dismiss_loop_message', 'polish', 'read_state', 'redo', 'request_changes', 'retry', 'start', 'terminate', 'todo_complete', 'todo_create', 'todo_delete', 'todo_edit', 'todo_reorder', 'todo_send'];
 const USER_STATE = { numStartups: 3, mcpServers: { mine: { type: 'stdio', command: 'my-server', args: [] } } };
 const USER_SETTINGS = { theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] } };
 const APP_ARTIFACT_REL = '.agent-terminal/loop/artifacts/plan.md';
@@ -233,9 +233,9 @@ function copyTree(from: string, to: string, skip: (name: string) => boolean = ()
 
 test('a session in the window still gets the tools after the app installed them from another build location, now gone, is started from here', { tag: '@ownapp' }, async () => {
   const m = machine();
-  const elsewhere = realpathSync(mkdtempSync(join(process.cwd(), 'out', '.moved-build-')));
-  temps.push(elsewhere);
-  copyTree('out', join(elsewhere, 'out'), (name) => name.startsWith('.moved-build-'));
+  const elsewhere = temp('agent-term-moved-build-');
+  symlinkSync(join(process.cwd(), 'node_modules'), join(elsewhere, 'node_modules'), 'dir');
+  copyTree('out', join(elsewhere, 'out'), () => false);
   await launch(m, {}, join(elsewhere, 'out', 'main', 'index.js'));
   await inSettings('Install', /installed/i);
   await app?.close();
