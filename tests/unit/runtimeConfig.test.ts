@@ -36,6 +36,19 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '0' }).branchRefreshMs).toBe(300_000);
   });
 
+  it('defaults the wait for an agent to reach the prompt to sixty seconds and parses a valid override', () => {
+    expect(resolveRuntimeConfig({}).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '5000' }).agentWaitMs).toBe(5000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: 'nope' }).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '0' }).agentWaitMs).toBe(60_000);
+  });
+
+  it('lists claude and codex as agent commands by default and parses a comma-separated override', () => {
+    expect(resolveRuntimeConfig({}).agentCommands).toEqual(['claude', 'codex']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' claude, gemini ,,aider ' }).agentCommands).toEqual(['claude', 'gemini', 'aider']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' , ' }).agentCommands).toEqual(['claude', 'codex']);
+  });
+
   // §27.9.1 N9b.5(e), #137 AC14 — the engine's gate-decision bound.
   it('defaults the auto-gate decision bound to 300 000 ms and parses an override', () => {
     expect(resolveRuntimeConfig({}).autoGateDecisionMs).toBe(300_000);

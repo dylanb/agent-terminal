@@ -8,6 +8,7 @@ import type {
   SetupDismissReply,
   SetupStatusReply,
 } from '../../src/shared/ipc';
+import type { HostedAgentState } from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 import type { SetupFlowRun } from '../../src/renderer/src/setupFlowRun';
@@ -125,6 +126,8 @@ export function fakeSetupDeps() {
   const setupRuns: string[] = [];
   const setupRunReplies: ScriptedSetupRun[] = [];
   let setupRunHold: Promise<void> | null = null;
+  let agentState: HostedAgentState = 'idle';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       statusRequests.push(repoKey);
@@ -171,6 +174,11 @@ export function fakeSetupDeps() {
       const next = setupRunReplies.shift() ?? { ok: true };
       if ('reject' in next) throw new Error(next.reject);
       return next;
+    },
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -236,6 +244,13 @@ export function fakeSetupDeps() {
       },
       /** Each repository `runSetupFlow` was asked to run the setup flow in, in order. */
       runs: (): string[] => [...setupRuns],
+    },
+    /** The agent at the terminal's prompt; one is there and idle, unless a test says otherwise. */
+    agent: {
+      set(state: HostedAgentState): void {
+        agentState = state;
+        for (const cb of [...agentListeners]) cb(state);
+      },
     },
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {

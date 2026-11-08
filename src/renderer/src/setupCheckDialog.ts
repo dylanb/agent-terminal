@@ -1,4 +1,5 @@
 import type {
+  HostedAgentState,
   InstallExamplesPreview,
   InstallExamplesResult,
   InstallPreviewId,
@@ -18,6 +19,10 @@ export interface SetupCheckDialogDeps {
   installExamples(previewId: InstallPreviewId, choice: InstallChoice): Promise<InstallExamplesResult>;
   /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
   runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
+  /** The agent at the terminal's prompt, which the setup loop needs. */
+  agentState(): HostedAgentState;
+  /** Calls `cb` when the agent at the prompt changes state; returns its unsubscribe. */
+  onAgentStateChanged(cb: (state: HostedAgentState) => void): () => void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
   onFocusLost(): void;
   /** Whether another app dialog is open, so this one waits instead of opening over it. */
@@ -55,6 +60,9 @@ const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
   (entry.condition === 'ignore' && entry.failure === 'not-ignored') || (entry.condition === 'capabilities' && entry.failure === 'absent');
 
 const DISMISSAL_NOT_SAVED = 'The dismissal could not be saved:';
+const START_AGENT_TO_RETURN =
+  'To run the setup loop, close this and start Claude Code or Codex in the terminal. This popup comes back when it starts.';
+const START_AGENT = 'To run the setup loop, start Claude Code or Codex in the terminal.';
 
 type StatusOk = Extract<SetupStatusReply, { ok: true }>;
 
@@ -88,7 +96,19 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     closed = null;
     done?.();
   };
-  const shell = createModalShell(host, 'setup-check-title', settle, { onFocusLost: () => deps.onFocusLost() });
+  let onOperatorClose: (() => void) | null = null;
+  const shell = createModalShell(
+    host,
+    'setup-check-title',
+    () => {
+      onOperatorClose?.();
+      settle();
+    },
+    { onFocusLost: () => deps.onFocusLost() },
+  );
+  /** Redraws the open entry list, when nothing it started is still running. */
+  let redrawList: (() => void) | null = null;
+  const awaitingAgent = new Set<string>();
   const checked = new Set<string>();
   let queue: Promise<void> = Promise.resolve();
   let startup = true;
@@ -109,9 +129,19 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
   }
 
-  function show(first: StatusOk): Promise<void> {
+  /** Shows the popup for `first`; settles once it has closed, with whether the operator closed it while the setup
+   *  loop waited for an agent and `comesBack` let it return when one starts. */
+  function show(first: StatusOk, comesBack: boolean): Promise<boolean> {
     const { repoKey, isRepository, appVersion } = first;
-    const shown = new Promise<void>((resolve) => (closed = resolve));
+    let waitingForAgent = false;
+    let closedWaiting = false;
+    onOperatorClose = () => {
+      closedWaiting = waitingForAgent && comesBack;
+    };
+    const shown = new Promise<boolean>((resolve) => (closed = () => resolve(closedWaiting))).finally(() => {
+      onOperatorClose = null;
+      redrawList = null;
+    });
     let alertLine: HTMLElement;
     let setupStarted = false;
     const unfixed = (entries: SetupConditionEntry[]): SetupConditionEntry[] =>
@@ -144,6 +174,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
 
     function renderQuestion(reply: StatusOk, preview: InstallPreview): void {
+      redrawList = null;
       shell.render(({ doc, titleId, close, confirm, presses }) => {
         const consent = createInstallConsent(doc, titleId, preview);
         const foot = doc.createElement('div');
@@ -159,7 +190,13 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
 
     const renderList = (reply: StatusOk, focusFirstAction: boolean, reason?: string): void => {
       const entries = unfixed(reply.entries);
+      const agentPresent = deps.agentState() !== 'absent';
+      const offersSetupLoop = reply.setupFlowInstalled && entries.some(fixedBySetupFlow);
+      waitingForAgent = offersSetupLoop && !agentPresent;
       shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
+        redrawList = () => {
+          if (!presses.busy) renderList(reply, false);
+        };
         const card = doc.createElement('div');
         card.className = 'card';
         const title = doc.createElement('h3');
@@ -185,7 +222,12 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         error.id = `${titleId}-error`;
         if (reason !== undefined) error.textContent = reason;
         alertLine = error;
-        body.append(intro, list, error);
+        const agentHint = doc.createElement('p');
+        agentHint.className = 'ph';
+        agentHint.id = `${titleId}-agent`;
+        if (waitingForAgent) agentHint.textContent = comesBack ? START_AGENT_TO_RETURN : START_AGENT;
+        else agentHint.hidden = true;
+        body.append(intro, list, agentHint, error);
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
         const button = (label: string, action: () => unknown): HTMLButtonElement => footButton(doc, foot, presses, label, action);
@@ -225,16 +267,43 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
           if (unfixed(reply.entries).length === 0) return settle();
           renderList(reply, true, run.ok ? undefined : run.reason);
         };
-        if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
+        if (offersSetupLoop && agentPresent) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);
         card.append(title, body, foot);
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
-        return { card, initialFocus, describedById: `${intro.id} ${list.id} ${error.id}`, grow: body, scroll: body };
+        return { card, initialFocus, describedById: `${intro.id} ${list.id} ${waitingForAgent ? `${agentHint.id} ` : ''}${error.id}`, grow: body, scroll: body };
       });
     };
     renderList(first, false);
     return shown;
   }
+
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    const run = queue.then(task);
+    queue = run.catch(() => {});
+    return run;
+  };
+
+  async function comeBack(repoKey: string): Promise<void> {
+    if (disposed) return;
+    const reply = await deps.status(repoKey).catch(() => null);
+    if (disposed || reply?.ok !== true) return;
+    const entries = reply.entries.filter(fixedBySetupFlow);
+    if (!reply.setupFlowInstalled || entries.length === 0) return;
+    await otherDialogsClosed();
+    if (disposed) return;
+    await show({ ...reply, entries }, false);
+  }
+
+  const offPresence = deps.onAgentStateChanged((state) => {
+    if (disposed) return;
+    redrawList?.();
+    if (state !== 'idle') return;
+    for (const repoKey of [...awaitingAgent]) {
+      awaitingAgent.delete(repoKey);
+      void enqueue(() => comeBack(repoKey));
+    }
+  });
 
   async function evaluate(repoKey: string, atStartup: boolean): Promise<void> {
     if (disposed || checked.has(repoKey)) return;
@@ -244,19 +313,20 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     if (reply.entries.length === 0 || !(atStartup || reply.isRepository)) return;
     await otherDialogsClosed();
     if (disposed) return;
-    await show(reply);
+    if (!(await show(reply, true)) || disposed) return;
+    if (deps.agentState() === 'idle') void enqueue(() => comeBack(repoKey));
+    else awaitingAgent.add(repoKey);
   }
 
   return {
     check(repoKey) {
       const atStartup = startup;
       startup = false;
-      const run = queue.then(() => evaluate(repoKey, atStartup));
-      queue = run.catch(() => {});
-      return run;
+      return enqueue(() => evaluate(repoKey, atStartup));
     },
     dispose() {
       disposed = true;
+      offPresence();
       stopWaiting?.();
       shell.dispose();
       settle();

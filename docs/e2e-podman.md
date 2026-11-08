@@ -74,6 +74,10 @@ podman machine start
   passes the same home folder and config dirs to every launch, so state the first launch wrote is still
   there after the restart.
 
+- An agent counts as at the terminal's prompt only when its program name is in `APP_AGENT_COMMANDS` (§27.2). The
+  suite's scripted agents run as `fake-agent`, so `playwright.config.ts` sets `APP_AGENT_COMMANDS` to
+  `claude,codex,fake-agent` for every launch unless the environment already sets it.
+
 ## Coverage caveat
 
 Genuinely macOS-only paths — the Dock icon, the ⌘ Edit menu, ⌘ key chords — do not

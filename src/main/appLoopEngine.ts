@@ -122,6 +122,9 @@ export interface AppLoopEngineDeps {
   /** Arm / cancel the stall watchdog (§27.12) — reset on visible activity, no wall-clock deadline. */
   armTimer(): void;
   cancelTimer(): void;
+  /** §27.2 — start / cancel the wait for an agent to reach the prompt; its end calls `onAgentWaitElapsed()`. */
+  armAgentWait(): void;
+  cancelAgentWait(): void;
   /** §27.2 — re-arm the quiescence window so a chained turn waits for a fresh settle before injecting. */
   noteSettle(): void;
   /** Resolve the bound §27 def for a repo (§27.8); its reason surfaces at the view on failure (AC6). The
@@ -235,6 +238,8 @@ export interface AppLoopEngine {
   noteActivity(): void;
   /** The stall watchdog elapsed — resolve to `error` without retrying or killing (§27.12). */
   onStall(): void;
+  /** The wait for an agent to reach the prompt ended (§27.2). */
+  onAgentWaitElapsed(): void;
   /** The §27-only error route-out, acting on the payload's step+turn identity, never ambient state (§6). */
   routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): void;
   /** §27.9/§19.4 (AC4) — a request-changes gate decision: re-enter the review-and-fix turn at round+1
@@ -1304,6 +1309,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
+    armAgentWait: () => deps.armAgentWait(),
+    cancelAgentWait: () => deps.cancelAgentWait(),
     writeError: (reason, stalled) => {
       if (!active) return;
       const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
@@ -1828,6 +1835,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     onStall() {
       runner.onStall();
+    },
+    onAgentWaitElapsed() {
+      runner.onAgentWaitElapsed();
     },
     routeOut(repoDir, stepId, turnKey, action) {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.

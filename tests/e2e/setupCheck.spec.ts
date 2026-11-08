@@ -334,6 +334,7 @@ test('Install/update examples installs from inside the popup: the Terminal view 
   const page = await launchIn(repo);
   const popup = popupFor(page, repo);
   await expect.soft(entriesOf(popup)).toHaveCount(2);
+  await hostStandInAgent(page);
   const maxModals = await recordMaxModals(page);
   const soft = expect.configure({ soft: true });
 
@@ -690,6 +691,13 @@ async function hostFakeAgent(page: Page): Promise<void> {
   await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY);
 }
 
+/** Runs a listed agent name that stays in the foreground and never reads a turn, for a test whose agent is
+ *  never handed one. */
+async function hostStandInAgent(page: Page): Promise<void> {
+  await page.evaluate((line) => window.term.input(line), "alias fake-agent='sleep 600'\r");
+  await page.evaluate((line) => window.term.input(line), 'fake-agent\r');
+}
+
 const activeStation = (page: Page): Locator => page.locator('#flow-strip .stn.active .nm');
 const loopTone = (page: Page): Locator => page.locator('#flow-strip .loopstat .spill');
 
@@ -740,6 +748,38 @@ test("Run setup loop starts the installed repo-setup flow in the popup's reposit
   expect.soft(await maxModals()).toBeLessThanOrEqual(1);
 });
 
+test('with no agent running the popup withholds Run setup loop; closed, it comes back offering it once the agent starts, and the setup flow runs', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  installFixtureSetupFlow();
+  const agent = seedFixtureSetupAgent(repo);
+  const page = await launchIn(repo, agent.env);
+  const popup = popupFor(page, repo);
+  await expect(popup).toBeVisible();
+  await expect(popup.getByRole('button', { name: RUN_SETUP })).toHaveCount(0);
+  const maxModals = await recordMaxModals(page);
+
+  await popup.getByRole('button', { name: 'Close' }).click();
+  await expect(popup).toHaveCount(0);
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type('fake-agent', { delay: 20 });
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY);
+
+  await expect(popup).toBeVisible();
+  await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+  await expect.poll(() => setupRunSeen(page, repo, agent.injectedLog), { timeout: 40_000 }).toEqual({
+    ...AT_FIRST_GATE,
+    popupOpen: 0,
+    popupEntries: 0,
+    popupOffersInstall: 0,
+    focusInPopup: false,
+    dialogsOpen: 0,
+  });
+  expect.soft(await maxModals()).toBeLessThanOrEqual(1);
+});
+
 test("at the setup flow's first gate nothing is committed, pushed or filed, and the next step's turn has not run (AC20)", { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(2));
   const repo = repoIn({ ignored: false, capabilities: 'absent' });
@@ -772,6 +812,7 @@ for (const status of BEGUN_STATES) {
     const page = await launchIn(repo);
     const popup = popupFor(page, repo);
     await expect(popup).toBeVisible();
+    await hostStandInAgent(page);
     const before = snapshotTree(repo);
     const entriesBefore = await entriesOf(popup).count();
     const maxModals = await recordMaxModals(page);
@@ -797,6 +838,7 @@ test('a repo-setup flow that fails to load is selected, the popup stays open lis
   const page = await launchIn(repo);
   const popup = popupFor(page, repo);
   await expect(popup).toBeVisible();
+  await hostStandInAgent(page);
   const errorBefore = await flowError(page).allTextContents();
   const soft = expect.configure({ soft: true });
 
@@ -825,6 +867,7 @@ for (const { when, conditions, entries, installed } of HIDDEN_RUN_SETUP) {
     const page = await launchIn(repo);
     const popup = popupFor(page, repo);
     await expect(entriesOf(popup)).toHaveCount(entries);
+    await hostStandInAgent(page);
 
     await expect(popup.getByRole('button', { name: RUN_SETUP })).toHaveCount(0);
   });
