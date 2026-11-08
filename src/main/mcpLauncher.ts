@@ -1,5 +1,5 @@
 import path, { join } from 'node:path';
-import { MCP_HOOK_ARG, MCP_WINDOW_ENV, MCP_WINDOW_EXEC_ENV, MCP_WINDOW_SCRIPT_ENV } from '../shared/mcp';
+import { MCP_HOOK_ARG, MCP_LAUNCHER_NAME, MCP_WINDOW_ENV, MCP_WINDOW_EXEC_ENV, MCP_WINDOW_SCRIPT_ENV } from '../shared/mcp';
 import { shellQuote } from '../shared/shellQuote';
 import { atomicWriteFileSync } from './atomicFile';
 import { bundledScript, NODE_MODE_ASSIGNMENT, nodeModeCommand } from './nodeMode';
@@ -21,7 +21,7 @@ export interface McpLaunch {
 /** How the installed entries run the server and its hooks under `appHome`: the same for every build, so entries
  *  installed once keep working after the app is updated or moved. */
 export function mcpLaunch(appHome: string): McpLaunch {
-  return { command: join(appHome, '.agent-terminal', 'claude-code', 'agent-terminal-mcp'), args: [] };
+  return { command: join(appHome, '.agent-terminal', 'claude-code', MCP_LAUNCHER_NAME), args: [] };
 }
 
 /** Writes the launcher Claude Code runs for the server and its hooks, pointed at the running build, and returns how

@@ -2327,7 +2327,7 @@ describe('autoGate — the human approve the Approve control and the MCP approve
 
   it.each<[string, GateApproveOutcome, boolean]>([
     ['taken with a failed side effect', { kind: 'advanced', effectFailures: ['mark-ready: HTTP 502'] }, true],
-    ['held at the gate', { kind: 'held' }, false],
+    ['held at the gate', { kind: 'held', effectFailures: ['side-effect-failed: mark-ready: HTTP 502'] }, false],
     ['whose accept could not be saved', { kind: 'accept-failed', reason: 'ENOSPC' }, false],
     ['waiting on the epic-promotion preview', { kind: 'preview-raised' }, false],
     ['whose epic promotion is blocked', { kind: 'blocked' }, false],
@@ -3303,5 +3303,89 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readArmedInterrupt(repoDir)).toBeNull();
     held.release();
     await held.drained();
+  });
+});
+
+describe('autoGate — an engine approve whose step report cannot be assembled (#322)', () => {
+  it('advances with the Loop error only: no failed-effect marker, as before the MCP approve named report failures', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    const withReport = { ...COMMIT_GATE, outputs: [{ id: 'impl-report', path: 'r.md', sectionsDir: 'r' }] } as unknown as LoopDefV2;
+    const errors: string[] = [];
+    rig.gate.attachApprove(
+      composeEngineApprove(
+        () =>
+          approveDeps({
+            resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+            assembleReport: () => {
+              throw new Error('EACCES: permission denied');
+            },
+            emitError: (reason) => void errors.push(reason),
+          }),
+        () => 'app',
+      ),
+    );
+    await reachGate(rig, 'clean');
+    expect({ loopErrors: errors.length, failedEffect: rig.view().autoGate?.failedEffect }).toEqual({ loopErrors: 1, failedEffect: undefined });
+  });
+});
+
+describe('autoGate — two human approves of one gate at once (#322)', () => {
+  it('the Approve control and an MCP approve over the same gate run the approve once: the one that arrives second is refused, naming why, and the gate is not told of it', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const waiting: (() => void)[] = [];
+    const release = (): void => waiting.splice(0).forEach((resolve) => resolve());
+    const approves: string[] = [];
+    const deps = {
+      pickupHold: () => null,
+      bindingOf: (): LoopBinding => 'app',
+      approve: async (_dir: string, step: string): Promise<GateApproveOutcome> => {
+        approves.push(step);
+        await new Promise<void>((resolve) => void waiting.push(resolve));
+        return { kind: 'advanced', effectFailures: [] };
+      },
+    };
+    const fromUi = composeHumanApprove(rig.gate, deps);
+    const fromMcp = composeHumanApprove(rig.gate, deps);
+    const first = fromUi(repoDir, STEP, TURN);
+    const withdrawnBefore = rig.withdrawn();
+    const pendingSecond = fromMcp(repoDir, STEP, TURN);
+    await flush();
+    const questionsWithdrawnBySecond = rig.withdrawn() - withdrawnBefore;
+    release();
+    const second = await pendingSecond;
+    expect({ first: (await first).kind, second: second.kind, namesWhy: second.kind === 'refused' && /already running/.test(second.reason), approves, questionsWithdrawnBySecond }).toEqual({
+      first: 'advanced',
+      second: 'refused',
+      namesWhy: true,
+      approves: [STEP],
+      questionsWithdrawnBySecond: 0,
+    });
+  });
+});
+
+describe('autoGate — the Approve control pressed while an MCP approve of the gate runs (#322)', () => {
+  it('is refused with the reason the control posts as its Loop error', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const waiting: (() => void)[] = [];
+    const deps = {
+      pickupHold: () => null,
+      bindingOf: (): LoopBinding => 'app',
+      approve: async (): Promise<GateApproveOutcome> => {
+        await new Promise<void>((resolve) => void waiting.push(resolve));
+        return { kind: 'advanced', effectFailures: [] };
+      },
+    };
+    const posted: string[] = [];
+    const fromMcp = composeHumanApprove(rig.gate, deps)(repoDir, STEP, TURN);
+    await flush();
+    const fromUi = await composeHumanApprove(rig.gate, { ...deps, onRefused: (reason) => void posted.push(reason) })(repoDir, STEP, TURN);
+    waiting.splice(0).forEach((resolve) => resolve());
+    await fromMcp;
+    expect({ fromUi: fromUi.kind, posted: posted.length === 1 && fromUi.kind === 'refused' && posted[0] === fromUi.reason }).toEqual({ fromUi: 'refused', posted: true });
   });
 });

@@ -1,3 +1,5 @@
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 /** One tool call the server hands to its window. */
 export interface WindowRequest {
   tool: string;
@@ -7,6 +9,19 @@ export interface WindowRequest {
 /** The Claude Code session a call comes from: its process id, or null when the server could not tell. */
 export interface McpCaller {
   session: number | null;
+}
+
+/** A window's answer to a call it did not carry out as asked: a `refusal` names one of the ticket's refusal
+ *  reasons and changed nothing; `neither` is an outcome that is neither success nor refusal. Every other answer is a
+ *  success, and its fields are the call's result. */
+export interface WindowAnswerFailure {
+  outcome: 'refusal' | 'neither';
+  kind: string;
+  message: string;
+}
+
+export function isWindowAnswerFailure(value: unknown): value is WindowAnswerFailure {
+  return isRecord(value) && (value.outcome === 'refusal' || value.outcome === 'neither') && typeof value.kind === 'string' && typeof value.message === 'string';
 }
 
 /** `app-unreachable`: the window never started the operation. `result-unknown`: the connection was lost after it
@@ -29,7 +44,7 @@ export type BridgeMessage =
   | { type: 'hello'; build: string }
   | { type: 'ack' }
   | { type: 'other-build' }
-  | { type: 'call'; request: WindowRequest }
+  | { type: 'call'; request: WindowRequest; caller: McpCaller }
   | { type: 'result'; value: unknown }
   | { type: 'failed'; reason: string };
 
@@ -39,7 +54,9 @@ export function encodeBridgeMessage(message: BridgeMessage): string {
   return `${JSON.stringify(message)}\n`;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** A caller whose session is not a process id is judged as one the server could not tell. */
+const sessionOf = (caller: unknown): number | null =>
+  isRecord(caller) && typeof caller.session === 'number' && Number.isSafeInteger(caller.session) && caller.session > 0 ? caller.session : null;
 
 /** A line's message, or null when it is not one this build reads. */
 export function parseBridgeMessage(line: string): BridgeMessage | null {
@@ -59,7 +76,7 @@ export function parseBridgeMessage(line: string): BridgeMessage | null {
       return { type: 'other-build' };
     case 'call':
       return isRecord(parsed.request) && typeof parsed.request.tool === 'string'
-        ? { type: 'call', request: { tool: parsed.request.tool, args: parsed.request.args } }
+        ? { type: 'call', request: { tool: parsed.request.tool, args: parsed.request.args }, caller: { session: sessionOf(parsed.caller) } }
         : null;
     case 'result':
       return { type: 'result', value: parsed.value };

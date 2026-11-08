@@ -652,15 +652,18 @@ async function pasteAndSubmit(text: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
-/** Submits one prompt in the window's interactive session, the `index`th session the fake ran, and returns the
- *  outcome of the last approve that prompt's turn made. */
-async function approveTurn(m: Machine, submit: () => Promise<void>, index = 0): Promise<string> {
-  const session = (): FakeClaudeRecord[] | undefined => sessions(m)[index];
-  const stopsBefore = stopCount(session());
-  const approvesBefore = approveRecords(session()).length;
-  await submit();
-  await expect.poll(() => stopCount(session())).toBe(stopsBefore + 1);
-  return outcomeOf(approveRecords(session()).slice(approvesBefore).at(-1));
+/** Submits `text` as one prompt with `submit` in the window's interactive session, the `index`th session the fake
+ *  ran, and returns the outcome of the last approve that prompt's own turn made. The turn is found by its prompt, so
+ *  another turn ending meanwhile (an engine prompt, a gate question) is never taken for it. */
+async function approveTurn(m: Machine, submit: (text: string) => Promise<void>, text: string, index = 0): Promise<string> {
+  const records = (): FakeClaudeRecord[] => sessions(m)[index] ?? [];
+  const prompts = (): Extract<FakeClaudeRecord, { event: 'prompt' }>[] => records().filter((r): r is Extract<FakeClaudeRecord, { event: 'prompt' }> => r.event === 'prompt');
+  const promptsBefore = prompts().length;
+  await submit(text);
+  let promptId: string | undefined;
+  await expect.poll(() => (promptId = prompts().slice(promptsBefore).find((r) => r.text === text)?.promptId)).toBeDefined();
+  await expect.poll(() => records().some((r) => r.event === 'stop' && r.promptId === promptId)).toBe(true);
+  return outcomeOf(approveRecords(records()).filter((r) => r.promptId === promptId).at(-1));
 }
 
 test("tracer: a typed approve in the engine-driven session closes the gate and advances the flow, while the engine's own turn and a submitted todo are refused as not human-started and leave the gate as it was", { tag: '@ownapp' }, async () => {
@@ -686,11 +689,11 @@ test("tracer: a typed approve in the engine-driven session closes the gate and a
     runState: readFileSync(runStateFile, 'utf8'),
     loopMessage: controllerOf(app as ElectronApplication).loopMessage() ?? null,
   });
-  await approveTurn(m, () => typeCommand('mcp read_state {}'));
+  await approveTurn(m, typeCommand, 'mcp read_state {}');
   const beforeTodo = await shown();
-  const todo = await approveTurn(m, () => insertTodoAndSubmit(approveCall(AT_THE_GATE, 'repo')));
+  const todo = await approveTurn(m, insertTodoAndSubmit, approveCall(AT_THE_GATE, 'repo'));
   const afterTodo = await shown();
-  const typed = await approveTurn(m, () => typeCommand(approveCall(AT_THE_GATE)));
+  const typed = await approveTurn(m, typeCommand, approveCall(AT_THE_GATE));
   await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('done', { timeout: 15_000 });
   expect.soft({
     engineTurns: [...new Set(engineTurns)],
@@ -718,18 +721,18 @@ test('with no gate waiting, an approve from a typed, pasted, post-/clear or post
   await expect.poll(() => sessions(m).length).toBe(1);
   const starts = (cause: string): number => (sessions(m)[0] ?? []).filter((r) => r.event === 'session' && r.cause === cause).length;
 
-  await approveTurn(m, () => typeCommand('mcp read_state {}'));
-  const typed = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
-  const otherWindow = await approveTurn(m, () => typeCommand(approveCall({ ...NO_GATE, window: 'another-window' })));
-  const pasted = await approveTurn(m, () => pasteAndSubmit(approveCall(NO_GATE)));
-  const todo = await approveTurn(m, () => insertTodoAndSubmit(approveCall(NO_GATE, 'repo')));
+  await approveTurn(m, typeCommand, 'mcp read_state {}');
+  const typed = await approveTurn(m, typeCommand, approveCall(NO_GATE));
+  const otherWindow = await approveTurn(m, typeCommand, approveCall({ ...NO_GATE, window: 'another-window' }));
+  const pasted = await approveTurn(m, pasteAndSubmit, approveCall(NO_GATE));
+  const todo = await approveTurn(m, insertTodoAndSubmit, approveCall(NO_GATE, 'repo'));
   await typeCommand('/clear');
   await expect.poll(() => starts('clear')).toBe(1);
-  await approveTurn(m, () => typeCommand('mcp read_state {}'));
-  const afterClear = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
+  await approveTurn(m, typeCommand, 'mcp read_state {}');
+  const afterClear = await approveTurn(m, typeCommand, approveCall(NO_GATE));
   await typeCommand('/compact');
   await expect.poll(() => starts('compact')).toBe(1);
-  const afterCompact = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)));
+  const afterCompact = await approveTurn(m, typeCommand, approveCall(NO_GATE));
   expect.soft({ typed, otherWindow, pasted, todo, afterClear, afterCompact }).toEqual({
     typed: 'no gate waiting',
     otherWindow: 'not this window',
@@ -770,7 +773,7 @@ test('a -p, piped or launch prompt is not human-started, nor is a prompt typed i
   rmSync(hold);
   await expect.poll(() => stopCount(launched())).toBe(1);
   const joined = outcomeOf(approveRecords(launched()).slice(joinedBefore).at(-1));
-  const typedNext = await approveTurn(m, () => typeCommand(approveCall(NO_GATE)), sessionsBefore);
+  const typedNext = await approveTurn(m, typeCommand, approveCall(NO_GATE), sessionsBefore);
 
   writeFileSync(hold, '');
   const heldBefore = (launched() ?? []).filter((r) => r.event === 'held').length;
@@ -819,7 +822,7 @@ test("an approve typed while the relaunched run's pickup waits for confirmation 
   await confirmDialog.getByRole('button', { name: 'Not now' }).click();
   await typeCommand('claude');
   await expect.poll(() => sessions(m).length).toBe(2);
-  await approveTurn(m, () => typeCommand('mcp read_state {}'), 1);
+  await approveTurn(m, typeCommand, 'mcp read_state {}', 1);
   const shown = () => ({
     runState: readFileSync(runStateFile, 'utf8'),
     flowState: readFileSync(flowStateFile, 'utf8'),
@@ -827,7 +830,7 @@ test("an approve typed while the relaunched run's pickup waits for confirmation 
     prReady: readFileSync(m.ghLog, 'utf8').includes('gh pr ready'),
   });
   const before = shown();
-  const outcome = await approveTurn(m, () => typeCommand(approveCall({ step: 'plan', turn: 'consolidate-plan' })), 1);
+  const outcome = await approveTurn(m, typeCommand, approveCall({ step: 'plan', turn: 'consolidate-plan' }), 1);
   const record = approveRecords(sessions(m)[1]).at(-1);
   const said = record?.event === 'call' && record.result !== undefined ? resultText(record.result) : '';
   expect({ outcome, namesConfirmation: said.includes('Confirm the run'), after: shown() }).toEqual({ outcome: 'not valid', namesConfirmation: true, after: { ...before, prReady: false } });
@@ -868,9 +871,9 @@ test('an approve typed at a halted auto gate showing a failed effect is a human 
   await typeCommand(`cd "${m.repo}"`);
   await typeCommand('claude');
   await expect.poll(() => sessions(m).length).toBe(2);
-  await approveTurn(m, () => typeCommand('mcp read_state {}'), 1);
+  await approveTurn(m, typeCommand, 'mcp read_state {}', 1);
   const haltsBefore = autoHalts().length;
-  const outcome = await approveTurn(m, () => typeCommand(approveCall(AT_THE_GATE)), 1);
+  const outcome = await approveTurn(m, typeCommand, approveCall(AT_THE_GATE), 1);
   const after = readGateRunState(m.repo);
   expect({
     outcome,

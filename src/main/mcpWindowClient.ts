@@ -1,13 +1,13 @@
 import { connect } from 'node:net';
-import { bridgeLineReader, encodeBridgeMessage, type AckTimers, type WindowCallOutcome, type WindowRequest } from '../shared/mcpBridge';
+import { bridgeLineReader, encodeBridgeMessage, type AckTimers, type McpCaller, type WindowCallOutcome, type WindowRequest } from '../shared/mcpBridge';
 import { errMsg } from './errno';
 
-/** The server's end of the bridge: one call to the window at `endpoint`. The window must acknowledge within
- *  `ackTimeoutMs`; once it has, the call waits for the operation however long it takes. */
+/** The server's end of the bridge: one call to the window at `endpoint`, made for `caller`. The window must
+ *  acknowledge within `ackTimeoutMs`; once it has, the call waits for the operation however long it takes. */
 export function callWindow<H>(
   endpoint: string,
   request: WindowRequest,
-  opts: { build: string; ackTimeoutMs: number; timers: AckTimers<H> },
+  opts: { build: string; ackTimeoutMs: number; timers: AckTimers<H>; caller?: McpCaller },
 ): Promise<WindowCallOutcome> {
   return new Promise((resolve) => {
     let stage: 'waiting-ack' | 'started' | 'settled' = 'waiting-ack';
@@ -34,7 +34,7 @@ export function callWindow<H>(
         if (message?.type === 'ack') {
           stage = 'started';
           stopDeadline();
-          socket.write(encodeBridgeMessage({ type: 'call', request }));
+          socket.write(encodeBridgeMessage({ type: 'call', request, caller: opts.caller ?? { session: null } }));
         } else if (message?.type === 'other-build') {
           lost('the window runs another build of agent-terminal; restart the window to use the installed build');
         } else {

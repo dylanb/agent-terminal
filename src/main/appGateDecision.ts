@@ -121,7 +121,7 @@ export function resolveGateSideEffectBodyFile(
 
 export type GateApproveOutcome =
   | { kind: 'advanced'; effectFailures: string[] }
-  | { kind: 'held' }
+  | { kind: 'held'; effectFailures: string[] }
   | { kind: 'preview-raised' }
   | { kind: 'blocked' }
   | { kind: 'refused'; reason: string }
@@ -248,11 +248,10 @@ export async function runAppGateDecision(
 export async function runAppApprove(repoDir: string, step: string, turnKey: string, deps: AppGateDecisionDeps, decider: ApproveDecider): Promise<GateApproveOutcome> {
   const option: GateDecisionOption = 'approve';
   const by: GateDecider = decider.kind;
-  let accepted = false;
   const effectFailures: string[] = [];
   const gateAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void => {
     deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, by), exit);
-    if (accepted && exit !== 0) effectFailures.push(`${kind}: ${detail ?? ''}`);
+    if (exit !== 0) effectFailures.push(`${kind}: ${detail ?? ''}`);
   };
 
   if (decider.kind === 'engine' && decider.humanAttempted()) return { kind: 'stood-down' };
@@ -385,6 +384,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
       } catch (e) {
         const reason = errMsg(e);
         deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
+        // The engine's outcome feeds the failed-effect marker, which a report failure has never set (N9b.5(d)).
+        if (by === 'human') effectFailures.push(`report ${o.id}: ${reason}`);
         deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
         ok = false;
       }
@@ -403,7 +404,7 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     }
     if (!ok) {
       deps.onViewChanged();
-      return { kind: 'held' };
+      return { kind: 'held', effectFailures };
     }
   }
 
@@ -418,7 +419,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     deps.onViewChanged();
     return { kind: 'accept-failed', reason };
   }
-  accepted = true;
   // §27.9/AC6 — approve ends any polish stand-down. Cleared ONLY after the accept persisted (above), so a failed
   // accept leaves the operator still in polish and able to retry rather than stranded out of it. Best-effort: the
   // accept has already persisted, so a throw here (e.g. the polish file swapped for a directory → EISDIR, which

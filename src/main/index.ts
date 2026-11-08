@@ -19,7 +19,7 @@ import {
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
-import { createInjector, DEFER_DEADLINE_MS } from './inject';
+import { createInjector, DEFER_DEADLINE_MS, type Injector } from './inject';
 import { catalogListResult, listCatalog } from './flowCatalogList';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
@@ -139,8 +139,11 @@ import { mcpBuildId } from './mcpBuildId';
 import { openWindowBridge, type WindowBridge } from './mcpWindowBridge';
 import { windowSessionEnv } from './mcpSessionEnv';
 import { catalogView, readLatestRoundReport, readWindowState } from './mcpWindowState';
-import type { WindowRequest } from '../shared/mcpBridge';
-import { isMcpToolName, type McpToolName } from '../shared/mcp';
+import type { McpWindowState } from '../shared/mcpWindowState';
+import type { McpCaller, WindowRequest } from '../shared/mcpBridge';
+import { MCP_HOOK_REPORT } from '../shared/mcp';
+import { createMcpActions } from './mcpActions';
+import { createSessionTurns, readSessionLaunch } from './mcpSessionTurns';
 import { isValidClaudeCodeIntegration } from './ipcValidation';
 import { errMsg } from './errno';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
@@ -164,7 +167,7 @@ import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
-import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
+import { HUMAN_DECIDER, runAppApprove, runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
@@ -176,6 +179,7 @@ import type { LoopBinding } from '../shared/loopNamespace';
 import {
   composeCurrentRun,
   composeEngineApprove,
+  composeHumanApprove,
   composeHumanDecisionRunners,
   composeLifecycleEndRun,
   composeLoopBindingResolve,
@@ -293,13 +297,13 @@ async function createWindow(): Promise<void> {
   // just get no tools.
   await refreshMcpLauncher(flowGlobalDir, mcpInvocation).catch((error: unknown) =>
     console.error(`The Claude Code tools' launcher could not be refreshed: ${errMsg(error)}`));
-  let answerMcp: (request: WindowRequest) => Promise<unknown> = async () => {
+  let answerMcp: (request: WindowRequest, caller: McpCaller) => Promise<unknown> = async () => {
     throw new Error('the window is still starting');
   };
   const mcpBridge: WindowBridge | null = await (async () => openWindowBridge({
     appHome: flowGlobalDir,
     build: mcpBuildId(mcpScript),
-    handle: (request) => answerMcp(request),
+    handle: (request, caller) => answerMcp(request, caller),
   }))().catch((error: unknown) => {
     console.error(`The Claude Code tools are off in this window: ${errMsg(error)}`);
     return null;
@@ -476,11 +480,16 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  const inject = createInjector({
+  const writeInjection = createInjector({
     write: (data) => ptyIo.io.write(data),
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
+  const sessionTurns = createSessionTurns({ launchOf: readSessionLaunch });
+  const inject: Injector = (text, opts) => {
+    sessionTurns.injected(text, { submitted: opts?.submit ?? false });
+    writeInjection(text, opts);
+  };
 
   // §27 activity readout — an in-flight bootstrap (before the app-loop run state exists) feeds the status
   // bar's activity via deriveLoopActivity; not authority, only display. Written by the §27 bootstrap
@@ -1297,6 +1306,9 @@ async function createWindow(): Promise<void> {
     return Promise.resolve(false);
   };
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
+  const approveGate = (repoKey: string, step: string, turnKey: string) => runAppApprove(repoKey, step, turnKey, approveDepsFor(repoKey), HUMAN_DECIDER);
+  const humanApproveDeps = { pickupHold: pickupHoldRefusal, bindingOf: gateBindingOf, approve: approveGate };
+  const approveFromUi = composeHumanApprove(autoGate, { ...humanApproveDeps, onRefused: refuseGateDecision });
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
     advance: (repoKey) => {
@@ -1350,25 +1362,35 @@ async function createWindow(): Promise<void> {
   const windowId = randomUUID();
   const readRoundReport = createRoundReportReader((line) => console.error(line));
   const latestRoundReport = (repoKey: string, view: FlowStateView): Promise<unknown> => readLatestRoundReport(repoKey, view, readRoundReport);
-  const readMcpWindowState = async (): Promise<unknown> => {
+  const mcpWindowSource = () => {
     const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
     const view = withDerived(repoKey, flow.state(repoKey));
     const catalog = listFlowCatalog(repoKey);
     refreshControllerStatus();
-    return readWindowState({
+    return {
       windowId,
       repoKey,
       view,
       loopMessage: currentWork?.loopMessage ?? null,
       todos: todoStore.list(repoKey),
-      latestRoundReport: await latestRoundReport(repoKey, view),
       ...catalogView(catalog),
-    });
+    };
   };
-  const mcpOperations: Record<McpToolName, (args: unknown) => Promise<unknown>> = { read_state: readMcpWindowState };
-  answerMcp = async (request) => {
-    if (!isMcpToolName(request.tool)) throw new Error(`no window operation for ${request.tool}`);
-    return mcpOperations[request.tool](request.args);
+  const readMcpWindowState = async (): Promise<McpWindowState> => {
+    const source = mcpWindowSource();
+    return readWindowState({ ...source, latestRoundReport: await latestRoundReport(source.repoKey, source.view) });
+  };
+  const mcpActions = createMcpActions({
+    windowId,
+    originOf: (caller) => (caller.session === null ? Promise.resolve('undetermined') : sessionTurns.origin(caller.session)),
+    readState: readMcpWindowState,
+    readGateState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
+    gate: { ...humanApproveDeps, autoGate },
+  });
+  answerMcp = async (request, caller) => {
+    if (request.tool !== MCP_HOOK_REPORT) return mcpActions.call(request, caller);
+    if (caller.session !== null) sessionTurns.hook(caller.session, request.args);
+    return null;
   };
 
   const disposeIpc = registerIpcListeners(
@@ -1482,8 +1504,11 @@ async function createWindow(): Promise<void> {
       // §27.9/§27.13 / N5 / §6 / AC7 — approve, polish and back-to-red without a brief. The reply is whether the
       // decision landed, sent once main has finished acting on it, so the gate's controls hold until then.
       // Fail-closed to false.
-      [CH.flowAppGateDecision]: (_e, m) =>
-        isValidFlowAppGateDecision(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option) : false,
+      [CH.flowAppGateDecision]: async (_e, m) => {
+        if (!isValidFlowAppGateDecision(m)) return false;
+        if (m.option !== 'approve') return humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option);
+        return (await approveFromUi(m.repoKey, m.step, m.turnKey)).kind === 'advanced';
+      },
       // §27.9/AC4 — request-changes is TWO-way: it returns whether the round started so the
       // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
       [CH.flowAppRequestChanges]: (_e, m) =>

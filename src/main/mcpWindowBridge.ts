@@ -46,9 +46,9 @@ export async function openWindowBridge(opts: {
       }
       if (stage === 'call' && message?.type === 'call') {
         stage = 'answering';
-        const { request } = message;
+        const { request, caller } = message;
         Promise.resolve()
-          .then(() => opts.handle(request, { session: null }))
+          .then(() => opts.handle(request, caller))
           .then((value) => encodeBridgeMessage({ type: 'result', value }))
           .then(
             (line) => {

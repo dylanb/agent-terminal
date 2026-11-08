@@ -150,10 +150,55 @@ export interface HumanApproveDeps {
   pickupHold: (repoKey: string) => string | null;
   bindingOf: (repoKey: string, step: string) => LoopBinding | null;
   approve: (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome>;
+  /** Told the reason when the pickup hold or the binding refuses the approve. */
+  onRefused?: (reason: string) => void;
+}
+
+/** The human approves running, per gate controller, so the Approve control and an MCP approve never run a gate's
+ *  outward side effects twice. */
+const approvesRunning = new WeakMap<object, Set<string>>();
+
+const gateKey = (repoKey: string, step: string, turnKey: string): string => JSON.stringify([repoKey, step, turnKey]);
+
+export const APPROVE_ALREADY_RUNNING = 'an approve of this gate is already running; read the state again once it has finished';
+
+/** Whether a human approve of the gate is running over `autoGate`. */
+export function approveRunning(autoGate: object, repoKey: string, step: string, turnKey: string): boolean {
+  return approvesRunning.get(autoGate)?.has(gateKey(repoKey, step, turnKey)) ?? false;
+}
+
+/** Why the human approve cannot decide `step` now, or null: the one rule the approve and a caller that must refuse
+ *  before the gate is told of the decision both check. */
+export function humanApproveRefusal(deps: Pick<HumanApproveDeps, 'pickupHold' | 'bindingOf'>, repoKey: string, step: string): string | null {
+  return deps.pickupHold(repoKey) ?? markedBindingRefusal(deps.bindingOf, repoKey, step);
 }
 
 /** The human approve both the gate's Approve control and the MCP approve run, with its outcome. It tells the gate of
  *  the decision before it refuses for a pickup hold or a retired binding: N9b.5(e) counts a refused attempt. */
-export function composeHumanApprove(_autoGate: Pick<AutoGate, 'humanDecision'>, _deps: HumanApproveDeps): (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome> {
-  return async () => ({ kind: 'refused', reason: 'not built' });
+export function composeHumanApprove(autoGate: Pick<AutoGate, 'humanDecision'>, deps: HumanApproveDeps): (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome> {
+  return async (repoKey, step, turnKey) => {
+    if (approveRunning(autoGate, repoKey, step, turnKey)) {
+      deps.onRefused?.(APPROVE_ALREADY_RUNNING);
+      return { kind: 'refused', reason: APPROVE_ALREADY_RUNNING };
+    }
+    const running = approvesRunning.get(autoGate) ?? new Set<string>();
+    approvesRunning.set(autoGate, running);
+    const key = gateKey(repoKey, step, turnKey);
+    running.add(key);
+    const settled = autoGate.humanDecision(repoKey, step, turnKey);
+    let landed = false;
+    try {
+      const refusal = humanApproveRefusal(deps, repoKey, step);
+      if (refusal !== null) {
+        deps.onRefused?.(refusal);
+        return { kind: 'refused', reason: refusal };
+      }
+      const outcome = await deps.approve(repoKey, step, turnKey);
+      landed = outcome.kind === 'advanced';
+      return outcome;
+    } finally {
+      running.delete(key);
+      settled(landed);
+    }
+  };
 }

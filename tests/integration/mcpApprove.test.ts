@@ -4,7 +4,8 @@ import { createMcpActions } from '../../src/main/mcpActions';
 import { toolResult, type McpToolResult } from '../../src/main/mcpTools';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
 import type { TurnOrigin } from '../../src/shared/turnOrigin';
-import { mkDeps } from '../helpers/appGateDecisionDeps';
+import { APPROVE_MARK_READY, defWithGate, mkDeps } from '../helpers/appGateDecisionDeps';
+import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { APP_LOOP_NAMESPACE, MARKED_BINDING_REASON, RETIRED_LOOP_NAMESPACE, type LoopBinding } from '../../src/shared/loopNamespace';
 
 // Approve through MCP (#322 slice 2): the window checks the ticket's refusal reasons in order before any decision
@@ -41,6 +42,8 @@ const REFUSALS = [
 ] as const;
 
 const text = (result: McpToolResult): string => result.content.map((c) => c.text).join('\n');
+/** The message the agent relays, as the result carries it. */
+const messageOf = (result: McpToolResult): string => String((JSON.parse(text(result)) as { message?: unknown }).message);
 
 /** Which refusal a result is: `taken` for a success, `neither` for an error naming no refusal reason. */
 function classOf(result: McpToolResult): string {
@@ -61,6 +64,7 @@ function window(opts: { origin?: TurnOrigin; origins?: Record<number, TurnOrigin
     windowId: WINDOW,
     originOf: async (caller) => (caller.session === null ? undefined : (opts.origins ?? { [CALLER]: opts.origin ?? 'human' })[caller.session]) ?? 'undetermined',
     readState: async () => structuredClone(opts.state ?? atGate()),
+    readGateState: () => structuredClone(opts.state ?? atGate()),
     gate: {
       autoGate: {
         humanDecision: (repoKey, step, turnKey) => {
@@ -155,10 +159,10 @@ describe('an approve naming a target the window no longer shows', () => {
     expect(got).toEqual({ otherRepo: refused, staleStep: refused, staleTurn: refused, notOffered: refused });
   });
 
-  it('is not valid in the current state, without a loop message, when the gate moved on after the window was read', async () => {
+  it('is not taken, neither success nor refusal, without a loop message, when the gate moved on after the window was read', async () => {
     const w = window({ gate: { run: { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan-2', status: 'complete', round: 3, verdict: 'clean' } } });
     const result = await w.call('approve', OWN_TARGET);
-    expect({ result: classOf(result), acted: w.acted(), decisionLanded: w.decisions.some((d) => d.landed !== false) }).toEqual({ result: 'not valid', acted: false, decisionLanded: false });
+    expect({ result: classOf(result), acted: w.acted(), decisionLanded: w.decisions.some((d) => d.landed !== false) }).toEqual({ result: 'neither', acted: false, decisionLanded: false });
   });
 });
 
@@ -169,7 +173,7 @@ describe('an approve the window cannot decide now', () => {
   ] as const)('%s refuses it as not valid in the current state, naming why, before anything is accepted or posted', async (_name, opts, reason) => {
     const w = window(opts);
     const result = await w.call('approve', OWN_TARGET);
-    expect({ result: classOf(result), namesWhy: text(result).includes(reason), changed: w.changed() }).toEqual({ result: 'not valid', namesWhy: true, changed: false });
+    expect({ result: classOf(result), namesWhy: messageOf(result).includes(reason), changed: w.changed() }).toEqual({ result: 'not valid', namesWhy: true, changed: false });
   });
 });
 
@@ -256,6 +260,125 @@ describe('what an approve in a human-started turn returns', () => {
       saysBlocked: true,
       advanced: [],
       decisionLanded: [false],
+    });
+  });
+});
+
+describe('what an approve result says happened', () => {
+  const withReport = { ...defWithGate(APPROVE_MARK_READY), outputs: [{ id: 'impl-report', path: '.agent-terminal/loop/artifacts/impl-report.md', sectionsDir: '.agent-terminal/loop/artifacts/impl-report' }] } as unknown as LoopDefV2;
+
+  it('at a human gate, a report that cannot be assembled is not taken, naming the report and why', async () => {
+    const w = window({
+      gate: {
+        holds: true,
+        resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+        assembleReport: () => {
+          throw new Error('EACCES: permission denied');
+        },
+      },
+    });
+    const said = messageOf(await w.call('approve', OWN_TARGET));
+    expect({ namesReport: said.includes('impl-report'), namesReason: said.includes('EACCES'), saysRetryRerunsAll: /approv\w* again/i.test(said) && /every side effect/i.test(said) }).toEqual({
+      namesReport: true,
+      namesReason: true,
+      saysRetryRerunsAll: true,
+    });
+  });
+
+  it('an approve waiting on the epic-promotion preview never says it was taken', async () => {
+    const said = messageOf(await window({ gate: { maybeBeginEpicPromotion: () => ({ kind: 'preview-raised' }) } }).call('approve', OWN_TARGET));
+    expect(/\btaken\b/i.test(said) && !/not (yet )?taken/i.test(said)).toBe(false);
+  });
+
+  it('a taken approve whose only failure is one the window shows no Loop error for never points the operator at a Loop error', async () => {
+    const w = window({
+      gate: {
+        clearPolish: () => {
+          throw new Error('EISDIR: illegal operation on a directory');
+        },
+      },
+    });
+    const said = messageOf(await w.call('approve', OWN_TARGET));
+    expect({ namesReason: said.includes('EISDIR'), loopErrors: w.rec.errors.length, claimsLoopError: /loop error/i.test(said) }).toEqual({ namesReason: true, loopErrors: 0, claimsLoopError: false });
+  });
+
+  it('when the gate moved on after the window was read, the result never claims that nothing changed, and says to read the state again', async () => {
+    const w = window({ gate: { run: { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan-2', status: 'complete', round: 3, verdict: 'clean' } } });
+    const said = messageOf(await w.call('approve', OWN_TARGET));
+    expect({ claimsNothingChanged: /nothing was changed/i.test(said), saysReadAgain: /read the (window's )?state again/i.test(said) }).toEqual({ claimsNothingChanged: false, saysReadAgain: true });
+  });
+});
+
+describe('an approve whose arguments the window cannot read', () => {
+  it('is neither success nor refusal, names the argument, and changes nothing', async () => {
+    const { step: _step, ...noStep } = OWN_TARGET;
+    const got: Record<string, unknown> = {};
+    for (const [name, args, argument] of [['numericTurn', { ...OWN_TARGET, turn: 7 }, 'turn'], ['noStep', noStep, 'step']] as const) {
+      const w = window();
+      const result = await w.call('approve', args);
+      got[name] = { result: classOf(result), namesArgument: messageOf(result).includes(argument), changed: w.changed() };
+    }
+    const unread = { result: 'neither', namesArgument: true, changed: false };
+    expect(got).toEqual({ numericTurn: unread, noStep: unread });
+  });
+});
+
+describe('an approve while another approve of the same gate is running', () => {
+  it('is not valid in the current state, naming the running approve, and runs no side effect again', async () => {
+    const waiting: (() => void)[] = [];
+    const release = (): void => waiting.splice(0).forEach((resolve) => resolve());
+    const w = window({
+      gate: {
+        holds: true,
+        runSideEffect: async () => {
+          w.rec.sideEffects.push({ action: 'mark-ready', ctx: null });
+          await new Promise<void>((resolve) => void waiting.push(resolve));
+          return { outcome: 'done' };
+        },
+      },
+    });
+    const first = w.call('approve', OWN_TARGET);
+    await new Promise((resolve) => setImmediate(resolve));
+    const pendingSecond = w.call('approve', OWN_TARGET);
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    const second = await pendingSecond;
+    expect({ first: classOf(await first), second: classOf(second), namesWhy: /already running/.test(messageOf(second)), sideEffects: w.rec.sideEffects.length }).toEqual({
+      first: 'taken',
+      second: 'not valid',
+      namesWhy: true,
+      sideEffects: 1,
+    });
+  });
+});
+
+describe('the current target after authorization', () => {
+  it('refuses the old repository when the window changes repositories during authorization, before telling either gate', async () => {
+    let current = atGate();
+    let release: (origin: TurnOrigin) => void = () => {};
+    let started: () => void = () => {};
+    const checking = new Promise<void>((resolve) => { started = resolve; });
+    const { deps, rec } = mkDeps({});
+    let gateChanged = false;
+    const actions = createMcpActions({
+      windowId: WINDOW,
+      originOf: () => new Promise<TurnOrigin>((resolve) => { release = resolve; started(); }),
+      readState: async () => structuredClone(current),
+      readGateState: () => structuredClone(current),
+      gate: {
+        autoGate: { humanDecision: () => { gateChanged = true; return () => {}; } },
+        pickupHold: () => null,
+        bindingOf: () => APP_LOOP_NAMESPACE,
+        approve: (repoKey, step, turnKey) => runAppApprove(repoKey, step, turnKey, deps, HUMAN_DECIDER),
+      },
+    });
+    const pending = actions.call({ tool: 'approve', args: OWN_TARGET }, { session: CALLER });
+    await checking;
+    current = { ...atGate(), repo: { key: '/other-repo' } };
+    release('human');
+    const result = toolResult({ kind: 'answered', value: await pending });
+    expect({ result: classOf(result), namesCurrentRepo: messageOf(result).includes('/other-repo'), gateChanged, accepts: rec.accepts, effects: rec.sideEffects, advances: rec.advances, errors: rec.errors }).toEqual({
+      result: 'not valid', namesCurrentRepo: true, gateChanged: false, accepts: [], effects: [], advances: [], errors: [],
     });
   });
 });
