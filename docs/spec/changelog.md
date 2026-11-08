@@ -2,6 +2,46 @@
 
 §18.4/§27.10: a loop def's `pickup` can now adopt the pull request a step's required `pr` input names (`pickup: { adopt: pr }`) instead of picking up a ticket. The PR's closing references in its base or head repository are its tickets; a PR closing several asks the operator to pick the primary, which becomes the run's identity, and the run's prompts and reviewer hand-offs name every ticket as intent and the PR's own commits, from the recorded merge-base, as the change. The start works locally on a per-run fix branch at the PR's fetched head and publishes nothing; it refuses a closed, merged or ticketless PR, among others, through the existing rollback dialog, and turns are held to the fix branch. A flow that breaks the adoption load rules (including an adopting step declaring `gate_authority: auto`) fails to load. §27.13: the new `publish-pr-review` gate side effect publishes, on human approval, exactly one of a draft fix PR into the PR's head branch with a linking run comment, a report comment, or a report-and-`git format-patch` comment (fork, or no push permission), after checking everything first and holding the gate with the reason when any check fails or a body exceeds 65,536 characters; retries are idempotent. `update-issue-body`, `mark-ready` and `publish-pr-body` refuse an adopted pickup at the operation, and `promote` is barred by the load rules. The relaunch confirm hold shows an adopted run's PR and primary read-only. The test-proof summary comment now shares the run comment's marked-comment upsert and sends its body on stdin. §27.9.1: an adopted PR's code and tree are inside the operator's trust boundary, but a PR's copy of the app's run state under `.agent-terminal/loop/` never is. §25.5: `ticket.assoc` gains an optional `repo`. §27.9.1: the app's state files directly under `.agent-terminal/` (outside `loop/`) are an adopted PR's content and honoured like its code; only `loop/` is refused. §27.13: `publish-pr-review` fast-forwards this run's own fix branch when GitHub has it at an earlier commit and this run's fix PR from it is open, so a later round's approve updates the same fix PR; a branch outside the fix branch's history still holds.
 
+## #222 — Controller cards sort by attention or recent use, and hold still while used
+
+§23.6: the controller's cards were in registration order. They now sort in **Attention** order by default (Errors, Needs a human, Idle & unassigned, Working, each under a level-2 heading with its count, longest in its state first), or in **Recently used** order (cards used through their own controls in this controller run, most recent first, then the rest in Attention order), chosen with a "Sort cards" radio group in the window header and named by a sentence beneath it. Each card header shows its controller-observed time in state ("waiting 41m", "running 34m", "for 3m"), restarted when its status group changes or a disconnected card reconnects. While the pointer is over a card, or focus is inside it with the window focused, the whole list is frozen and that card shows " · position held"; statuses and counts still update, arrivals go last, removals close up, and the list re-sorts when the last hold ends. None of this is announced. The sort order is saved in its own file, `controller-sort.json`, in the controller's app data beside the theme and window placement; a missing or damaged file means Attention. "No feature state is saved by either application" now excepts the controller's own window preferences. New IPC channels `controller:getSortMode` and `controller:setSortMode`; no protocol change.
+
+## The setup check moves to a setup needed button in the status bar
+
+§22.3.1/§29.1/§29.3/§29.5 (operator decision 2026-11-08): the setup popup opened on its own at startup and on entering a repository, and while it was open the terminal took no input, so an operator whose shell was asking a question at startup could not answer it. Its timing rules (the once-per-session check, the queue of popups, the wait for other dialogs, stepping aside for Run setup loop and returning when an agent went idle) kept failing in new ways. Now:
+
+- the popup never opens on its own. The status bar shows a **setup needed** button, before the work's name, while the latest check of the terminal's directory lists anything, and pressing it opens the popup (§22.3.1, §29.1);
+- the check runs at startup and on every change of the terminal's repository key, inside a repository or not, and closing the popup checks again, so the button goes once nothing is listed (§29.1);
+- Run setup loop closes the popup and starts the flow; the popup does not come back. A refused start shows its reason in the app's error dialog. Once the flow has started, the check no longer counts the entries it fixes for the rest of the app session (§29.5);
+- an agent starting at the prompt never opens the popup; an open popup still offers Run setup loop only while an agent is there (§29.5);
+- UI-STANDARDS.md §5 item 9 now says a condition the app notices opens no dialog on its own, and `Shell.modalIsOpen()`/`Shell.onModalClosed`, which only the self-opening popup used, are removed.
+
+## Run setup loop waits for an agent, and a loop turn waits for one before failing
+
+§27.2/§29.3/§29.5 (operator decision 2026-11-07): Run setup loop was offered before Claude Code or Codex was running. Its first turn found no agent at the prompt and stopped in `error` at once, and the popup, which blocks the terminal, gave the operator no chance to start one. A fresh shell also read as an agent being present until it had run a command: the shell integration marked only the prompts after the first. Now:
+
+- the shell integration marks the first prompt too, so a fresh shell reads as a bare shell (§27.2);
+- an agent is at the prompt only when the running command line starts a listed agent program, `claude` or `codex` by default (`APP_AGENT_COMMANDS` overrides the list); before, any running command counted, so a turn could be typed into an editor or a dev server, and a short `cd` brought the popup back over the terminal (§27.2);
+- the setup popup offers Run setup loop only while an agent is at the terminal's prompt, following it as it starts and leaves, and otherwise says to start one;
+- a popup closed while Run setup loop waited for an agent comes back once when the agent is idle at its prompt, listing only the entries the setup flow fixes;
+- a loop turn that finds no agent at the prompt waits for one, for sixty seconds by default (`APP_AGENT_WAIT_MS` overrides it), injects once the agent is at its prompt, and stops in `error` only if none has arrived; it still never types the prompt into the shell.
+
+IPC: `setup:agentState` (the renderer asks whether an agent is at the prompt, idle or busy) and `setup:agentStateChanged` (main reports a change).
+
+## #317 — The setup popup keeps its buttons inside the dialog and stays open until the operator dismisses it
+
+§29.1/§29.3/§29.5/§18.1 (operator decision 2026-11-07): the popup's controls sat on one line wider than its card, so some were painted outside it and could not be pressed, and the popup closed after Install/update examples or Run setup loop although other entries still needed an action. Now:
+
+- every dialog's footer wraps its controls inside the card at any window size (the shared `.flow-modal` rules);
+- Install/update examples installs from inside the popup, asking the Settings view's replace question in its own card when installed files differ, then lists what still fails for its repository;
+- Run setup loop removes the entries the setup flow fixes and brings the popup back with whatever else is listed; a refusal shows its reason in the popup, which keeps every entry, and no separate alert opens;
+- the popup closes only through Close, Escape or the scrim, or when nothing is left listed.
+
+`UI-STANDARDS.md` §5 gains two rules from this work (operator decision 2026-11-07), each with a definition-of-done item:
+
+- item 10: a reason a dialog is rebuilt with is written as the card is built and named in its description, not filled into a fresh alert line in the same task;
+- item 11: content shown in more than one dialog builds its whole `ModalCard` from the dialog's title id and footer, and each dialog supplies only its own controls.
+
 ## Stalled loop turns resume from the gate question
 
 §27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:

@@ -97,6 +97,22 @@ describe('shell integration script (§15.5 / D3) — real bash under a PTY', () 
     expect(tracker.capture(echo!.id)?.text).toContain('hi');
   });
 
+  it.skipIf(!PTY_DRIVER)('marks the first prompt, before any command has run, so a fresh shell reads as at its prompt', async () => {
+    const output = runBashSession('exit\n');
+
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 5, quietMs: 20, onStatus: () => {} });
+    tracker = createCommandTracker({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onOsc: (id, cb) => shadow.onOsc(id, cb),
+      config: resolveRuntimeConfig({}),
+    });
+    shadow.write(output);
+    await sleep(80);
+
+    expect(tracker.shellPrompted()).toBe(true);
+  });
+
   it.skipIf(!PTY_DRIVER)('emits OSC 7 on each prompt so the cwd tracker follows a real `cd` (§16.3)', async () => {
     const output = runBashSession('cd /tmp\nexit\n');
     expect(output).toMatch(/\x1b]7;file:\/\//);

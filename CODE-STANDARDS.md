@@ -75,8 +75,21 @@ be found by hand, and a test can keep passing against a message the app no longe
 needs a registered terminal uses `connectScriptedTerminal` (`tests/helpers/scriptedControllerTerminal.ts`).
 The exception is a test whose subject *is* the wire format — version negotiation, malformed or fragmented
 frames, the parser's accept/reject rules — where the typed-in bytes are the contract; those files are
-listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. A `no-restricted-syntax` rule there flags a literal
+listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. The `local/protocol-constants` lint rule there flags a literal
 `version` or `minor` on a message a controller test builds.
+
+## A lint check is its own rule; a restriction rule has one owner per file
+
+A lint check that `eslint.config.mjs` adds for a set of files is its own named rule, built with
+`selectorRule` there and enabled as `local/<name>`, never one more selector list in a
+`no-restricted-syntax` block. In ESLint's flat config a rule that takes options is set, not merged: the last
+block that names a file replaces every earlier block's options for that rule, so a second
+`no-restricted-syntax` (or `no-restricted-properties`, `-imports`, `-globals`) block over files an earlier
+block already covers silently switches the earlier checks off there. The controller tests lost the
+sort-control check that way, unseen, because each block had to repeat every earlier list and one repeat was
+missed. Named rules add up instead. A core `no-restricted-*` rule stays fine for files no other block sets
+it for; `tests/unit/lintRestrictionOwnership.test.ts` fails when two blocks set the same one for any file in
+the repository.
 
 ## An injection seam names a domain concept, not the shape of what backs it
 

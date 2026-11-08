@@ -48,6 +48,25 @@ function leadsWithHardening(context, argv) {
   return first?.type === 'SpreadElement' && isHardening(context, first.argument);
 }
 
+/** A rule that reports each `{ selector, message }` it is built with. Each concern is its own rule, so blocks that
+ *  name the same file add their checks together; one `no-restricted-syntax` per file would keep only the last. */
+function selectorRule(description, entries) {
+  return {
+    meta: { type: 'problem', docs: { description }, messages: { found: '{{message}}' }, schema: [] },
+    create(context) {
+      const handlers = {};
+      for (const { selector, message } of entries) {
+        const before = handlers[selector];
+        handlers[selector] = (node) => {
+          before?.(node);
+          context.report({ node, messageId: 'found', data: { message } });
+        };
+      }
+      return handlers;
+    },
+  };
+}
+
 const localPlugin = {
   rules: {
     'git-hardening': {
@@ -129,6 +148,11 @@ const SWITCH_DOM = [
   "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|locator)$/][arguments.0.value=/role=[\"']?switch\\b/]",
   "CallExpression[callee.property.name='getByRole'][arguments.0.value='switch']",
 ].map((selector) => ({ selector, message: SWITCH_HELPER_MESSAGE }));
+const SORT_CONTROL_HELPER_MESSAGE = 'Find the controller sort control through tests/helpers/controllerCards.ts.';
+const SORT_CONTROL_DOM = [
+  "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|locator)$/][arguments.0.value=/role=[\"']?radio(group)?\\b/]",
+  "CallExpression[callee.property.name='getByRole'][arguments.0.value=/^radio(group)?$/]",
+].map((selector) => ({ selector, message: SORT_CONTROL_HELPER_MESSAGE }));
 const NO_SLEEP_MESSAGE = 'Wait for an observed state (expect.poll, tests/e2e/controllerWindow.ts), never a fixed time.';
 const NO_SLEEP = { selector: "CallExpression[callee.property.name='waitForTimeout']", message: NO_SLEEP_MESSAGE };
 const NO_PROMISE_SLEEP = { selector: "NewExpression[callee.name='Promise'] CallExpression[callee.name='setTimeout']", message: NO_SLEEP_MESSAGE };
@@ -138,7 +162,47 @@ const CONTROLLER_PLATFORM_READS = [
   { object: 'os', property: 'platform', message: PLATFORM_MESSAGE },
 ];
 const CONTROLLER_PLATFORM_IMPORTS = ['os', 'node:os', 'process', 'node:process'].map((name) => ({ name, importNames: ['platform'], message: PLATFORM_MESSAGE }));
-const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts'];
+const TEST_WALL_CLOCK_MESSAGE = 'Drive time through the fake clock (tests/helpers/controllerMount.ts), never the wall clock.';
+const TEST_WALL_CLOCK_READS = [
+  { object: 'Date', property: 'now', message: TEST_WALL_CLOCK_MESSAGE },
+  { object: 'performance', property: 'now', message: TEST_WALL_CLOCK_MESSAGE },
+];
+const TEST_NEW_DATE = { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: TEST_WALL_CLOCK_MESSAGE };
+const CLOCK_SEAM_MESSAGE = 'Read time through the clock dependency the panes are given, never the wall clock or a timer of its own, so a test drives every time the controller shows (CLAUDE.md § Test-driven development, injection seams).';
+const WINDOW_FOCUS_SEAM_MESSAGE = 'Read whether the controller window has focus through the window focus dependency the panes are given, so a test drives it (CLAUDE.md § Test-driven development, injection seams).';
+const CLOCK_SEAM_READS = [
+  { object: 'Date', property: 'now', message: CLOCK_SEAM_MESSAGE },
+  { object: 'performance', property: 'now', message: CLOCK_SEAM_MESSAGE },
+  ...['setTimeout', 'setInterval'].map((property) => ({ object: 'window', property, message: CLOCK_SEAM_MESSAGE })),
+  { object: 'document', property: 'hasFocus', message: WINDOW_FOCUS_SEAM_MESSAGE },
+];
+const CLOCK_SEAM_GLOBALS = ['setTimeout', 'setInterval'].map((name) => ({ name, message: CLOCK_SEAM_MESSAGE }));
+const CLOCK_SEAM_SYNTAX = { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: CLOCK_SEAM_MESSAGE };
+const CARD_ORDER_CODE = ['src/renderer/src/controllerCardOrder.ts', 'src/renderer/src/controllerPanes.ts', 'src/renderer/src/controllerCard.ts', 'src/renderer/src/sortModeControl.ts'];
+const LIVE_REGION_MESSAGE = 'A card, the card order and the sort control add no live region: a re-sort, a hold or a time-label tick announces nothing, and the controller panes own the role="status" and role="alert" regions.';
+const LIVE_REGION = [
+  "Literal[value='aria-live']",
+  "MemberExpression[property.name='ariaLive']",
+  "CallExpression[callee.property.name='setAttribute'][arguments.0.value='role'][arguments.1.value=/^(status|alert|log|marquee|timer)$/]",
+].map((selector) => ({ selector, message: LIVE_REGION_MESSAGE }));
+const QUIET_CARD_CODE = ['src/renderer/src/controllerCard.ts', 'src/renderer/src/controllerCardOrder.ts', 'src/renderer/src/sortModeControl.ts'];
+const CARD_ORDER_TESTS = [
+  'tests/unit/controllerCardOrder.test.ts',
+  'tests/unit/controllerSortOrder.test.ts',
+  'tests/unit/controllerRecentOrder.test.ts',
+  'tests/unit/sortModeControl.test.ts',
+  'tests/browser/controllerHold.test.ts',
+  'tests/browser/controllerAttentionReading.test.ts',
+  'tests/e2e/controllerAttentionOrder.spec.ts',
+  'tests/e2e/controllerRecentOrder.spec.ts',
+  'tests/e2e/controllerRecency.spec.ts',
+  'tests/e2e/controllerHold.spec.ts',
+  'tests/browser/controllerRecency.test.ts',
+  'tests/browser/controllerLiveUpdate.test.ts',
+  'tests/browser/controllerCardUpdate.test.ts',
+];
+const ZERO_DELAY_FLUSH_CARD_TESTS = ['tests/unit/controllerCard.test.ts', 'tests/unit/controllerFrozenList.test.ts', 'tests/unit/controllerRecencyInPlace.test.ts'];
+const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts', 'tests/**/sortModeControl.test.ts'];
 const CARD_HELPER = [
   'tests/helpers/controllerCards.ts',
   'tests/helpers/controllerCardsDom.ts',
@@ -159,7 +223,7 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts'];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
 
 const IO_BUILTINS = ['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]);
 /** A decision core in src/main: no I/O built-in, no `process`/`fetch`/`WebSocket` global, no `require` or dynamic
@@ -189,6 +253,21 @@ const RAW_CLICK = [
   "AssignmentExpression[left.property.name='onclick']",
 ].map((selector) => ({ selector, message: PRESS_HELPER_MESSAGE }));
 
+const CONTROLLER_WAIT_TESTS = ['tests/e2e/controllerWindow*.ts', ...CARD_ORDER_TESTS];
+
+Object.assign(localPlugin.rules, {
+  'card-helper': selectorRule('Find controller cards through the card helper.', CARD_DOM),
+  'switch-helper': selectorRule('Find the controller header switch through the card helper.', SWITCH_DOM),
+  'sort-control-helper': selectorRule('Find the controller sort control through the card helper.', SORT_CONTROL_DOM),
+  'protocol-constants': selectorRule('Build controller messages with the protocol version constants.', TYPED_IN_VERSION),
+  'no-test-sleep': selectorRule('Wait for an observed state, never a fixed time.', [NO_SLEEP]),
+  'no-promise-sleep': selectorRule('Never sleep on a timer inside a promise.', [NO_PROMISE_SLEEP]),
+  'no-test-new-date': selectorRule('Drive time through the fake clock, never the wall clock.', [TEST_NEW_DATE]),
+  pressable: selectorRule('Run a control\'s action through pressable.ts.', RAW_CLICK),
+  'clock-seam': selectorRule('Read time through the clock dependency.', [CLOCK_SEAM_SYNTAX]),
+  'no-live-region': selectorRule('A card, the card order and the sort control add no live region.', LIVE_REGION),
+});
+
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
   {
@@ -207,27 +286,30 @@ export default [
   },
   {
     files: CONTROLLER_TESTS,
-    ignores: [...CARD_HELPER, ...WIRE_FORMAT_TESTS],
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...TYPED_IN_VERSION] },
-  },
-  {
-    files: CARD_HELPER,
-    ignores: WIRE_FORMAT_TESTS,
-    rules: { 'no-restricted-syntax': ['error', ...TYPED_IN_VERSION] },
-  },
-  {
-    files: WIRE_FORMAT_TESTS,
     ignores: CARD_HELPER,
-    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP] },
+    rules: { 'local/card-helper': 'error', 'local/sort-control-helper': 'error' },
   },
   {
-    files: ['tests/e2e/controllerWindow*.ts'],
+    files: CONTROLLER_TESTS,
+    ignores: WIRE_FORMAT_TESTS,
+    rules: { 'local/protocol-constants': 'error' },
+  },
+  {
+    files: [...WIRE_FORMAT_TESTS, ...CONTROLLER_WAIT_TESTS],
+    rules: { 'local/switch-helper': 'error', 'local/no-test-sleep': 'error' },
+  },
+  {
+    files: CONTROLLER_WAIT_TESTS,
     rules: {
-      'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP, NO_PROMISE_SLEEP],
+      'local/no-promise-sleep': 'error',
       'no-restricted-imports': ['error', {
         paths: ['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: NO_SLEEP_MESSAGE })),
       }],
     },
+  },
+  {
+    files: [...CARD_ORDER_TESTS, ...ZERO_DELAY_FLUSH_CARD_TESTS],
+    rules: { 'local/no-test-new-date': 'error', 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
   },
   {
     files: ['src/main/controller*.ts'],
@@ -259,7 +341,19 @@ export default [
   {
     files: ['src/renderer/**/*.ts'],
     ignores: ['src/renderer/src/pressable.ts'],
-    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
+    rules: { 'local/pressable': 'error' },
+  },
+  {
+    files: CARD_ORDER_CODE,
+    rules: {
+      'local/clock-seam': 'error',
+      'no-restricted-properties': ['error', ...CLOCK_SEAM_READS],
+      'no-restricted-globals': ['error', ...CLOCK_SEAM_GLOBALS],
+    },
+  },
+  {
+    files: QUIET_CARD_CODE,
+    rules: { 'local/no-live-region': 'error' },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,

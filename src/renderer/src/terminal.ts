@@ -112,6 +112,22 @@ export function wireTerminalThemeBackground(deps: {
   return () => obs.disconnect();
 }
 
+const LIVE_REGION_MAX_CHARS = 100;
+
+/** xterm 5.5's screen-reader live region caps itself by counting line feeds only, so a full-screen
+ *  app that redraws by cursor positioning grows it until a key press or blur clears it; every write
+ *  then re-lays-out the whole text and pins the renderer. */
+function capLiveRegion(container: HTMLElement, maxChars: number): () => void {
+  const region = container.querySelector('.live-region');
+  if (!region) return () => {};
+  const obs = new MutationObserver(() => {
+    const text = region.textContent ?? '';
+    if (text.length > maxChars) region.textContent = text.slice(0, maxChars);
+  });
+  obs.observe(region, { childList: true, characterData: true, subtree: true });
+  return () => obs.disconnect();
+}
+
 export function createTerminalPane(container: HTMLElement): TerminalPane {
   const termBg = readTermBg(container);
   const term = new Terminal({
@@ -132,6 +148,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container);
+  const unwireLiveRegion = capLiveRegion(container, LIVE_REGION_MAX_CHARS);
   fit.fit();
 
   const offData = window.term.onData((data) => term.write(data));
@@ -167,6 +184,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
       unwire();
       unwireDrop();
       unwireThemeBg();
+      unwireLiveRegion();
       term.dispose();
     },
   };

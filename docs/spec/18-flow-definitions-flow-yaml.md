@@ -14,6 +14,8 @@
   - **Codex reviewers are read-only by instruction only.** A Codex sub-agent inherits its parent's permissions and an agent file cannot narrow them, so a reviewer whose def lists a tool beyond Read/Grep/Glob/Bash is refused as mispackaged. Codex destinations are skipped, and reported as skipped, when the Codex home does not exist.
   - The action never deletes outside the leftovers it previewed and the user ticked, and never edits a `.gitignore` (§19.1): it is the explicit, user-invoked exemption to the no-silent-rewrite rule.
 
+The setup popup's **Install/update examples** runs this same install, with the same replace question, from inside the popup (§29.3).
+
 The shipped flows are in `example/flows/`. One of them, `repo-setup`, is the flow the setup popup's **Run setup loop** starts (§29).
 
 ### 18.2 Steps & kinds (D3/D7/D30)

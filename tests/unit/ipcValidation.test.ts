@@ -15,6 +15,7 @@ import {
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
   isValidSetupDismiss,
+  isValidSetupAgentState,
   isValidSetupStatus,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
@@ -198,6 +199,15 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
       relativeRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 'relative' }),
       notAnObject: isValidSetupStatus('/repo'),
     }).toEqual({ noSession: false, otherSession: false, noRepoKey: false, numberRepoKey: false, relativeRepoKey: false, notAnObject: false });
+  });
+
+  it('accepts a setup:agentState on the live session only', () => {
+    expect({
+      live: isValidSetupAgentState({ sessionId: sid }),
+      noSession: isValidSetupAgentState({}),
+      otherSession: isValidSetupAgentState({ sessionId: 'other' }),
+      notAnObject: isValidSetupAgentState(sid),
+    }).toEqual({ live: true, noSession: false, otherSession: false, notAnObject: false });
   });
 
   it('accepts a setup:dismiss of either kind on the live session, and rejects a malformed one', () => {
