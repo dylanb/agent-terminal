@@ -904,7 +904,7 @@ async function slice3Session(m: Machine): Promise<void> {
 function slice3Manual(m: Machine, inputs = false): void {
   mkdirSync(join(m.repo, '.agent-terminal'), { recursive: true });
   writeFileSync(join(m.repo, '.agent-terminal', 'flow.yaml'),
-    `name: mcp-manual\nsteps:\n  - id: prepare\n    kind: manual\n${inputs ? '    inputs:\n      - name: ticket\n        type: github-ticket\n' : ''}  - id: finish\n    kind: manual\n`);
+    `name: mcp-manual\nsteps:\n  - id: prepare\n    kind: manual\n${inputs ? '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' : ''}  - id: finish\n    kind: manual\n`);
 }
 
 test('MCP slice 3: request changes delivers feedback and shows the new round without advancing the flow', { tag: '@ownapp' }, async () => {
@@ -989,4 +989,23 @@ test('MCP slice 3: start with a ticket begins real pickup and reports it without
   expect.soft({ outcome: outcomeOf(result), pickup: /pickup.*started/i.test(message) }).toEqual({ outcome: 'taken', pickup: true });
   await expect.soft.poll(() => existsSync(`${m.ghLog}.pr-created`) ? readFileSync(`${m.ghLog}.pr-created`, 'utf8').trim() : '', { timeout: 10_000 }).toBe('4242');
   expect.soft(await page.locator('.flow-modal:visible').count()).toBe(0);
+});
+
+test('MCP typed entry inputs retain the UI input audit when starting and advancing', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  mkdirSync(join(m.repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), 'name: input-audit\nsteps:\n  - id: prepare\n    kind: manual\n    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n  - id: finish\n    kind: manual\n    inputs:\n      - name: summary\n        type: free-text\n        required: true\n');
+  await slice3Session(m);
+  expect(outcomeOf(await slice3Call(m, 'start', { inputs: { ticket: '322' } }))).toBe('taken');
+  const auditDir = join(m.appHome, '.agent-terminal/audit', basename(m.repo));
+  await expect.poll(() => existsSync(auditDir) ? readdirSync(auditDir).length : 0).toBe(1);
+  const events = () => parseAuditStream(readFileSync(join(auditDir, readdirSync(auditDir)[0]), 'utf8')).events;
+  expect.soft(events()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'input.resolved', name: 'ticket', value: '322' }),
+    expect.objectContaining({ type: 'ticket.assoc', ticket: 322 }),
+  ]));
+  expect(outcomeOf(await slice3Call(m, 'approve', { step: '$read_state.gate.step', inputs: { summary: 'Ready for review' } }))).toBe('taken');
+  expect.soft(events()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'input.resolved', name: 'summary', value: 'Ready for review' }),
+  ]));
 });

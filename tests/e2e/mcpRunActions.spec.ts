@@ -1,7 +1,8 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { parseAuditStream } from '../../src/shared/audit';
 import { dump, load } from 'js-yaml';
 import { electron, controllerOf } from './registeredElectron';
 import { seedFakeAgentV2, seedFakeGhGit, seedIsolatedClaudeConfig, writeCatalogEntry } from './fakeTools';
@@ -67,7 +68,7 @@ const read = (file: string): string => existsSync(file) ? readFileSync(file, 'ut
 for (const mode of ['supplied', 'missing', 'invalid', 'resolved'] as const) {
   test(`MCP loop approve entry: ${mode} next-step input is checked before acceptance and saved without a modal`, { tag: '@ownapp' }, async () => {
     const m = machine();
-    writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), 'name: input-entry\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n  - id: next\n    kind: manual\n    inputs:\n      - name: next-ticket\n        type: github-ticket\n');
+    writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), 'name: input-entry\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n  - id: next\n    kind: manual\n    inputs:\n      - name: next-ticket\n        type: github-ticket\n        required: true\n');
     writeFileSync(join(m.repo, '.agent-terminal/flow-state.yaml'), `step: plan\nstatus: not_started\ninputs:\n  pr: "321"\n${mode === 'resolved' ? '  next-ticket: "322"\n' : ''}`);
     const defPath = join(m.config, 'loops-v2/plan-loop/plan-loop.yaml');
     const def = load(readFileSync(defPath, 'utf8')) as { pickup?: unknown }; delete def.pickup; writeFileSync(defPath, dump(def));
@@ -89,6 +90,15 @@ for (const mode of ['supplied', 'missing', 'invalid', 'resolved'] as const) {
       const persisted = load(read(stateFile)) as { inputs?: Record<string, string> } | null;
       expect.soft(persisted?.inputs?.['next-ticket']).toBe('322');
       expect.soft(read(m.logFile)).toContain('gh pr ready 321');
+      if (mode === 'supplied') {
+        const auditDir = join(m.appHome, '.agent-terminal/audit', basename(m.repo));
+        const auditFiles = readdirSync(auditDir);
+        const events = parseAuditStream(read(join(auditDir, auditFiles[0]))).events;
+        expect.soft(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: 'input.resolved', name: 'next-ticket', value: '322' }),
+          expect.objectContaining({ type: 'ticket.assoc', ticket: 322 }),
+        ]));
+      }
     }
     expect.soft(await page.locator('.flow-modal:visible').count()).toBe(0);
   });
@@ -97,7 +107,7 @@ for (const mode of ['supplied', 'missing', 'invalid', 'resolved'] as const) {
 for (const tool of ['start', 'approve'] as const) {
   test(`MCP ${tool} entry raises the real pickup wipe confirmation and leaves every conflicting resource intact`, { tag: '@ownapp' }, async () => {
     const m = machine();
-    writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), `name: pickup-entry\nsteps:\n${tool === 'approve' ? '  - id: prepare\n    kind: manual\n' : ''}  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n  - id: done\n    kind: manual\n`);
+    writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), `name: pickup-entry\nsteps:\n${tool === 'approve' ? '  - id: prepare\n    kind: manual\n' : ''}  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n  - id: done\n    kind: manual\n`);
     const defPath = join(m.config, 'loops-v2/plan-loop/plan-loop.yaml');
     const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
     def.pickup = { initial_status: 'planning', branch_template: 'plan-loop/issue-{issue}', on_conflict: 'wipe-and-retry' };
@@ -169,10 +179,10 @@ test('MCP selects a listed single-loop catalog entry and starts that loop instea
 
 test('MCP approve pickup failure shows its blocking error and rolls back one step in the window and next read', { tag: '@ownapp' }, async () => {
   const m = machine();
-  writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), 'name: failed-pickup\nsteps:\n  - id: prepare\n    kind: manual\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n  - id: done\n    kind: manual\n');
+  writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), 'name: failed-pickup\nsteps:\n  - id: prepare\n    kind: manual\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n  - id: done\n    kind: manual\n');
   const defPath = join(m.config, 'loops-v2/plan-loop/plan-loop.yaml');
   const def = load(read(defPath)) as Record<string, unknown>;
-  def.pickup = { initial_status: 'planning', branch_template: 'plan-loop/issue-{issue}', on_conflict: 'fail' };
+  def.pickup = { initial_status: 'planning', branch_template: 'plan-loop/issue-{issue}', on_conflict: 'abort' };
   writeFileSync(defPath, dump(def));
   writeFileSync(`${m.logFile}.local-branch`, 'plan-loop/issue-322\n');
   await launch(m, { FAKE_GIT_BRANCH_EXISTS: '1' });

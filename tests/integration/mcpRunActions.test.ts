@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMcpActions } from '../../src/main/mcpActions';
-import { HUMAN_DECIDER, runAppApprove, runAppGateDecision } from '../../src/main/appGateDecision';
+import { HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome } from '../../src/main/appGateDecision';
 import { createLoopMessages } from '../../src/main/loopMessages';
 import { toolResult, type McpToolResult } from '../../src/main/mcpTools';
 import { APP_LOOP_NAMESPACE, RETIRED_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
@@ -39,12 +39,12 @@ function fixture(opts: { origin?: TurnOrigin; state?: McpWindowState; busy?: boo
       pickupHold: () => opts.held ? 'Confirm the run ticket first' : null,
       bindingOf: () => opts.retired ? RETIRED_LOOP_NAMESPACE : APP_LOOP_NAMESPACE,
       approve: (repo: string, step: string, turn: string) => runAppApprove(repo, step, turn, deps, HUMAN_DECIDER),
-      decide: (repo: string, step: string, turn: string, option: 'request-changes' | 'redo' | 'polish', note?: string) => runAppGateDecision(repo, step, turn, option, deps, note),
+      decide: (repo: string, step: string, turn: string, option: 'request-changes' | 'redo' | 'polish', note?: string) => runAppGateDecisionOutcome(repo, step, turn, option, deps, note),
     },
-    retry: (_repo: string, _step: string, _turn: string) => { state.stalledTurn = null; },
+    retry: (_repo: string, _step: string, _turn: string) => { state.stalledTurn = null; return { taken: true as const }; },
     dismissLoopMessage: (id: string) => messages.dismiss(id),
     chooseFlow: (_repo: string, id: string) => { if (state.flow) state.flow.selected = id; return { ok: true }; },
-    requiredInputs: () => opts.required ? [{ name: 'ticket', type: 'github-ticket', ...(opts.resolved ? { value: '322' } : {}) }] : [],
+    entryInputs: () => opts.required ? [{ name: 'ticket', type: 'github-ticket', required: true, ...(opts.resolved ? { value: '322' } : {}) }] : [],
     start: (_repo: string, inputs: Record<string, string>) => { Object.assign(savedInputs, inputs); if (state.flow) { state.flow.status = 'in_progress'; state.flow.runStarted = true; } return opts.operationResult ?? { kind: 'started' }; },
     terminate: (_repo: string) => { if (state.flow) { state.flow.status = 'not_started'; state.flow.runStarted = false; } state.todos = []; return { kind: 'terminated' }; },
     advance: (_repo: string, _step: string, inputs: Record<string, string>) => { Object.assign(savedInputs, inputs); if (state.flow) state.flow.step = 'done'; state.gate = null; return opts.operationResult ?? { kind: 'advanced' }; },

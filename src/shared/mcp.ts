@@ -1,7 +1,7 @@
 export const MCP_SERVER_NAME = 'agent-terminal';
 
 /** Every tool the server lists and its window answers; the server and the window both act on this one list. */
-export const MCP_TOOL_NAMES = ['read_state', 'approve'] as const;
+export const MCP_TOOL_NAMES = ['read_state', 'approve', 'request_changes', 'redo', 'polish', 'retry', 'dismiss_loop_message', 'choose_flow', 'start', 'terminate'] as const;
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
 export function isMcpToolName(name: string): name is McpToolName {

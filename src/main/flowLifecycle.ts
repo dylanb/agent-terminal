@@ -8,7 +8,7 @@ import type { LockedResult, WorktreeLock } from './worktreeLock';
 import { errMsg } from './errno';
 
 export type LifecycleTerminateResult =
-  | { outcome: 'reset'; view: FlowStateView }
+  | { outcome: 'reset'; view: FlowStateView; cleanupFailures?: string[] }
   | { outcome: 'refused'; cause: 'not-begun'; view: FlowStateView }
   | { outcome: 'refused'; cause: 'locked' | 'failed'; reason: string; view: FlowStateView };
 
@@ -48,24 +48,33 @@ const ACTIVE_TURN_REASON =
 
 const ROLLBACK_FAILED_REMEDY = 'The step was not rolled back; Terminate the run to end it.';
 
-function bestEffort(effect: () => void): void {
+function bestEffort(effect: () => void): string | null {
   try {
     effect();
+    return null;
   } catch (e) {
-    console.error('flow lifecycle side effect failed:', errMsg(e));
+    const reason = errMsg(e);
+    console.error('flow lifecycle side effect failed:', reason);
+    return reason;
   }
 }
 
 export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
-  const afterTerminateReset = (repoKey: string): void => {
-    bestEffort(() => deps.forgetRunEntry(repoKey));
-    bestEffort(() => deps.endRun(repoKey));
-    bestEffort(() => deps.releaseLoopTurn(repoKey));
-    bestEffort(() => deps.recordTerminate(repoKey));
-    bestEffort(() => deps.clearTodos(repoKey));
-    bestEffort(() => deps.clearSliceBrief(repoKey));
-    bestEffort(() => deps.clearMonitor());
-    bestEffort(() => deps.flowChanged());
+  const afterTerminateReset = (repoKey: string): string[] => {
+    const failures: string[] = [];
+    const apply = (name: string, effect: () => void): void => {
+      const reason = bestEffort(effect);
+      if (reason !== null) failures.push(`${name}: ${reason}`);
+    };
+    apply('Forget run entry', () => deps.forgetRunEntry(repoKey));
+    apply('End run', () => deps.endRun(repoKey));
+    apply('Release loop turn', () => deps.releaseLoopTurn(repoKey));
+    apply('Record termination', () => deps.recordTerminate(repoKey));
+    apply('Clear todos', () => deps.clearTodos(repoKey));
+    apply('Clear slice brief', () => deps.clearSliceBrief(repoKey));
+    apply('Clear captures', () => deps.clearMonitor());
+    apply('Refresh flow', () => deps.flowChanged());
+    return failures;
   };
 
   const terminate = (repoKey: string): LifecycleTerminateResult => {
@@ -77,8 +86,8 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
     const result = locked.value;
     const view = deps.presentView(repoKey, result.view);
     if (result.outcome === 'reset') {
-      afterTerminateReset(repoKey);
-      return { outcome: 'reset', view };
+      const cleanupFailures = afterTerminateReset(repoKey);
+      return { outcome: 'reset', view, ...(cleanupFailures.length > 0 ? { cleanupFailures } : {}) };
     }
     return result.cause === 'failed'
       ? { outcome: 'refused', cause: 'failed', reason: result.reason, view }

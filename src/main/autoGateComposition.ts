@@ -20,21 +20,21 @@ export interface StartTransitionDeps {
   autoGate: AutoGate;
   /** The one resolution the Start acts on; null when the flow does not load (the Start then binds nothing). */
   resolveForStart: (repoKey: string) => StartRun | null;
-  start: (repoKey: string, opts: { startedAt: number; run?: StartRun }) => FlowStateView;
+  start: (repoKey: string, opts: { startedAt: number; run?: StartRun; inputs?: Record<string, string> }) => FlowStateView;
   now: () => number;
   record: RecordFlowTransition;
 }
 
 /** The `flowStart` transition: one clock read and one resolution, bound before the first step is entered. */
-export function composeStartTransition(deps: StartTransitionDeps): (repoKey: string) => FlowStateView {
-  return (repoKey) => {
+export function composeStartTransition(deps: StartTransitionDeps): (repoKey: string, inputs?: Record<string, string>) => FlowStateView {
+  return (repoKey, inputs) => {
     const startedAt = deps.now();
     const run = deps.resolveForStart(repoKey);
-    if (run === null) return deps.start(repoKey, { startedAt });
+    if (run === null) return deps.start(repoKey, { startedAt, inputs });
     deps.autoGate.bindAtStart(repoKey, run, startedAt);
     let view: FlowStateView;
     try {
-      view = deps.start(repoKey, { startedAt, run });
+      view = deps.start(repoKey, { startedAt, run, inputs });
     } catch (e) {
       deps.autoGate.discardStart(repoKey);
       throw e;
@@ -106,14 +106,14 @@ export function composeRunInProgressAt(): AutoGateDeps['runInProgressAt'] {
 
 export interface HumanDecisionRunnerDeps<View> {
   decide: GateDecisionRun;
-  advance: (repoKey: string) => View;
+  advance: (repoKey: string, inputs?: Record<string, string>) => View;
   currentStep: (repoKey: string) => string | null;
 }
 
 export interface HumanDecisionRunners<View> {
   decide: GateDecisionRun;
   /** The strip's manual Advance; null when it was refused. */
-  advance: (repoKey: string, step: string | undefined) => View | null;
+  advance: (repoKey: string, step: string | undefined, inputs?: Record<string, string>) => View | null;
 }
 
 /** The four gate-decision runners and the manual Advance, as the human decides them (§27.9.1 N9b.5(d)/(e)). */
@@ -129,13 +129,13 @@ export function composeHumanDecisionRunners<View>(autoGate: AutoGate, deps: Huma
         settled(landed);
       }
     },
-    advance: (repoKey, named) => {
+    advance: (repoKey, named, inputs) => {
       const step = deps.currentStep(repoKey);
       if (step === null || (named !== undefined && named !== step)) return null;
       const settled = autoGate.humanDecision(repoKey, step, null);
       let landed = false;
       try {
-        const view = deps.advance(repoKey);
+        const view = deps.advance(repoKey, inputs);
         landed = true;
         return view;
       } finally {
@@ -149,7 +149,7 @@ export interface HumanApproveDeps {
   /** Why the repository's pending pickup confirmation holds every gate decision, or null when none is pending. */
   pickupHold: (repoKey: string) => string | null;
   bindingOf: (repoKey: string, step: string) => LoopBinding | null;
-  approve: (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome>;
+  approve: (repoKey: string, step: string, turnKey: string, inputs?: Record<string, string>) => Promise<GateApproveOutcome>;
   /** Told the reason when the pickup hold or the binding refuses the approve. */
   onRefused?: (reason: string) => void;
 }
@@ -175,8 +175,8 @@ export function humanApproveRefusal(deps: Pick<HumanApproveDeps, 'pickupHold' | 
 
 /** The human approve both the gate's Approve control and the MCP approve run, with its outcome. It tells the gate of
  *  the decision before it refuses for a pickup hold or a retired binding: N9b.5(e) counts a refused attempt. */
-export function composeHumanApprove(autoGate: Pick<AutoGate, 'humanDecision'>, deps: HumanApproveDeps): (repoKey: string, step: string, turnKey: string) => Promise<GateApproveOutcome> {
-  return async (repoKey, step, turnKey) => {
+export function composeHumanApprove(autoGate: Pick<AutoGate, 'humanDecision'>, deps: HumanApproveDeps): (repoKey: string, step: string, turnKey: string, inputs?: Record<string, string>) => Promise<GateApproveOutcome> {
+  return async (repoKey, step, turnKey, inputs) => {
     if (approveRunning(autoGate, repoKey, step, turnKey)) {
       deps.onRefused?.(APPROVE_ALREADY_RUNNING);
       return { kind: 'refused', reason: APPROVE_ALREADY_RUNNING };
@@ -193,7 +193,7 @@ export function composeHumanApprove(autoGate: Pick<AutoGate, 'humanDecision'>, d
         deps.onRefused?.(refusal);
         return { kind: 'refused', reason: refusal };
       }
-      const outcome = await deps.approve(repoKey, step, turnKey);
+      const outcome = await deps.approve(repoKey, step, turnKey, inputs);
       landed = outcome.kind === 'advanced';
       return outcome;
     } finally {

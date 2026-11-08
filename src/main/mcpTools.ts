@@ -7,13 +7,34 @@ export interface McpToolResult {
   content: { type: 'text'; text: string }[];
 }
 
+type ArgumentSchema =
+  | { type: 'string'; description: string }
+  | { anyOf: [{ type: 'string' }, { type: 'null' }]; description: string }
+  | { type: 'integer'; minimum: number; maximum: number; description: string }
+  | { type: 'object'; additionalProperties: { type: 'string' }; description: string };
+
 export interface McpToolDefinition {
   name: McpToolName;
   description: string;
-  inputSchema: { type: 'object'; properties: Record<string, { type: 'string'; description: string }>; required?: string[]; additionalProperties: false };
+  inputSchema: { type: 'object'; properties: Record<string, ArgumentSchema>; required?: string[]; additionalProperties: false };
 }
 
 const target = (description: string) => ({ type: 'string' as const, description });
+
+const ownWindow = {
+  window: target("The window.id returned by read_state."),
+  repo: target("The repo.key returned by read_state."),
+};
+const gateTarget = {
+  ...ownWindow,
+  step: target('The gate.step or stalledTurn.step returned by read_state.'),
+  turn: target('The gate.turn or stalledTurn.turn returned by read_state.'),
+};
+const inputs: ArgumentSchema = { type: 'object', additionalProperties: { type: 'string' }, description: 'Required inputs for the step being entered, by input name. Already resolved inputs need no value.' };
+const action = (description: string, properties: Record<string, ArgumentSchema>, required = Object.keys(properties)): Omit<McpToolDefinition, 'name'> => ({
+  description: `${description} Name the target returned by read_state. Only a human-started turn may act.`,
+  inputSchema: { type: 'object', properties, required, additionalProperties: false },
+});
 
 const TOOLS: { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> } = {
   read_state: {
@@ -21,21 +42,18 @@ const TOOLS: { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> } = 
       "Read this agent-terminal window's state as its UI shows it: the repository, the flow and its step, a waiting gate with its options and why it waits, a failed turn, the loop message, the latest round report, the todos, the flows it can start, and the todo count Terminate would delete.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
-  approve: {
-    description:
-      "Approve the loop gate this agent-terminal window is waiting at, as its Approve control does, side effects included. Name the gate as read_state returns it. It works only in a turn the operator started by typing a prompt in the window's terminal or over Remote Control; any other turn is refused and nothing changes.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        window: target("The window's id, as read_state returns it (window.id)."),
-        repo: target("The window's repository, as read_state returns it (repo.key)."),
-        step: target('The waiting gate\'s step, as read_state returns it (gate.step).'),
-        turn: target('The waiting gate\'s turn, as read_state returns it (gate.turn).'),
-      },
-      required: ['window', 'repo', 'step', 'turn'],
-      additionalProperties: false,
-    },
-  },
+  approve: action('Approve the waiting loop or step gate, including its side effects.', { ...gateTarget, turn: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'The gate.turn returned by read_state. Omit or use null for a step gate.' }, inputs }, ['window', 'repo', 'step']),
+  request_changes: action('Request another review round with feedback.', { ...gateTarget, feedback: target('The feedback to deliver.') }),
+  redo: action('Redo the work with an instruction.', { ...gateTarget, instruction: target('The instruction to deliver.') }),
+  polish: action('Enter polish for the waiting gate.', gateTarget),
+  retry: action('Retry the stopped or failed turn.', gateTarget),
+  dismiss_loop_message: action('Dismiss the current loop message.', { ...ownWindow, message: target('The loopMessage.id returned by read_state.') }),
+  choose_flow: action('Choose a flow or standalone loop before starting.', { ...ownWindow, flow: target('An id from read_state.startable.') }),
+  start: action('Start the selected flow or loop with its entry inputs.', { ...ownWindow, inputs }, ['window', 'repo']),
+  terminate: action('Terminate the run, deleting its todos and clearing captures.', {
+    ...ownWindow,
+    expectedTodoCount: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'The terminateTodoCount returned by read_state; the action is refused if it changed.' },
+  }),
 };
 
 /** The tools the agent-terminal MCP server lists, by name. */
@@ -58,8 +76,28 @@ export function invalidToolArguments(tool: string, args: unknown): string | null
   const values = given as Record<string, unknown>;
   const missing = required.filter((key) => !Object.hasOwn(values, key));
   if (missing.length > 0) return `${tool} needs ${missing.join(', ')}`;
-  const notStrings = Object.keys(values).filter((key) => typeof values[key] !== 'string');
-  return notStrings.length === 0 ? null : `${tool}'s ${notStrings.join(', ')} must be text`;
+  for (const key of Object.keys(values)) {
+    const value = values[key];
+    const schema = properties[key];
+    if ('anyOf' in schema) {
+      if (!schema.anyOf.some(option => option.type === 'null' ? value === null : typeof value === option.type)) return `${tool}'s ${key} must be text or null`;
+      continue;
+    }
+    switch (schema.type) {
+      case 'string':
+        if (typeof value !== 'string') return `${tool}'s ${key} must be text`;
+        break;
+      case 'integer':
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < schema.minimum || value > schema.maximum) return `${tool}'s ${key} must be a nonnegative safe integer`;
+        break;
+      case 'object':
+        if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.values(value).some(item => typeof item !== 'string')) return `${tool}'s ${key} must map input names to text`;
+        break;
+      default:
+        return schema satisfies never;
+    }
+  }
+  return null;
 }
 
 const text = (body: Record<string, unknown>): McpToolResult['content'] => [{ type: 'text', text: JSON.stringify(body, null, 2) }];

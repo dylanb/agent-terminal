@@ -293,7 +293,10 @@ export interface RunIdentity {
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
+export interface FlowEntryInput { name: string; type: string; required: boolean; value: string | undefined }
+
 export interface FlowMachine {
+  entryInputs(action: 'start' | 'approve'): FlowEntryInput[];
   state(): MachineView;
   /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
@@ -303,9 +306,9 @@ export interface FlowMachine {
   sliceStartStep(): string | null;
   /** not_started → in_progress; throws on any other current status (inert in the error state). The run's
    *  identity (§27.9.1) takes `startedAt` (default: now) and this definition's name, kept until a reset. */
-  start(at?: { startedAt: number }): MachineView;
+  start(at?: { startedAt: number; inputs?: Record<string, string> }): MachineView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
-  advance(): MachineView;
+  advance(inputs?: Record<string, string>): MachineView;
   /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
    *  ones are re-requested, and re-runs entry actions. Throws on any other status (inert on error). */
   restart(): MachineView;
@@ -380,6 +383,7 @@ export function createFlowMachine(
     };
     return {
       state: view,
+      entryInputs: () => [],
       currentSlice: () => 1, // an error-state flow (no definition) has no slices
       sliceStartStep: () => null,
       start: view,
@@ -467,6 +471,14 @@ export function createFlowMachine(
     const n = numericInput(countInput);
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
+  };
+  const nextIndex = (): number => {
+    const step = current();
+    if (step.repeat) {
+      const back = names.indexOf(step.repeat.backTo);
+      if ((repeatCounts[step.id] ?? 1) < slicesFor(step.repeat.countInput) && back >= 0) return back;
+    }
+    return index + 1;
   };
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
@@ -563,6 +575,13 @@ export function createFlowMachine(
   };
 
   return {
+    entryInputs: (action) => {
+      hydrate();
+      const step = steps[action === 'start' ? index : nextIndex()];
+      return (step?.inputs ?? []).map(input => ({
+        name: input.name, type: input.type, required: input.required, value: Object.hasOwn(inputs, input.name) ? inputs[input.name] : undefined,
+      }));
+    },
     state: () => {
       hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
       return view();
@@ -575,27 +594,20 @@ export function createFlowMachine(
     sliceStartStep: () => returnStep,
     start: (at) => {
       requireStatus('not_started', 'start');
+      inputs = { ...inputs, ...at?.inputs };
       status = 'in_progress';
       identity = { startedAt: at?.startedAt ?? Date.now(), flow: def.name };
       persist();
       return enter(view());
     },
-    advance: () => {
+    advance: (values) => {
       requireStatus('in_progress', 'advance');
+      const next = nextIndex();
       const step = current();
-      // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
-      if (step.repeat) {
-        const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
-        const backIndex = names.indexOf(step.repeat.backTo);
-        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
-          repeatCounts[step.id] = completed + 1;
-          index = backIndex;
-          persist();
-          return enter(view());
-        }
-      }
-      if (index < steps.length - 1) {
-        index += 1;
+      if (next <= index && step.repeat) repeatCounts[step.id] = (repeatCounts[step.id] ?? 1) + 1;
+      inputs = { ...inputs, ...values };
+      if (next < steps.length) {
+        index = next;
         persist();
         return enter(view());
       }
@@ -688,9 +700,10 @@ export function createFlowMachine(
  * is created until a transition writes.
  */
 export interface FlowManager {
+  entryInputs(repoKey: string, action: 'start' | 'approve'): FlowEntryInput[];
   state(repoKey: string): FlowStateView;
-  start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition }): FlowStateView;
-  advance(repoKey: string): FlowStateView;
+  start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition; inputs?: Record<string, string> }): FlowStateView;
+  advance(repoKey: string, inputs?: Record<string, string>): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
   /** §28.4.2 — the manual back-to-RED transition: re-enter the current slice's RED step (the repeat step's
@@ -792,6 +805,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
+    entryInputs: (k, action) => machineFor(k).machine.entryInputs(action),
     start: (k, opts) => {
       // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
       // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
@@ -814,7 +828,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
           return stateWithNotice(k, `The run could not be started: ${errMsg(e)}`);
         }
       }
-      const at = opts ? { startedAt: opts.startedAt } : undefined;
+      const at = opts ? { startedAt: opts.startedAt, inputs: opts.inputs } : undefined;
       const view = opts?.run ? machine.start(at) : machineView(k, (m) => m.start(at));
       if (begins && !hadMarker && view.status !== 'in_progress') {
         try {
@@ -825,7 +839,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       }
       return withRunStarted(k, view);
     },
-    advance: (k) => viewOf(k, (m) => m.advance()),
+    advance: (k, inputs) => viewOf(k, (m) => m.advance(inputs)),
     restart: (k) => viewOf(k, (m) => m.restart()),
     undo: (k) => viewOf(k, (m) => m.undo()),
     reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),

@@ -62,6 +62,7 @@ const SELF_CHECK_ARTIFACT_CHECK: Record<SelfCheck, ArtifactCheck> = {
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
+export type AppRetryOutcome = { taken: true } | { taken: false; reason: string };
 
 /** §19.2/§27.10 */
 export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
@@ -236,7 +237,7 @@ export interface AppLoopEngine {
   /** The stall watchdog elapsed — resolve to `error` without retrying or killing (§27.12). */
   onStall(): void;
   /** The §27-only error route-out, acting on the payload's step+turn identity, never ambient state (§6). */
-  routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): void;
+  routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): AppRetryOutcome | void;
   /** §27.9/§19.4 (AC4) — a request-changes gate decision: re-enter the review-and-fix turn at round+1
    *  carrying the operator's `feedback` alongside the reviewers' findings, over the def's full catalog (fresh
    *  eyes). Acts only on the persisted gate matching the step+turn identity it names (§6), and only when that
@@ -1831,10 +1832,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     routeOut(repoDir, stepId, turnKey, action) {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
-      if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
+      if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return { taken: false, reason: 'the stopped turn no longer matches' };
       // §27.12 — every goal leg shares the turn key, so a route-out for a leg that already moved on reaches a
       // turn that is running; only Terminate acts on one.
-      if (action !== 'terminate' && runner.state() === 'in-flight') return;
+      if (action !== 'terminate' && runner.state() === 'in-flight') return { taken: false, reason: 'the turn is already running' };
       if (action === 'terminate') {
         deps.terminateFlow(repoDir);
         return;
@@ -2052,8 +2053,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
             ...(goal !== undefined ? { goal } : {}),
           });
-          refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
-          return;
+          const reason = 'the bound def no longer resolves — retry or terminate';
+          refuseRouteOut('def-unresolvable', reason);
+          return { taken: false, reason };
         }
         const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
         active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
@@ -2070,8 +2072,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ...(chosenRoster ? { chosenRoster } : {}),
             ...(feedback !== undefined ? { feedback } : {}),
           };
-          refuseRouteOut('def-unresolvable', 'the review round no longer resolves (def or report location) — retry or terminate', round);
-          return;
+          const reason = 'the review round no longer resolves (def or report location) — retry or terminate';
+          refuseRouteOut('def-unresolvable', reason, round);
+          return { taken: false, reason };
         }
         active = rebuilt;
       }
@@ -2085,6 +2088,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.audit(repoDir, retryAudit, null);
       hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'retried'));
       runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
+      return { taken: true };
     },
     requestChanges(repoDir, stepId, turnKey, feedback) {
       if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn

@@ -3406,7 +3406,7 @@ describe('MCP gate decisions stand down the automatic gate', () => {
       readState: async () => state, readGateState: () => state,
       gate: { autoGate: rig.gate, pickupHold: () => null, bindingOf: () => 'app' as const,
         approve: async () => ({ kind: 'refused' as const, reason: 'not this action' }),
-        decide: async () => true },
+        decide: async () => ({ taken: true as const }) },
     };
     try {
       await createMcpActions(ports).call({ tool, args: { window: state.window.id, repo: repoDir, step: STEP, turn: TURN,

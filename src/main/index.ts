@@ -143,6 +143,7 @@ import type { McpWindowState } from '../shared/mcpWindowState';
 import type { McpCaller, WindowRequest } from '../shared/mcpBridge';
 import { MCP_HOOK_REPORT } from '../shared/mcp';
 import { createMcpActions } from './mcpActions';
+import { startedAnswer, terminatedAnswer } from './mcpFlowOutcome';
 import { createSessionTurns, readSessionLaunch } from './mcpSessionTurns';
 import { isValidClaudeCodeIntegration } from './ipcValidation';
 import { errMsg } from './errno';
@@ -167,7 +168,7 @@ import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
-import { HUMAN_DECIDER, runAppApprove, runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
+import { HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome, runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
@@ -1158,11 +1159,12 @@ async function createWindow(): Promise<void> {
   // in_progress (advance throws otherwise, e.g. a flow the operator terminated while the gate resolved) and
   // run inside inTransition so the next step's entry actions fire in transition context, matching the manual
   // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
-  const autoAdvanceFlow = (repoKey: string): void => {
+  const autoAdvanceFlow = (repoKey: string, inputs?: Record<string, string>): void => {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return;
-    const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
+    const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey, inputs));
     recordFlowTransition(repoKey, 'advance', pre, view);
+    if (inputs) audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
   };
 
   // §28.4.2 — the human back-to-red gate control's flow half. A BACKWARD re-entry, so it borrows `undo`'s
@@ -1209,7 +1211,7 @@ async function createWindow(): Promise<void> {
 
   // One deps factory for both deciders' approve (§27.9.1 N9b.5(c)): the gh and commit ports bind their worktree at
   // construction, so each decision gets its own.
-  const approveDepsFor = (repoKey: string): AppGateDecisionDeps => ({
+  const approveDepsFor = (repoKey: string, inputs?: Record<string, string>): AppGateDecisionDeps => ({
     readRunState: (repoDir) => readAppLoopState(repoDir),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
     refs: (repoDir) => {
@@ -1228,7 +1230,7 @@ async function createWindow(): Promise<void> {
     },
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
-    advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
+    advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir, inputs)),
     // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, the last
     // one winning: the polished plan, then any RED that split its own slice. resolveInputs sets the input WITHOUT
     // re-entering the step (re-entering a planning step here would restart its loop).
@@ -1306,15 +1308,16 @@ async function createWindow(): Promise<void> {
     return Promise.resolve(false);
   };
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
-  const approveGate = (repoKey: string, step: string, turnKey: string) => runAppApprove(repoKey, step, turnKey, approveDepsFor(repoKey), HUMAN_DECIDER);
+  const approveGate = (repoKey: string, step: string, turnKey: string, inputs?: Record<string, string>) => runAppApprove(repoKey, step, turnKey, approveDepsFor(repoKey, inputs), HUMAN_DECIDER);
   const humanApproveDeps = { pickupHold: pickupHoldRefusal, bindingOf: gateBindingOf, approve: approveGate };
   const approveFromUi = composeHumanApprove(autoGate, { ...humanApproveDeps, onRefused: refuseGateDecision });
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
-    advance: (repoKey) => {
+    advance: (repoKey, inputs) => {
       const pre = withDerived(repoKey, flow.state(repoKey));
-      const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
+      const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey, inputs));
       recordFlowTransition(repoKey, 'advance', pre, view);
+      if (inputs) audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
       return view;
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
@@ -1380,12 +1383,83 @@ async function createWindow(): Promise<void> {
     const source = mcpWindowSource();
     return readWindowState({ ...source, latestRoundReport: await latestRoundReport(source.repoKey, source.view) });
   };
+  const startFlow = (repoKey: string, inputs?: Record<string, string>): FlowStateView => {
+        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
+        const started = worktreeLock.withWorktreeLock(repoKey, () =>
+          beginRunHere(repoKey, () => {
+            const started = flowStartTransition(repoKey, inputs);
+            if (inputs && started.status === 'in_progress') audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
+            trustedAppBootstraps.delete(repoKey);
+            return trackLoop(repoKey, withDerived(repoKey, started));
+          }),
+        );
+        if (started.ok) return started.value;
+        return trackLoop(repoKey, { ...withDerived(repoKey, flow.state(repoKey)), notice: started.reason });
+  };
+  const advanceFlow = (repoKey: string, step: string | undefined, inputs?: Record<string, string>): FlowStateView => {
+        const pre = withDerived(repoKey, flow.state(repoKey));
+        const held = pickupHoldRefusal(repoKey);
+        if (held !== null) return trackLoop(repoKey, { ...pre, notice: held });
+        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
+        const view = humanRunners.advance(repoKey, step, inputs);
+        if (view === null) {
+          return trackLoop(repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
+        }
+        if (ready) return trackLoop(repoKey, view);
+        const notice = pre.loop
+          ? 'Advanced while the loop still needs you.'
+          : 'Advanced with todos still outstanding.';
+        return trackLoop(repoKey, { ...view, notice });
+  };
+  const chooseFlow = (repoKey: string, id: string) => {
+    const result = activeFlowGate.set(repoKey, id);
+    if (result.ok) pushFlowChanged();
+    return result;
+  };
+  const routeAppTurn = (repoKey: string, step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate') => {
+    const held = pickupHoldRefusal(repoKey);
+    if (held !== null) { loopMessages.post('error', held); return { taken: false as const, reason: held }; }
+    if (appEngine.activeRepoDir() !== repoKey) appEngine.resume(repoKey);
+    armAppTurnDoneWatch(repoKey);
+    return appEngine.routeOut(repoKey, step, turnKey, action);
+  };
+  const entryStatus = (repoKey: string) => {
+    if (pickupConfirmations.view(repoKey)) return { kind: 'waiting-on-dialog', message: 'Waiting on pickup confirmation at the machine.' };
+    if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: 'Pickup started.' };
+    return null;
+  };
+  const entryOutcome = (repoKey: string, view: FlowStateView, verb: string) => {
+    pushFlowChanged();
+    if (view.pickupConfirm) return { kind: 'waiting-on-dialog', message: `${verb}; waiting on pickup confirmation at the machine.` };
+    if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: `${verb}; pickup started.` };
+    return { kind: 'taken', message: `${verb}.${view.notice ? ` ${view.notice}` : ''}` };
+  };
   const mcpActions = createMcpActions({
     windowId,
     originOf: (caller) => (caller.session === null ? Promise.resolve('undetermined') : sessionTurns.origin(caller.session)),
     readState: readMcpWindowState,
     readGateState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
-    gate: { ...humanApproveDeps, autoGate },
+    readActionState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
+    entryStatus,
+    gate: {
+      ...humanApproveDeps, autoGate,
+      decide: (repoKey, step, turnKey, option, note) => runAppGateDecisionOutcome(repoKey, step, turnKey, option, approveDepsFor(repoKey), note),
+    },
+    entryInputs: (repoKey, action) => flow.entryInputs(repoKey, action),
+    chooseFlow,
+    retry: (repoKey, step, turnKey) => routeAppTurn(repoKey, step, turnKey, 'retry'),
+    dismissLoopMessage: (id) => loopMessages.dismiss(id),
+    start: (repoKey, inputs) => {
+      const view = startFlow(repoKey, inputs);
+      pushFlowChanged();
+      return startedAnswer(view, entryStatus(repoKey));
+    },
+    advance: (repoKey, step, inputs) => entryOutcome(repoKey, advanceFlow(repoKey, step, inputs), 'Advanced'),
+    terminate: (repoKey) => {
+      const result = lifecycle.terminate(repoKey);
+      pushFlowChanged();
+      return terminatedAnswer(result);
+    },
   });
   answerMcp = async (request, caller) => {
     if (request.tool !== MCP_HOOK_REPORT) return mcpActions.call(request, caller);
@@ -1437,14 +1511,7 @@ async function createWindow(): Promise<void> {
       // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
-        const held = pickupHoldRefusal(m.repoKey);
-        if (held !== null) {
-          loopMessages.post('error', held);
-          return;
-        }
-        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
-        armAppTurnDoneWatch(m.repoKey);
-        appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+        routeAppTurn(m.repoKey, m.step, m.turnKey, m.action);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
@@ -1575,35 +1642,14 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
-        const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          beginRunHere(m.repoKey, () => {
-            const started = flowStartTransition(m.repoKey);
-            trustedAppBootstraps.delete(m.repoKey);
-            return trackLoop(m.repoKey, withDerived(m.repoKey, started));
-          }),
-        );
-        if (started.ok) return started.value;
-        return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
+        return startFlow(m.repoKey);
       },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const pre = withDerived(m.repoKey, flow.state(m.repoKey));
-        const held = pickupHoldRefusal(m.repoKey);
-        if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
-        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = humanRunners.advance(m.repoKey, m.step);
-        if (view === null) {
-          return trackLoop(m.repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
-        }
-        if (ready) return trackLoop(m.repoKey, view);
-        const notice = pre.loop
-          ? 'Advanced while the loop still needs you.'
-          : 'Advanced with todos still outstanding.';
-        return trackLoop(m.repoKey, { ...view, notice });
+        return advanceFlow(m.repoKey, m.step);
       },
       [CH.flowRestart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
@@ -1654,9 +1700,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowSetActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:setActiveFlow request' };
         }
-        const result = activeFlowGate.set(m.repoKey, m.id);
-        if (result.ok) pushFlowChanged();
-        return result;
+        return chooseFlow(m.repoKey, m.id);
       },
       [CH.flowClearActiveFlow]: (_e, m) => {
         if (!isValidFlowClearActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
