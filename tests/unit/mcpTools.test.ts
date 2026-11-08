@@ -7,7 +7,7 @@ const text = (result: McpToolResult): string => result.content.map((c) => c.text
 describe('the tools the agent-terminal MCP server lists', () => {
   it('are the tools this build supports, each named as Claude Code accepts', () => {
     const names = mcpToolNames();
-    expect([...names].sort()).toEqual(['approve', 'read_state']);
+    expect([...names].sort()).toEqual(['approve', 'choose_flow', 'dismiss_loop_message', 'polish', 'read_state', 'redo', 'request_changes', 'retry', 'start', 'terminate']);
     expect(names.filter((name) => !CLAUDE_CODE_TOOL_NAME.test(name))).toEqual([]);
   });
 });

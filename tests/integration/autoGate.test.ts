@@ -1,3 +1,5 @@
+import { createMcpActions } from '../../src/main/mcpActions';
+import type { McpWindowState } from '../../src/shared/mcpWindowState';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -3387,5 +3389,46 @@ describe('autoGate — the Approve control pressed while an MCP approve of the g
     waiting.splice(0).forEach((resolve) => resolve());
     await fromMcp;
     expect({ fromUi: fromUi.kind, posted: posted.length === 1 && fromUi.kind === 'refused' && posted[0] === fromUi.reason }).toEqual({ fromUi: 'refused', posted: true });
+  });
+});
+
+describe('MCP gate decisions stand down the automatic gate', () => {
+  async function callDecision(rig: Rig, tool: string): Promise<boolean> {
+    const state: McpWindowState = {
+      window: { id: 'gate-window' }, repo: { key: repoDir },
+      flow: { selected: null, steps: [STEP], step: STEP, status: 'in_progress', runStarted: true },
+      selectionUnusable: false,
+      gate: { step: STEP, turn: TURN, options: ['approve', 'request-changes', 'redo', 'polish'], reasons: [], engineDeciding: false },
+      stalledTurn: null, loopMessage: null, roundReport: null, todos: [], startable: null, startableError: null, terminateTodoCount: 0,
+    };
+    const ports = {
+      windowId: 'gate-window', originOf: async () => 'human' as const,
+      readState: async () => state, readGateState: () => state,
+      gate: { autoGate: rig.gate, pickupHold: () => null, bindingOf: () => 'app' as const,
+        approve: async () => ({ kind: 'refused' as const, reason: 'not this action' }),
+        decide: async () => true },
+    };
+    try {
+      await createMcpActions(ports).call({ tool, args: { window: state.window.id, repo: repoDir, step: STEP, turn: TURN,
+        ...(tool === 'request_changes' ? { feedback: 'Revisit the boundary' } : {}), ...(tool === 'redo' ? { instruction: 'Rebuild the boundary' } : {}) } }, { session: 501 });
+      return true;
+    } catch { return false; }
+  }
+
+  it.each(['request_changes', 'redo', 'polish'])('%s withdraws the held question and settles the shown auto halt', async tool => {
+    const rig = makeRig(); startTrusted(rig); await reachGate(rig, 'stop for a human');
+    expect(rig.asked.length).toBeGreaterThan(0);
+    const before = rig.withdrawn();
+    const answered = await callDecision(rig, tool); await flush();
+    expect({ answered, withdrawn: rig.withdrawn() > before, reasons: rig.view().autoGate?.haltReasons ?? [] }).toEqual({ answered: true, withdrawn: true, reasons: [] });
+  });
+
+  it.each(['request_changes', 'redo', 'polish'])('%s at a deciding gate prevents the competing engine approval', async tool => {
+    const rig = makeRig(); startTrusted(rig);
+    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
+    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const answered = await callDecision(rig, tool);
+    rig.gate.gateReached(repoDir, STEP, TURN); await flush();
+    expect({ answered, approvals: rig.approvals, entries: engineDecided(rig) }).toEqual({ answered: true, approvals: [], entries: [] });
   });
 });

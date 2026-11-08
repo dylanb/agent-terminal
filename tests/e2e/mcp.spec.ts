@@ -3,7 +3,7 @@ import { expect, test, type ElectronApplication, type Page } from '@playwright/t
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { PLAN_V2_ROSTER, seedFakeAgentV2, seedFakeGhGit, seedIsolatedClaudeConfig, writeCatalogEntry, type FakeWorkMode } from './fakeTools';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
@@ -15,14 +15,14 @@ import { distinctTodos } from '../helpers/todoFixtures';
 import { APP_MCP_ACK_TIMEOUT_ENV, MCP_WINDOW_ENV } from '../../src/shared/mcp';
 import { windowBridgeDir } from '../../src/main/mcpWindowBridge';
 import { readGateRunState, writeGateRunState } from '../../src/main/gateRunState';
-import { gateDecisionKind, parseAutoHaltReasons } from '../../src/shared/audit';
+import { gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditGateEntries, seedTrustedFlow } from './autoGateHarness';
 
 // The Claude Code integration (#322, slice 1): the operator installs it from Settings, and every Claude Code session
 // in the window — typed or engine-driven — lists the agent-terminal tools and reads its own window's state.
 
 const SERVER = 'agent-terminal';
-const SLICE_TOOLS = ['approve', 'read_state'];
+const SLICE_TOOLS = ['approve', 'choose_flow', 'dismiss_loop_message', 'polish', 'read_state', 'redo', 'request_changes', 'retry', 'start', 'terminate'];
 const USER_STATE = { numStartups: 3, mcpServers: { mine: { type: 'stdio', command: 'my-server', args: [] } } };
 const USER_SETTINGS = { theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] } };
 const APP_ARTIFACT_REL = '.agent-terminal/loop/artifacts/plan.md';
@@ -881,4 +881,112 @@ test('an approve typed at a halted auto gate showing a failed effect is a human 
     failedEffect: after.kind === 'ok' ? after.state.failedEffect : after.kind,
     haltsSinceApprove: autoHalts().slice(haltsBefore),
   }).toEqual({ outcome: 'taken', step: 'done', failedEffect: null, haltsSinceApprove: [] });
+});
+
+async function slice3Call(m: Machine, tool: string, args: Record<string, unknown>): Promise<ApproveRecord | undefined> {
+  await approveTurn(m, typeCommand, 'mcp read_state {}');
+  const text = `mcp ${tool} ${JSON.stringify({ window: '$read_state.window.id', repo: '$read_state.repo.key', ...args })}`;
+  const before = readFakeClaudeLog(m.claude.logFile).length;
+  await approveTurn(m, typeCommand, text);
+  return readFakeClaudeLog(m.claude.logFile).slice(before).find((r): r is ApproveRecord =>
+    (r.event === 'call' || r.event === 'call-unsent' || r.event === 'call-lost') && r.tool === tool);
+}
+
+async function slice3Session(m: Machine): Promise<void> {
+  await launch(m);
+  await inSettings('Install', /installed/i);
+  await typeCommand(`cd "${m.repo}"`);
+  await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await expect.poll(() => sessions(m).length).toBe(1);
+}
+
+function slice3Manual(m: Machine, inputs = false): void {
+  mkdirSync(join(m.repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(m.repo, '.agent-terminal', 'flow.yaml'),
+    `name: mcp-manual\nsteps:\n  - id: prepare\n    kind: manual\n${inputs ? '    inputs:\n      - name: ticket\n        type: github-ticket\n' : ''}  - id: finish\n    kind: manual\n`);
+}
+
+test('MCP slice 3: request changes delivers feedback and shows the new round without advancing the flow', { tag: '@ownapp' }, async () => {
+  const m = machine({ agent: { verdicts: [verdictOutput('clean'), verdictOutput('clean')] } });
+  seedGateFlow(m.repo); ownPlanLoop(m.config);
+  seedFakeAgentV2(m.binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', review2: 'full', logInjected: true });
+  await slice3Session(m);
+  await page.locator('#flow-strip .flow-control').click();
+  const runFile = join(m.repo, '.agent-terminal/loop/run-state.yaml');
+  await expect.poll(() => existsSync(runFile) ? readFileSync(runFile, 'utf8') : '', { timeout: 40_000 }).toContain('verdict: clean');
+  await page.locator('#flow-strip .loopstat').click();
+  await expect(page.locator('#loop-panel [data-gate-option="request-changes"]')).toBeVisible();
+  const before = load(readFileSync(runFile, 'utf8')) as { round: number };
+  const feedback = 'Retain the empty-list case, including "quotes" and $variables';
+  const result = await slice3Call(m, 'request_changes', { ...AT_THE_GATE, feedback });
+  expect.soft(outcomeOf(result)).toBe('taken');
+  await expect.soft.poll(() => (load(readFileSync(runFile, 'utf8')) as { round: number }).round, { timeout: 10_000 }).toBeGreaterThan(before.round);
+  expect.soft(await page.locator('#flow-strip .stn.active .nm').textContent()).toBe('plan');
+  await expect.soft.poll(() => readFileSync(join(m.repo, '.agent-terminal', 'injected-log'), 'utf8').split('\n').filter(line => !line.startsWith('mcp ')).join('\n'), { timeout: 10_000 }).toContain(feedback);
+});
+
+test('MCP slice 3: choose a listed flow changes the picker without starting a run', { tag: '@ownapp' }, async () => {
+  const m = machine(); slice3Manual(m);
+  writeCatalogEntry(m.appHome, 'remote-choice', 'name: remote-choice\nsteps:\n  - id: selected-step\n    kind: manual\n');
+  await slice3Session(m);
+  const result = await slice3Call(m, 'choose_flow', { flow: 'remote-choice' });
+  expect.soft(outcomeOf(result)).toBe('taken');
+  await expect.soft(page.locator('#flow-picker').getByRole('button', { name: /flow/i })).toHaveText('Flow: remote-choice');
+  expect.soft(await page.locator('#flow-strip .flow-control').textContent()).toBe('Start');
+});
+
+test('MCP slice 3: start supplies the required ticket, saves it and enters the step without an input modal', { tag: '@ownapp' }, async () => {
+  const m = machine(); slice3Manual(m, true);
+  await slice3Session(m);
+  const result = await slice3Call(m, 'start', { inputs: { ticket: '322' } });
+  expect.soft(outcomeOf(result)).toBe('taken');
+  await expect.soft(page.locator('#flow-strip .flow-control')).not.toHaveText('Start');
+  const file = join(m.repo, '.agent-terminal/flow-state.yaml');
+  const saved = existsSync(file) ? load(readFileSync(file, 'utf8')) as { inputs?: unknown; status?: string } : null;
+  expect.soft({ status: saved?.status, inputs: saved?.inputs, modal: await page.locator('.flow-modal:visible').count() }).toEqual({ status: 'in_progress', inputs: expect.objectContaining({ ticket: '322' }), modal: 0 });
+});
+
+test('MCP slice 3: terminate uses the current todo count, clears todos and captures, and resets the visible flow without confirmation', { tag: '@ownapp' }, async () => {
+  const m = machine(); slice3Manual(m);
+  writeFileSync(join(m.repo, '.agent-terminal/todos.json'), JSON.stringify(distinctTodos(m.repo, ['active', 'done'])));
+  await slice3Session(m);
+  await page.locator('#flow-strip .flow-control').click();
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  await page.evaluate(() => window.monitor.capture({ text: 'capture owned by this run', range: null, source: 'selection' }));
+  await expect.poll(() => page.evaluate(() => window.monitor.replay()).then(events => events.some(e => e.text === 'capture owned by this run'))).toBe(true);
+  const auditDir = join(m.appHome, '.agent-terminal/audit', basename(m.repo));
+  await expect.poll(() => existsSync(auditDir) ? readdirSync(auditDir).length : 0).toBe(1);
+  const auditFile = join(auditDir, readdirSync(auditDir)[0]);
+  const result = await slice3Call(m, 'terminate', { expectedTodoCount: '$read_state.terminateTodoCount' });
+  expect.soft(outcomeOf(result)).toBe('taken');
+  await expect.soft.poll(() => parseAuditStream(readFileSync(auditFile, 'utf8')).events.at(-1)?.type).toBe('flow.terminated');
+  await expect.soft.poll(() => page.evaluate(() => window.monitor.replay())).toEqual([]);
+  await expect.soft(page.locator('#flow-strip .flow-control')).toHaveText('Start');
+  await approveTurn(m, typeCommand, 'mcp read_state {}');
+  const current = resultState(readCalls(sessions(m)[0]).at(-1)?.result) as ReadState | undefined;
+  expect.soft({ todos: current?.todos, started: current?.flow?.runStarted, confirmation: await page.getByRole('dialog').filter({ hasText: /terminate/i }).count() }).toEqual({ todos: [], started: false, confirmation: 0 });
+});
+
+test('MCP slice 3: a step-only approve advances the manual step and refreshes the strip', { tag: '@ownapp' }, async () => {
+  const m = machine(); slice3Manual(m);
+  await slice3Session(m); await page.locator('#flow-strip .flow-control').click();
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  const result = await slice3Call(m, 'approve', { step: '$read_state.gate.step' });
+  expect.soft(outcomeOf(result)).toBe('taken');
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('finish');
+});
+
+test('MCP slice 3: start with a ticket begins real pickup and reports it without opening typed inputs', { tag: '@ownapp' }, async () => {
+  const m = machine({ agent: { verdicts: [verdictOutput('clean')] } });
+  seedGateFlow(m.repo);
+  writeFileSync(join(m.repo, '.agent-terminal/flow-state.yaml'), 'step: plan\nstatus: not_started\n');
+  rmSync(join(m.repo, '.agent-terminal/loop/bootstrap.yaml'));
+  writeFileSync(join(m.repo, '.git/HEAD'), 'ref: refs/heads/main\n');
+  await slice3Session(m);
+  const result = await slice3Call(m, 'start', { inputs: { ticket: '322' } });
+  const message = result?.event === 'call' && result.result ? resultText(result.result) : '';
+  expect.soft({ outcome: outcomeOf(result), pickup: /pickup.*started/i.test(message) }).toEqual({ outcome: 'taken', pickup: true });
+  await expect.soft.poll(() => existsSync(`${m.ghLog}.pr-created`) ? readFileSync(`${m.ghLog}.pr-created`, 'utf8').trim() : '', { timeout: 10_000 }).toBe('4242');
+  expect.soft(await page.locator('.flow-modal:visible').count()).toBe(0);
 });
