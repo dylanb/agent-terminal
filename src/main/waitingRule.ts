@@ -71,7 +71,7 @@ export function waitingInTable(psOutput: string, reading: ProcessTableReading): 
   if (!shell || shell.tpgid <= 0 || shell.tpgid === shell.pgid) return null;
   const agentGroup = shell.tpgid;
   const limit = PROGRAM_NAME_LIMIT[reading.platform];
-  const helpers = new Set(BUILT_IN_HELPERS.map((name) => name.slice(0, limit)));
+  const helpers = new Set([...BUILT_IN_HELPERS, ...(reading.helpers ?? [])].map((name) => name.slice(0, limit)));
   const children = (parent: ProcessRow): ProcessRow[] => rows.filter((row) => row.ppid === parent.pid).sort(byStart);
   const labelFrom = (candidate: ProcessRow): ProcessRow => {
     if (!SHELLS.has(candidate.program)) return candidate;

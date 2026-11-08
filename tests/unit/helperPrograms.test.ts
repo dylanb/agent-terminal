@@ -101,3 +101,18 @@ describe('the operator\'s helper file', () => {
     expect({ names, warnings: warningsNamingFile() }).toEqual({ names: [[], [], [], []], warnings: [true, true, true] });
   });
 });
+
+it('warns again for the same broken content once a valid or missing file has been read in between', () => {
+  const programs = reader();
+  const readAt = (step: number, make: () => void) => {
+    make();
+    clock = step * (REFRESH_MS + 1);
+    programs.names();
+  };
+  readAt(0, () => write('[my-lsp, 3]\n'));
+  readAt(1, () => write('- my-lsp\n'));
+  readAt(2, () => write('[my-lsp, 3]\n'));
+  readAt(3, () => rmSync(file));
+  readAt(4, () => write('[my-lsp, 3]\n'));
+  expect(warningsNamingFile()).toEqual([true, true, true]);
+});

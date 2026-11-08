@@ -82,6 +82,7 @@ import { resolveRuntimeConfig } from './runtimeConfig';
 import { createWaitingDetector } from './waitingDetector';
 import { readProcessTable } from './waitingLookup';
 import { waitingInTable, waitingPlatform } from './waitingRule';
+import { createHelperPrograms } from './helperPrograms';
 import type { WaitingValue } from '../shared/waiting';
 import { createWindowStatus } from './windowStatus';
 import { createCommandTracker } from './commandTracker';
@@ -339,9 +340,10 @@ async function createWindow(): Promise<void> {
   });
 
   const platformForWaiting = waitingPlatform(process.platform);
+  const helperPrograms = createHelperPrograms({ appHome: flowGlobalDir, now: () => Date.now() });
   const waitingDetector = createWaitingDetector({
     commands: async (signal) => platformForWaiting === null ? null
-      : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting }),
+      : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting, helpers: helperPrograms.names() }),
     timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
     lookupTimeoutMs: config.waitingLookupTimeoutMs,
     onChange: () => {
