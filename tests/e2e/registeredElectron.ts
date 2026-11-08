@@ -9,6 +9,7 @@ import type { ControllerLoopMessage } from '../../src/shared/ipc';
 import { busyExecutableReport } from './busyExecutable';
 import { withSetupCheckOff } from './setupCheckEnv';
 import { claudeConfigPaths, isSharedClaudeConfig } from '../helpers/fakeClaude';
+import { APP_MCP_ACK_TIMEOUT_ENV } from '../../src/shared/mcp';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 const controllers = new Map<string, { ready: Promise<Transport>; users: number }>();
@@ -66,8 +67,8 @@ export const electron = {
       if (value !== undefined) env[key] = value;
     }
     // A launch that spreads process.env carries the shell's value, which is not the test's own.
-    const ownAckTimeout = options.env?.APP_MCP_ACK_TIMEOUT_MS;
-    if (ownAckTimeout === undefined || ownAckTimeout === process.env.APP_MCP_ACK_TIMEOUT_MS) env.APP_MCP_ACK_TIMEOUT_MS = MCP_ACK_OUT_OF_REACH_MS;
+    const ownAckTimeout = options.env?.[APP_MCP_ACK_TIMEOUT_ENV];
+    if (ownAckTimeout === undefined || ownAckTimeout === process.env[APP_MCP_ACK_TIMEOUT_ENV]) env[APP_MCP_ACK_TIMEOUT_ENV] = MCP_ACK_OUT_OF_REACH_MS;
     const isolatedHome = !env.APP_HOME_DIR && env.HOME === process.env.HOME
       ? mkdtempSync(join(tmpdir(), 'at-launch-')) : undefined;
     if (isolatedHome) env.APP_HOME_DIR = isolatedHome;
