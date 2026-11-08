@@ -20,7 +20,7 @@ import type { CliApi, ExamplesApi } from './ipc/install';
 import type { CwdChangedMsg, MonitorApi, MonitorClearedMsg, MonitorEventMsg, MonitorEventRemovedMsg, MonitorUpdateMsg } from './ipc/monitor';
 import type { MenuEditMsg, PtyDataMsg, PtyExitMsg, TermApi } from './ipc/terminal';
 import type { ViewerApi, ViewerChangedMsg } from './ipc/viewer';
-import type { SetupApi } from './ipc/setup';
+import type { SetupAgentStateChangedMsg, SetupApi } from './ipc/setup';
 import { channelNames } from './ipc/session';
 import { TERMINAL_CHANNELS } from './ipc/terminal';
 import { STARTUP_CHANNELS } from './ipc/startup';
@@ -63,6 +63,7 @@ export interface ChannelPayloads {
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
   'flow:onAppBootstrapConflict': FlowAppBootstrapConflictMsg;
   'flow:onEpicPromotionPreview': FlowEpicPromotionPreviewMsg;
+  'setup:agentStateChanged': SetupAgentStateChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;

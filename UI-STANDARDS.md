@@ -294,16 +294,28 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the shell's `setView` itself, not on its
    callers, so every caller is covered, and it shares ONE "a dialog is open" predicate with the
    loop-panel's Escape deference — two copies disagree about which roles count.
-9. **A dialog the app raises on its own waits until no other dialog is open.** A dialog raised by the
-   app rather than in answer to a press (the setup-check popup is the reference implementation) opens
-   only while `Shell.modalIsOpen()` is false. Otherwise it waits for `Shell.onModalClosed` and checks
-   again, so it never opens over another dialog. It reads that predicate when it is about to open, not
-   when its work began, because another dialog can open meanwhile. This rule governs only the dialog
-   that waits: a system alert raised while it is open (errorDialog) still shows at once. `modalIsOpen()` is
-   item 8's one predicate, and `onModalClosed` fires when that same predicate turns from true to false,
-   so the two members can never disagree about what counts as a dialog. The organism takes both as
-   injected deps (`blockingDialogOpen`, `onBlockingDialogClosed`) and never queries outside its host
-   (§2.2).
+9. **A condition the app notices opens no dialog on its own.** A modal takes keyboard input from the
+   terminal beneath it, so the operator cannot answer the shell or the agent until it closes. The app
+   shows the condition as a control instead, and the dialog opens only when that control is pressed. The
+   setup check's **setup needed** button in the status bar is the reference implementation (§29.1). This
+   rule does not cover a system alert reporting the failure of something the operator just did
+   (errorDialog), which still shows at once.
+10. **A reason a dialog is rebuilt with is part of its description (WCAG 4.1.3).** Sometimes a dialog
+    renders its card again to report why an action failed or was refused, or returns to an earlier
+    step. The reason is then written into its error line as the card is built, and that line is named in the card's `describedById`, so it is read with the dialog when
+    focus moves in. A `role="alert"` line filled in the same task that mounts the rebuilt card and moves
+    focus into it can be dropped by a screen reader: the §4 Alert pattern's host is permanent, and a
+    rebuilt card's is not. A reason added to a card already showing still goes into its alert line. The
+    setup-check popup is the reference implementation.
+11. **Content shown in more than one dialog builds its whole card; each dialog supplies only its
+    footer.** A question or form that two dialogs show is one molecule (§1.2). It builds the card from
+    the dialog's `titleId` and the dialog's own footer, and returns a whole `ModalCard`: its title, its
+    `describedById`, its `grow`/`scroll` slots, and its initial focus, which falls back to a control
+    the dialog names. It also returns an accessor for the value the operator chose. It never returns
+    loose parts with instructions for wiring them, because every dialog then repeats that wiring and
+    the copies drift. Each dialog builds only its own controls, so its accept and dismiss doors stay its
+    own (item 6). `installConsent.ts`'s `card(foot, fallbackFocus)` and `choice()` are the reference
+    implementation.
 
 **Every** blocking dialog composes `createModalShell`; this doc keeps no list of them, because the
 composer a list omits is the one that drifts. A dialog is tested like any organism
@@ -342,4 +354,6 @@ focus-restored-to-opener, and accept-is-not-dismiss.
 - [ ] Every press runs through `pressable`; an action returns the promise for the work it starts, related controls share one group created per instance, a dialog's controls bind to the shell's `presses`, and a control rebuilt while its press is pending is bound under a `key` (UI §1.4).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
+- [ ] If it rebuilds its card to report a failure or refusal: the reason is written as the card is built and named in its `describedById`, not filled into a fresh alert line in the same task (UI §5 item 10).
+- [ ] If its content is shown in more than one dialog: it builds the whole `ModalCard` from the dialog's `titleId` and footer, and returns a value accessor; it never hands back parts for each dialog to wire (UI §5 item 11).
 - [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.

@@ -2,6 +2,42 @@
 
 §8.3.1 (new) and §23.6: an agent that started a long command and returned to a static prompt read Idle, so "finished, needs me" looked the same as "still running tests". A third, display-only activity, **Waiting · `<program>`**, now shows while the screen is quiet and a command the agent's leader started in a process group of its own, off the agent's terminal, is over a second old and is no helper. It shows on the controller card (in the working class with or without a pending condition, written after it: **Needs a human · Waiting**), the header counts and tray, the monitor status strip and the flow strip. The label is the OS's program name, never the command line. Helpers are excluded by the rule, a built-in name list and the operator's optional `helper-programs.yaml` in the app-state home's `.agent-terminal/` directory, re-read at most every 15 s. Lookups run `ps` asynchronously only while the screen is quiet, bounded by `APP_WAITING_LOOKUP_TIMEOUT_MS` (default 1000 ms). For the timeline Waiting counts as Working. Controller protocol minor 4 carries the `waiting` activity; an older controller is sent `active`. Screen `active`/`quiet`, the §27.2 gate, the semantic scanner and the §27.12 watchdog are unchanged. `monitor:update` and the flow view's derived status gain a `waiting` field.
 
+## The setup check moves to a setup needed button in the status bar
+
+§22.3.1/§29.1/§29.3/§29.5 (operator decision 2026-11-08): the setup popup opened on its own at startup and on entering a repository, and while it was open the terminal took no input, so an operator whose shell was asking a question at startup could not answer it. Its timing rules (the once-per-session check, the queue of popups, the wait for other dialogs, stepping aside for Run setup loop and returning when an agent went idle) kept failing in new ways. Now:
+
+- the popup never opens on its own. The status bar shows a **setup needed** button, before the work's name, while the latest check of the terminal's directory lists anything, and pressing it opens the popup (§22.3.1, §29.1);
+- the check runs at startup and on every change of the terminal's repository key, inside a repository or not, and closing the popup checks again, so the button goes once nothing is listed (§29.1);
+- Run setup loop closes the popup and starts the flow; the popup does not come back. A refused start shows its reason in the app's error dialog. Once the flow has started, the check no longer counts the entries it fixes for the rest of the app session (§29.5);
+- an agent starting at the prompt never opens the popup; an open popup still offers Run setup loop only while an agent is there (§29.5);
+- UI-STANDARDS.md §5 item 9 now says a condition the app notices opens no dialog on its own, and `Shell.modalIsOpen()`/`Shell.onModalClosed`, which only the self-opening popup used, are removed.
+
+## Run setup loop waits for an agent, and a loop turn waits for one before failing
+
+§27.2/§29.3/§29.5 (operator decision 2026-11-07): Run setup loop was offered before Claude Code or Codex was running. Its first turn found no agent at the prompt and stopped in `error` at once, and the popup, which blocks the terminal, gave the operator no chance to start one. A fresh shell also read as an agent being present until it had run a command: the shell integration marked only the prompts after the first. Now:
+
+- the shell integration marks the first prompt too, so a fresh shell reads as a bare shell (§27.2);
+- an agent is at the prompt only when the running command line starts a listed agent program, `claude` or `codex` by default (`APP_AGENT_COMMANDS` overrides the list); before, any running command counted, so a turn could be typed into an editor or a dev server, and a short `cd` brought the popup back over the terminal (§27.2);
+- the setup popup offers Run setup loop only while an agent is at the terminal's prompt, following it as it starts and leaves, and otherwise says to start one;
+- a popup closed while Run setup loop waited for an agent comes back once when the agent is idle at its prompt, listing only the entries the setup flow fixes;
+- a loop turn that finds no agent at the prompt waits for one, for sixty seconds by default (`APP_AGENT_WAIT_MS` overrides it), injects once the agent is at its prompt, and stops in `error` only if none has arrived; it still never types the prompt into the shell.
+
+IPC: `setup:agentState` (the renderer asks whether an agent is at the prompt, idle or busy) and `setup:agentStateChanged` (main reports a change).
+
+## #317 — The setup popup keeps its buttons inside the dialog and stays open until the operator dismisses it
+
+§29.1/§29.3/§29.5/§18.1 (operator decision 2026-11-07): the popup's controls sat on one line wider than its card, so some were painted outside it and could not be pressed, and the popup closed after Install/update examples or Run setup loop although other entries still needed an action. Now:
+
+- every dialog's footer wraps its controls inside the card at any window size (the shared `.flow-modal` rules);
+- Install/update examples installs from inside the popup, asking the Settings view's replace question in its own card when installed files differ, then lists what still fails for its repository;
+- Run setup loop removes the entries the setup flow fixes and brings the popup back with whatever else is listed; a refusal shows its reason in the popup, which keeps every entry, and no separate alert opens;
+- the popup closes only through Close, Escape or the scrim, or when nothing is left listed.
+
+`UI-STANDARDS.md` §5 gains two rules from this work (operator decision 2026-11-07), each with a definition-of-done item:
+
+- item 10: a reason a dialog is rebuilt with is written as the card is built and named in its description, not filled into a fresh alert line in the same task;
+- item 11: content shown in more than one dialog builds its whole `ModalCard` from the dialog's title id and footer, and each dialog supplies only its own controls.
+
 ## Stalled loop turns resume from the gate question
 
 §27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:

@@ -23,6 +23,7 @@ const DEFAULTS = {
   shellQuitGraceMs: 2000,
   branchRefreshMs: 300_000,
   waitingLookupTimeoutMs: 1000,
+  agentWaitMs: 60_000,
 } as const;
 
 export interface RuntimeConfig {
@@ -42,6 +43,9 @@ export interface RuntimeConfig {
   branchRefreshMs: number;
   autoGateDecisionMs: number;
   waitingLookupTimeoutMs: number;
+  agentWaitMs: number;
+  /** The program names that count as an agent at the terminal's prompt (§27.2). */
+  agentCommands: readonly string[];
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -49,6 +53,13 @@ function posInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+const DEFAULT_AGENT_COMMANDS: readonly string[] = ['claude', 'codex'];
+
+function nameList(raw: string | undefined, fallback: readonly string[]): readonly string[] {
+  const names = (raw ?? '').split(',').map((n) => n.trim()).filter((n) => n !== '');
+  return names.length > 0 ? names : fallback;
 }
 
 /** Parse a finite positive timer delay in ms: rounded up, clamped to the timer maximum (§27.9.1 N9b.5(e)). */
@@ -76,5 +87,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     branchRefreshMs: timerMs(env.APP_BRANCH_REFRESH_MS, DEFAULTS.branchRefreshMs),
     autoGateDecisionMs: timerMs(env.APP_AUTO_GATE_DECISION_MS, AUTO_GATE_DECISION_DEFAULT_MS),
     waitingLookupTimeoutMs: timerMs(env.APP_WAITING_LOOKUP_TIMEOUT_MS, DEFAULTS.waitingLookupTimeoutMs),
+    agentWaitMs: timerMs(env.APP_AGENT_WAIT_MS, DEFAULTS.agentWaitMs),
+    agentCommands: nameList(env.APP_AGENT_COMMANDS, DEFAULT_AGENT_COMMANDS),
   };
 }

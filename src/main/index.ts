@@ -44,6 +44,7 @@ import {
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
   isValidSetupDismiss,
+  isValidSetupAgentState,
   isValidSetupStatus,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
@@ -177,7 +178,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from './autoGateComposition';
-import type { CliInstallResult, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
+import type { CliInstallResult, HostedAgentState, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
@@ -320,6 +321,7 @@ async function createWindow(): Promise<void> {
   // §27.2/§27.3 — fired on each active→quiet flip so the app-loop engine can inject a deferred/retry
   // turn the moment the instance is injectable. Assigned once the engine exists (below); a no-op until.
   let notifyInjectable: () => void = () => {};
+  let pushAgentState: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
@@ -353,6 +355,7 @@ async function createWindow(): Promise<void> {
       agentActivity = status.agentState;
       windowStatus.screen(status);
       waitingDetector.screen(status.agentState);
+      pushAgentState();
       if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
     },
   });
@@ -364,6 +367,16 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
+  const agentAtPrompt = (): boolean => hostedAgentPresent(tracker.summaries(), tracker.shellPrompted(), config.agentCommands);
+  const hostedAgentState = (): HostedAgentState => classifyHostedAgent(agentAtPrompt(), agentActivity);
+  let lastAgentState = hostedAgentState();
+  pushAgentState = () => {
+    const state = hostedAgentState();
+    if (state === lastAgentState) return;
+    lastAgentState = state;
+    send(CH.setupAgentStateChanged, { sessionId: SESSION_ID, state });
+  };
+  tracker.onChange(pushAgentState);
   // §27.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
@@ -483,6 +496,7 @@ async function createWindow(): Promise<void> {
   // loop area (AC10).
   const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
   let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
+  let agentWaitTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchAppTurnDone: (() => void) | null = null;
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
@@ -502,7 +516,7 @@ async function createWindow(): Promise<void> {
   };
   let lifecycle: FlowLifecycle;
   const agentQuestion = createAgentQuestion({
-    readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    readiness: hostedAgentState,
     inject: (text) => inject(text, { submit: true }),
   });
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
@@ -594,7 +608,7 @@ async function createWindow(): Promise<void> {
     // §27.9/AC6 — a fresh work-turn entry clears any stale stand-down (see the engine's `enter`), so an abandoned
     // polish cannot resurrect on a later same-step re-drive.
     clearPolish,
-    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    hostedAgent: hostedAgentState,
     armTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks
       appTurnTimer = setTimeout(() => appEngine.onStall(), config.stallTimeoutMs);
@@ -602,6 +616,14 @@ async function createWindow(): Promise<void> {
     cancelTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer);
       appTurnTimer = null;
+    },
+    armAgentWait: () => {
+      if (agentWaitTimer) clearTimeout(agentWaitTimer);
+      agentWaitTimer = setTimeout(() => appEngine.onAgentWaitElapsed(), config.agentWaitMs);
+    },
+    cancelAgentWait: () => {
+      if (agentWaitTimer) clearTimeout(agentWaitTimer);
+      agentWaitTimer = null;
     },
     noteSettle: () => shadow.noteSettle(),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
@@ -1665,6 +1687,7 @@ async function createWindow(): Promise<void> {
         isValidSetupDismiss(m) && (m.dismissal.kind !== 'repo' || knownRepoKeys.has(m.dismissal.repoKey))
           ? setupCheck.dismiss(m.dismissal)
           : { ok: false, reason: 'invalid setup:dismiss request' },
+      [CH.setupAgentState]: (_e, m): HostedAgentState => (isValidSetupAgentState(m) ? hostedAgentState() : 'absent'),
     },
   );
 
@@ -1683,6 +1706,7 @@ async function createWindow(): Promise<void> {
       () => stopViewerWatch(),
       () => {
         if (appTurnTimer) clearTimeout(appTurnTimer);
+        if (agentWaitTimer) clearTimeout(agentWaitTimer);
       },
       () => unwatchAppTurnDone?.(),
     ]);

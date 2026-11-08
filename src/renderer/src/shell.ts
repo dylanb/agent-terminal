@@ -37,10 +37,6 @@ export interface Shell {
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
   setViewerFullscreen(on: boolean): void;
   isViewerFullscreen(): boolean;
-  /** True while an `aria-modal` dialog is open anywhere in the document. */
-  modalIsOpen(): boolean;
-  /** Calls `cb` each time `modalIsOpen()` turns from true to false; returns its unsubscribe. */
-  onModalClosed(cb: () => void): () => void;
   dispose(): void;
 }
 
@@ -69,30 +65,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
    *  chord, the rail, or another surface calling in (loopReveal, on an OS notification) cannot change or
    *  hide chrome out from under an open dialog and wedge focus behind the scrim (WCAG 2.4.3, 2.1.1). */
   const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
-
-  // A modal-shell dialog closes by removing its nodes, never by clearing `aria-modal`, so the watcher reads
-  // the predicate after every subtree change rather than watching the attribute.
-  const modalClosedListeners = new Set<() => void>();
-  let modalWatcher: MutationObserver | null = null;
-  let modalWasOpen = false;
-  function watchModals(): void {
-    // A subscriber that saw a dialog open must hear it close, even when it closes before the watcher's next run.
-    modalWasOpen ||= modalIsOpen();
-    const Observer = doc.defaultView?.MutationObserver;
-    if (modalWatcher || !Observer) return;
-    modalWatcher = new Observer(() => {
-      const open = modalIsOpen();
-      const closed = modalWasOpen && !open;
-      modalWasOpen = open;
-      if (closed) for (const cb of [...modalClosedListeners]) cb();
-    });
-    modalWatcher.observe(doc.documentElement, { childList: true, subtree: true });
-  }
-  function unwatchModals(): void {
-    modalWatcher?.disconnect();
-    modalWatcher = null;
-    modalWasOpen = false;
-  }
 
   function setView(v: ViewId): void {
     if (modalIsOpen()) return;
@@ -304,18 +276,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     getTheme: () => theme,
     setViewerFullscreen,
     isViewerFullscreen: () => fullscreen,
-    modalIsOpen,
-    onModalClosed(cb) {
-      modalClosedListeners.add(cb);
-      watchModals();
-      return () => {
-        modalClosedListeners.delete(cb);
-        if (modalClosedListeners.size === 0) unwatchModals();
-      };
-    },
     dispose() {
-      unwatchModals();
-      modalClosedListeners.clear();
       unbindNav();
       doc.removeEventListener('keydown', onKeyDown, true);
       win?.removeEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);

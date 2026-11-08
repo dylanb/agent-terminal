@@ -72,6 +72,8 @@ const TERMINAL_WIRE_NAMES = {
   installExamplesApply: 'examples:apply',
   setupStatus: 'setup:status',
   setupDismiss: 'setup:dismiss',
+  setupAgentState: 'setup:agentState',
+  setupAgentStateChanged: 'setup:agentStateChanged',
 };
 
 const CONTROLLER_WIRE_NAMES = {
