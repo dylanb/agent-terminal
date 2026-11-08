@@ -1,17 +1,23 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
+import type {
+  InstallExamplesPreview,
+  InstallExamplesResult,
+  InstallPreviewId,
+  SetupDismissReply,
+  SetupStatusReply,
+} from '../../shared/ipc';
 import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
+import { asksBeforeInstall, createInstallConsent, type InstallChoice, type InstallPreview } from './installConsent';
 import { createModalShell } from './modalShell';
+import type { PressGroup } from './pressable';
 import type { SetupFlowRun } from './setupFlowRun';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
   dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
-  /** Opens the Settings view's install-examples flow. */
-  openInstallExamples(): void;
+  previewExamples(): Promise<InstallExamplesPreview>;
+  installExamples(previewId: InstallPreviewId, choice: InstallChoice): Promise<InstallExamplesResult>;
   /** Runs the repo-setup flow in `repoKey`; settles once its start has. */
   runSetupFlow(repoKey: string): Promise<SetupFlowRun>;
-  /** Shows a message that must outlive the closed dialog. */
-  announce(title: string, message: string): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
   onFocusLost(): void;
   /** Whether another app dialog is open, so this one waits instead of opening over it. */
@@ -48,8 +54,21 @@ const IGNORE_MESSAGES: Record<FailureOf<'ignore'>, string> = {
 const fixedBySetupFlow = (entry: SetupConditionEntry): boolean =>
   (entry.condition === 'ignore' && entry.failure === 'not-ignored') || (entry.condition === 'capabilities' && entry.failure === 'absent');
 
-const SETUP_REFUSED_TITLE = 'The setup loop could not run';
 const DISMISSAL_NOT_SAVED = 'The dismissal could not be saved:';
+
+type StatusOk = Extract<SetupStatusReply, { ok: true }>;
+
+const reasonOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+function footButton(doc: Document, foot: HTMLElement, presses: PressGroup, label: string, action: () => unknown): HTMLButtonElement {
+  const control = doc.createElement('button');
+  control.type = 'button';
+  control.className = 'pill';
+  control.textContent = label;
+  presses.bind(control, action);
+  foot.append(control);
+  return control;
+}
 
 function entryMessage(entry: SetupConditionEntry): string {
   switch (entry.condition) {
@@ -90,10 +109,56 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
     }
   }
 
-  function show(reply: Extract<SetupStatusReply, { ok: true }>): Promise<void> {
-    const { repoKey, isRepository, appVersion } = reply;
+  function show(first: StatusOk): Promise<void> {
+    const { repoKey, isRepository, appVersion } = first;
     const shown = new Promise<void>((resolve) => (closed = resolve));
-    const render = (entries: SetupConditionEntry[], focusFirstAction: boolean): void =>
+    let alertLine: HTMLElement;
+    let setupStarted = false;
+    const unfixed = (entries: SetupConditionEntry[]): SetupConditionEntry[] =>
+      setupStarted ? entries.filter((entry) => !fixedBySetupFlow(entry)) : entries;
+
+    async function installAndReread(reply: StatusOk, confirm: () => void, previewId: InstallPreviewId, choice: InstallChoice): Promise<void> {
+      const installFailure = await deps
+        .installExamples(previewId, choice)
+        .then((result) => (result.ok ? null : result.error), reasonOf);
+      const reread = await deps.status(repoKey).catch((e: unknown): SetupStatusReply => ({ ok: false, reason: reasonOf(e) }));
+      if (disposed) return;
+      if (!reread.ok) return renderList(reply, true, installFailure ?? reread.reason);
+      if (installFailure === null && unfixed(reread.entries).length === 0) {
+        confirm();
+        settle();
+        return;
+      }
+      renderList(reread, true, installFailure ?? undefined);
+    }
+
+    async function previewAndInstall(reply: StatusOk, confirm: () => void): Promise<void> {
+      const preview = await deps.previewExamples().catch((e: unknown): InstallExamplesPreview => ({ ok: false, error: reasonOf(e) }));
+      if (disposed) return;
+      if (!preview.ok) {
+        alertLine.textContent = preview.error;
+        return;
+      }
+      if (asksBeforeInstall(preview)) return renderQuestion(reply, preview);
+      return installAndReread(reply, confirm, preview.previewId, { replace: [], removeRetired: false });
+    }
+
+    function renderQuestion(reply: StatusOk, preview: InstallPreview): void {
+      shell.render(({ doc, titleId, close, confirm, presses }) => {
+        const consent = createInstallConsent(doc, titleId, preview);
+        const foot = doc.createElement('div');
+        foot.className = 'mfoot';
+        const install = footButton(doc, foot, presses, 'Install', () =>
+          installAndReread(reply, confirm, preview.previewId, consent.choice()),
+        );
+        footButton(doc, foot, presses, 'Back to the list', () => renderList(reply, true));
+        footButton(doc, foot, presses, 'Close', close);
+        return consent.card(foot, install);
+      });
+    }
+
+    const renderList = (reply: StatusOk, focusFirstAction: boolean, reason?: string): void => {
+      const entries = unfixed(reply.entries);
       shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
         const card = doc.createElement('div');
         card.className = 'card';
@@ -117,18 +182,13 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         const error = doc.createElement('p');
         error.className = 'ph';
         error.setAttribute('role', 'alert');
+        error.id = `${titleId}-error`;
+        if (reason !== undefined) error.textContent = reason;
+        alertLine = error;
         body.append(intro, list, error);
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
-        const button = (label: string, action: () => unknown): HTMLButtonElement => {
-          const control = doc.createElement('button');
-          control.type = 'button';
-          control.className = 'pill';
-          control.textContent = label;
-          presses.bind(control, action);
-          foot.append(control);
-          return control;
-        };
+        const button = (label: string, action: () => unknown): HTMLButtonElement => footButton(doc, foot, presses, label, action);
         const lists = (dismissal: SetupDismissal): boolean =>
           entries.some((entry) => silencedBy(dismissal).includes(entry.condition));
         const dismissWith = (dismissal: SetupDismissal) => (): Promise<void> =>
@@ -140,7 +200,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
                 return;
               }
               const remaining = entries.filter((entry) => !silencedBy(dismissal).includes(entry.condition));
-              if (remaining.length > 0) return render(remaining, true);
+              if (remaining.length > 0) return renderList({ ...reply, entries: remaining }, true);
               confirm();
               settle();
             },
@@ -150,35 +210,29 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
           );
         const actions: HTMLButtonElement[] = [];
         if (entries.some((entry) => entry.condition === 'examples')) {
-          actions.push(
-            button('Install/update examples', () => {
-              confirm();
-              settle();
-              deps.openInstallExamples();
-            }),
-          );
+          actions.push(button('Install/update examples', () => previewAndInstall(reply, confirm)));
         }
         const forRepo: SetupDismissal = { kind: 'repo', repoKey };
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
         const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
         if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
-        const runSetupLoop = (): Promise<void> => {
+        const runSetupLoop = async (): Promise<void> => {
           confirm();
-          // The queue waits for the start, so a queued popup never opens over the step-entry input modal it raises.
-          return deps
-            .runSetupFlow(repoKey)
-            .then((run) => {
-              if (!disposed && !run.ok) deps.announce(SETUP_REFUSED_TITLE, run.reason);
-            })
-            .finally(settle);
+          const run = await deps.runSetupFlow(repoKey).catch((e: unknown): SetupFlowRun => ({ ok: false, reason: reasonOf(e) }));
+          await otherDialogsClosed();
+          if (disposed) return;
+          setupStarted ||= run.ok;
+          if (unfixed(reply.entries).length === 0) return settle();
+          renderList(reply, true, run.ok ? undefined : run.reason);
         };
         if (reply.setupFlowInstalled && entries.some(fixedBySetupFlow)) actions.push(button('Run setup loop', runSetupLoop));
         button('Close', dismiss);
         card.append(title, body, foot);
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
-        return { card, initialFocus, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
+        return { card, initialFocus, describedById: `${intro.id} ${list.id} ${error.id}`, grow: body, scroll: body };
       });
-    render(reply.entries, false);
+    };
+    renderList(first, false);
     return shown;
   }
 
