@@ -11,7 +11,7 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
-import { PS_ARGS } from '../../src/main/waitingRule';
+import { PS_ARGS } from '../../src/main/waitingLookup';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';

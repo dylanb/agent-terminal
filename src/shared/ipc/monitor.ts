@@ -178,15 +178,17 @@ export interface RepoInfo {
 
 export type AgentState = 'active' | 'quiet';
 
-export interface MonitorUpdateMsg {
+/** The screen activity, and the Waiting value, which only a quiet screen can carry. */
+export type ScreenWaiting =
+  | { agentState: 'active'; waiting: null }
+  | { agentState: 'quiet'; waiting: WaitingValue | null };
+
+export type MonitorUpdateMsg = ScreenWaiting & {
   sessionId: SessionId;
   altScreen: boolean;
   bracketedPaste: boolean;
-  agentState: AgentState;
   quietSince: number | null;
-  /** Null whenever `agentState` is `active`. */
-  waiting: WaitingValue | null;
-}
+};
 
 export interface AgentInjectMsg {
   sessionId: SessionId;

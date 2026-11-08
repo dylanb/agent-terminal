@@ -10,7 +10,7 @@ import { exampleConfigDir, FAKE_AGENT_READY, seedFakeAgentSteps, seedFakeAgentV2
 import { fakeProcessPid, fakeProcessRunning, fakeSpawnLine, stopAllFakeProcesses, stopFakeProcess } from './fakeProcesses';
 import { cardHeaderLocator, cardLocator, statusRowLocator, timelineEntriesLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { PS_ARGS } from '../../src/main/waitingRule';
+import { PS_ARGS } from '../../src/main/waitingLookup';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };

@@ -49,7 +49,15 @@ export const CONTROLLER_CHANNELS = {
   },
 } as const satisfies ChannelSpecs;
 
-export type ControllerWorkStatus = {
+/** The work status's activity, with the Waiting value exactly when it is waiting. */
+export type ControllerWorkActivity =
+  | { activity: 'active' | 'quiet' | 'unavailable'; waiting?: never }
+  | { activity: 'waiting'; waiting: WaitingValue };
+
+export type ControllerWorkStatus = ControllerWorkActivity & ControllerWorkDetails;
+
+/** Everything in the work status but its activity. */
+export type ControllerWorkDetails = {
   unavailableReason?: 'message-too-large';
   flow: { availability: 'loading' | 'unavailable' } | {
     availability: 'known'; name: string; step: string;
@@ -59,8 +67,6 @@ export type ControllerWorkStatus = {
     availability: 'known'; number: number;
     title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
   };
-  activity: 'active' | 'quiet' | 'unavailable' | 'waiting';
-  waiting?: WaitingValue;
   attention: null | { status: string; reasons: string[] };
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */

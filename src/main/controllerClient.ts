@@ -1,4 +1,4 @@
-import type { ControllerIncompatibility, ControllerWorkStatus } from '../shared/ipc';
+import type { ControllerIncompatibility, ControllerWorkActivity, ControllerWorkDetails, ControllerWorkStatus } from '../shared/ipc';
 import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
@@ -9,11 +9,13 @@ import type { ControllerIdentity } from './controllerIdentity';
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
 export const CONTROLLER_RETRY_DELAY_MS = 5_000;
 
-type OlderWork = Omit<ControllerWorkStatus, 'loopMessage' | 'title' | 'branch'>;
+type OlderWork = ControllerWorkActivity & Omit<ControllerWorkDetails, 'loopMessage' | 'title' | 'branch'>;
 
 /** An older controller rejects the Waiting activity, so it is shown as Working with no program. */
-function withoutWaiting({ waiting: _waiting, ...work }: OlderWork): OlderWork {
-  return work.activity === 'waiting' ? { ...work, activity: 'active' } : work;
+function withoutWaiting(work: OlderWork): OlderWork {
+  if (work.activity !== 'waiting') return work;
+  const { waiting: _waiting, ...details } = work;
+  return { ...details, activity: 'active' };
 }
 
 export function registerControllerTerminal(

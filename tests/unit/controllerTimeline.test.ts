@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
 import { createControllerTimelines } from '../../src/main/controllerTimeline';
+import { workStatus, type WorkStatusOverrides } from '../helpers/controllerStatusFixture';
 
 const changes = async (previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): Promise<string[]> => {
   const timelines = createControllerTimelines<string>();
@@ -13,10 +14,10 @@ const changes = async (previous: ControllerWorkStatus | undefined, next: Control
 };
 
 const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
-const base = (overrides: Partial<ControllerWorkStatus> = {}): ControllerWorkStatus => ({
+const base = (overrides: WorkStatusOverrides = {}): ControllerWorkStatus => workStatus({
   flow: running,
   ticket: { availability: 'known', number: 301, title: { availability: 'known', text: 'Cards' } },
-  activity: 'active', attention: null, error: null, ...overrides,
+  ...overrides,
 });
 
 it('Working to Idle is one entry naming Idle', async () => {

@@ -87,7 +87,7 @@ it('names a real command by its program only, so its arguments reach neither the
   const { shellPid, program } = await agentWithSecretCommand();
   const table = await readProcessTable({ signal: new AbortController().signal });
   const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
-  const waiting = waitingInTable(table, { shellPid, platform });
+  const waiting = waitingInTable(table, { shellPid, platform, helpers: [] });
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'waiting-wire-')));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
   const controller = await waitingMinorController(home);

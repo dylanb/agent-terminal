@@ -1,40 +1,45 @@
-import type { AgentState } from '../shared/ipc';
+import type { MonitorUpdateMsg } from '../shared/ipc';
 import type { ShadowStatus } from './shadow';
-import { sameWaitingValue, type WaitingValue } from '../shared/waiting';
+import { sameWaitingValue, type ControllerActivity, type WaitingValue } from '../shared/waiting';
 
-export interface WindowStatusUpdate {
-  status: ShadowStatus;
-  waiting: WaitingValue | null;
-}
+/** What the window is sent: the monitor status update, but for its session. */
+export type WindowStatusUpdate = MonitorUpdateMsg extends infer M ? M extends unknown ? Omit<M, 'sessionId'> : never : never;
 
 export interface WindowStatusDeps {
-  /** The Waiting value the window shows while the screen is quiet. */
-  waiting(): WaitingValue | null;
   deliver(update: WindowStatusUpdate): void;
 }
 
 export interface WindowStatus {
   /** A new screen status: always delivered. */
   screen(status: ShadowStatus): void;
-  /** Delivers only when the Waiting value the window shows has changed. */
-  refresh(): void;
+  /** The Waiting detector's activity: delivered only when it changes the Waiting value the window shows. */
+  activity(activity: ControllerActivity): void;
+  /** The Waiting value the window's strips show while the screen is quiet. */
+  waiting(): WaitingValue | null;
 }
 
-/** Working wins: no Waiting value is ever shown beside an active screen. */
-export function waitingBeside(screen: AgentState, waiting: WaitingValue | null): WaitingValue | null {
-  return screen === 'active' ? null : waiting;
+/** Working wins: an active screen carries no Waiting value. */
+function windowUpdate({ agentState, ...status }: ShadowStatus, waiting: WaitingValue | null): WindowStatusUpdate {
+  return agentState === 'active' ? { ...status, agentState, waiting: null } : { ...status, agentState, waiting };
 }
 
+/** The window's strips follow the latest lookup, never the controller's grace period. */
 export function createWindowStatus(deps: WindowStatusDeps): WindowStatus {
-  let sent: WindowStatusUpdate | null = null;
+  let waiting: WaitingValue | null = null;
+  let screen: ShadowStatus | null = null;
+  let shown: WaitingValue | null = null;
   const send = (status: ShadowStatus): void => {
-    sent = { status, waiting: waitingBeside(status.agentState, deps.waiting()) };
-    deps.deliver(sent);
+    screen = status;
+    const update = windowUpdate(status, waiting);
+    shown = update.waiting;
+    deps.deliver(update);
   };
   return {
     screen: send,
-    refresh() {
-      if (sent && !sameWaitingValue(sent.waiting, waitingBeside(sent.status.agentState, deps.waiting()))) send(sent.status);
+    activity(activity) {
+      waiting = activity.activity === 'waiting' ? activity.waiting : null;
+      if (screen && !sameWaitingValue(shown, windowUpdate(screen, waiting).waiting)) send(screen);
     },
+    waiting: () => waiting,
   };
 }

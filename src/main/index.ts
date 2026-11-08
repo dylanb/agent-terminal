@@ -83,7 +83,6 @@ import { createWaitingDetector } from './waitingDetector';
 import { readProcessTable } from './waitingLookup';
 import { waitingInTable, waitingPlatform } from './waitingRule';
 import { createHelperPrograms } from './waitingHelperFile';
-import type { WaitingValue } from '../shared/waiting';
 import { createWindowStatus } from './windowStatus';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
@@ -326,15 +325,9 @@ async function createWindow(): Promise<void> {
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
-  // The window's strips follow the latest lookup, never the controller's grace period.
-  const windowWaiting = (): WaitingValue | null => {
-    const shown = waitingDetector.current();
-    return shown.activity === 'waiting' ? shown.waiting : null;
-  };
   const windowStatus = createWindowStatus({
-    waiting: windowWaiting,
-    deliver: ({ status, waiting }) => {
-      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status, waiting });
+    deliver: (update) => {
+      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...update });
       pushFlowChanged(); // a screen flip or a Waiting change moves the strip's derived line (§24.2.2 S5, §8.3.1)
     },
   });
@@ -346,9 +339,9 @@ async function createWindow(): Promise<void> {
       : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting, helpers: helperPrograms.names() }),
     timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
     lookupTimeoutMs: config.waitingLookupTimeoutMs,
-    onChange: () => {
+    onChange: (activity) => {
       refreshControllerStatus();
-      windowStatus.refresh();
+      windowStatus.activity(activity);
     },
   });
   waitingDetector.screen(agentActivity);
@@ -1061,7 +1054,7 @@ async function createWindow(): Promise<void> {
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
-    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, windowWaiting());
+    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity, windowStatus.waiting());
     const activity = loopActivityFor(repoKey);
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {

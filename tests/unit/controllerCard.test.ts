@@ -6,7 +6,7 @@ import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerSta
 import type { ControllerTerminal } from '../../src/shared/ipc';
 import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn, clearHistoryIn, entryAccessibleText, entryIsNotification, entryTimesIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
-import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
+import { STATUS_CASES, statusTerminal, type WorkStatus, type WorkStatusOverrides } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -25,7 +25,7 @@ function mount(terminal: ControllerTerminal, expanded = true) {
   return { host, calls, loopMessageDismissals, card, element: cardIn(host, terminal.launchDirectory) };
 }
 
-const withWork = (work: Partial<WorkStatus>): ControllerTerminal => statusTerminal(work);
+const withWork = (work: WorkStatusOverrides): ControllerTerminal => statusTerminal(work);
 
 function missingInOrder(text: string, texts: readonly string[]): string[] {
   let from = 0;
@@ -350,7 +350,7 @@ describe('controller card timeline', () => {
     notificationItem('Review the release proposal', at(13, 24), 2),
     statusItem('Started the oldest retained change', at(10, 17)),
   ];
-  const withTimeline = (items: readonly unknown[], work: Partial<WorkStatus> = {}) => ({ ...statusTerminal(work), timeline: items }) as ControllerTerminal;
+  const withTimeline = (items: readonly unknown[], work: WorkStatusOverrides = {}) => ({ ...statusTerminal(work), timeline: items }) as ControllerTerminal;
   function mountWithClear(terminal: ControllerTerminal) {
     const host = document.createElement('div');
     document.body.append(host);

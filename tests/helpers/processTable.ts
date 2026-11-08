@@ -81,12 +81,23 @@ export interface TreeProcess {
 export interface SpawnOptions {
   /** `own` starts a new process group led by this process; the default stays in the parent's group. */
   readonly group?: 'parent' | 'own';
-  /** The elapsed time exactly as `ps` prints it (`00:01`, `1-02:03:04`). By default each process is older than
-   *  every process spawned after it, by whole seconds, and minutes old. */
-  readonly etime?: string;
+  /** The whole seconds `ps` reports the process has been running. By default each process is older than every
+   *  process spawned after it, by whole seconds, and minutes old. */
+  readonly elapsedS?: number;
   /** false: the process has no controlling terminal (a new session), so `ps` prints its tpgid as `NO_TERMINAL`
-   *  for the platform. The default follows the parent. */
-  readonly tty?: boolean;
+   *  for the platform. `own`: a pseudo-terminal of its own, whose foreground is its own group. The default
+   *  follows the parent. */
+  readonly tty?: boolean | 'own';
+}
+
+/** One process as the Waiting rule reads it. */
+export interface TableRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly pgid: number;
+  readonly tpgid: number;
+  readonly elapsedS: number;
+  readonly program: string;
 }
 
 export interface ProcessTree {
@@ -98,12 +109,14 @@ export interface ProcessTree {
   foreground(leader: TreeProcess): void;
   /** The table as `ps ${PS_ARGS}` prints it. */
   stdout(): string;
+  /** The same table as the rule reads it. */
+  rows(): TableRow[];
 }
 
 interface Row extends TreeProcess {
   readonly ppid: number;
-  readonly tty: boolean;
-  readonly etime: string;
+  readonly tty: boolean | 'own';
+  readonly elapsedS: number;
   readonly program: string;
 }
 
@@ -131,8 +144,10 @@ export function processTree({ platform, shell = 'zsh' }: { platform: TablePlatfo
     return program.slice(0, PROGRAM_NAME_LIMIT[platform]);
   };
   const shellPid = FIRST_PID;
-  rows.push({ pid: shellPid, ppid: shellPid - 1, pgid: shellPid, tty: true, etime: formatEtime(SHELL_SECONDS), program: named(shell) });
+  rows.push({ pid: shellPid, ppid: shellPid - 1, pgid: shellPid, tty: true, elapsedS: SHELL_SECONDS, program: named(shell) });
   let foregroundGroup = shellPid;
+  const tpgid = (r: Row): number => r.tty === 'own' ? r.pgid : r.tty ? foregroundGroup : NO_TERMINAL[platform];
+  const tableRows = (): TableRow[] => rows.map((r) => ({ pid: r.pid, ppid: r.ppid, pgid: r.pgid, tpgid: tpgid(r), elapsedS: r.elapsedS, program: r.program }));
   const find = (p: TreeProcess): Row => {
     const row = rows.find((r) => r.pid === p.pid);
     if (!row) throw new Error(`pid ${p.pid} is not in this tree`);
@@ -143,8 +158,8 @@ export function processTree({ platform, shell = 'zsh' }: { platform: TablePlatfo
     spawn(parent, program, options = {}) {
       const up = find(parent);
       const pid = FIRST_PID + rows.length * PID_STEP;
-      const etime = options.etime ?? formatEtime(FIRST_SPAWN_SECONDS - rows.length);
-      const row: Row = { pid, ppid: up.pid, pgid: options.group === 'own' ? pid : up.pgid, tty: options.tty ?? up.tty, etime, program: named(program) };
+      const elapsedS = options.elapsedS ?? FIRST_SPAWN_SECONDS - rows.length;
+      const row: Row = { pid, ppid: up.pid, pgid: options.group === 'own' ? pid : up.pgid, tty: options.tty ?? up.tty, elapsedS, program: named(program) };
       rows.push(row);
       return { pid: row.pid, pgid: row.pgid };
     },
@@ -153,7 +168,8 @@ export function processTree({ platform, shell = 'zsh' }: { platform: TablePlatfo
     },
     stdout() {
       const col = (n: number): string => String(n).padStart(5);
-      return rows.map((r) => `${col(r.pid)} ${col(r.ppid)} ${col(r.pgid)} ${col(r.tty ? foregroundGroup : NO_TERMINAL[platform])} ${r.etime.padStart(11)} ${r.program}`).join('\n') + '\n';
+      return tableRows().map((r) => `${col(r.pid)} ${col(r.ppid)} ${col(r.pgid)} ${col(r.tpgid)} ${formatEtime(r.elapsedS).padStart(11)} ${r.program}`).join('\n') + '\n';
     },
+    rows: tableRows,
   };
 }

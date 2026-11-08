@@ -7,10 +7,10 @@ const quiet = (quietSince: number): ShadowStatus => ({ altScreen: false, bracket
 const ACTIVE: ShadowStatus = { altScreen: false, bracketedPaste: false, agentState: 'active', quietSince: null };
 
 function harness() {
-  let waiting: WaitingValue | null = null;
   const delivered: WindowStatusUpdate[] = [];
-  const window = createWindowStatus({ waiting: () => waiting, deliver: (update) => delivered.push(update) });
-  return { window, delivered, setWaiting: (value: WaitingValue | null) => { waiting = value; } };
+  const window = createWindowStatus({ deliver: (update) => delivered.push(update) });
+  const setWaiting = (value: WaitingValue | null): void => window.activity(value ? { activity: 'waiting', waiting: value } : { activity: 'quiet' });
+  return { window, delivered, setWaiting };
 }
 
 describe('the window status (#319 AC6, AC11)', () => {
@@ -18,17 +18,16 @@ describe('the window status (#319 AC6, AC11)', () => {
     const { window, delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });
     window.screen(quiet(1));
-    expect(delivered).toEqual([{ status: quiet(1), waiting: { program: 'node', others: 0 } }]);
+    expect(delivered).toEqual([{ ...quiet(1), waiting: { program: 'node', others: 0 } }]);
   });
 
-  it('delivers nothing on a refresh that changes nothing the window shows', () => {
+  it('delivers nothing on an activity that changes nothing the window shows', () => {
     const { window, delivered, setWaiting } = harness();
     window.screen(quiet(1));
-    window.refresh();
+    setWaiting(null);
+    window.activity({ activity: 'active' });
     setWaiting({ program: 'node', others: 1 });
-    window.refresh();
     setWaiting({ program: 'node', others: 1 });
-    window.refresh();
     expect(delivered.map((update) => update.waiting)).toEqual([null, { program: 'node', others: 1 }]);
   });
 
@@ -37,7 +36,6 @@ describe('the window status (#319 AC6, AC11)', () => {
     setWaiting({ program: 'node', others: 0 });
     window.screen(quiet(1));
     setWaiting(null);
-    window.refresh();
     expect(delivered.map((update) => update.waiting)).toEqual([{ program: 'node', others: 0 }, null]);
   });
 
@@ -46,9 +44,7 @@ describe('the window status (#319 AC6, AC11)', () => {
     setWaiting({ program: 'node', others: 0 });
     window.screen(quiet(1));
     setWaiting({ program: 'node', others: 1 });
-    window.refresh();
     setWaiting({ program: 'pytest', others: 1 });
-    window.refresh();
     expect(delivered.map((update) => update.waiting)).toEqual([
       { program: 'node', others: 0 },
       { program: 'node', others: 1 },
@@ -60,8 +56,8 @@ describe('the window status (#319 AC6, AC11)', () => {
     const { window, delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });
     window.screen(ACTIVE);
-    window.refresh();
-    expect(delivered).toEqual([{ status: ACTIVE, waiting: null }]);
+    setWaiting({ program: 'pytest', others: 0 });
+    expect(delivered).toEqual([{ ...ACTIVE, waiting: null }]);
   });
 
   it('delivers every new screen status, as the window received them before #319', () => {
@@ -72,9 +68,8 @@ describe('the window status (#319 AC6, AC11)', () => {
   });
 
   it('delivers nothing before the first screen status', () => {
-    const { window, delivered, setWaiting } = harness();
+    const { delivered, setWaiting } = harness();
     setWaiting({ program: 'node', others: 0 });
-    window.refresh();
     expect(delivered).toEqual([]);
   });
 });

@@ -5,7 +5,6 @@ import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
 import type { LoopActivity } from '../loopActivity';
 import type { HeldRunView } from '../runHold';
 import type { RunIdentity } from '../runIdentity';
-import type { AgentState } from './monitor';
 import type { WaitingValue } from '../waiting';
 import type { ChannelSpecs, SessionId } from './session';
 
@@ -134,14 +133,14 @@ export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
 /** The live, derived status of an in-progress step (§22.3 / §24.2.2 S5): a pure function of the
  *  flow state, the repo's todo list, and the §8.3 agent activity. `ready` (every todo is done) is
  *  the gate-readiness signal. Present only while `status === 'in_progress'`. */
-export interface FlowDerived {
-  activity: AgentState;
-  /** Null whenever `activity` is `active`. */
-  waiting: WaitingValue | null;
+export type FlowDerived = (
+  | { activity: 'active'; waiting: null }
+  | { activity: 'quiet'; waiting: WaitingValue | null }
+) & {
   todosDone: number;
   todosTotal: number;
   ready: boolean;
-}
+};
 
 /** §27.9.1 */
 export interface FlowAutoGateView {

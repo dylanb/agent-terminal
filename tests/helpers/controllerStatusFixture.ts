@@ -1,18 +1,32 @@
-import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
+import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkActivity, type ControllerWorkDetails, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
 
 export type WorkStatus = ControllerWorkStatus;
 
 export type StatusTerminal = ControllerTerminal & { work: WorkStatus };
 
-export function workStatus(overrides: Partial<WorkStatus> = {}): WorkStatus {
-  return {
+/** Any of a work status's details, and its activity with the Waiting value that goes with it, or neither. */
+export type WorkStatusOverrides = Partial<ControllerWorkDetails> & (ControllerWorkActivity | { activity?: undefined; waiting?: undefined });
+
+export function workStatus(overrides: WorkStatusOverrides = {}): WorkStatus {
+  const details: ControllerWorkDetails = {
     flow: { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' },
     ticket: { availability: 'known', number: 219, title: { availability: 'known', text: 'Show live controller status' } },
-    activity: 'active', attention: null, error: null, ...overrides,
+    attention: null, error: null,
   };
+  if (overrides.activity === undefined) {
+    const { activity: _activity, waiting: _waiting, ...rest } = overrides;
+    return { ...details, ...rest, activity: 'active' };
+  }
+  return { ...details, ...overrides };
 }
 
-export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTerminal {
+/** `work` with `activity` in place of its own, and no Waiting value. */
+export function withActivity(work: WorkStatus, activity: 'active' | 'quiet' | 'unavailable'): WorkStatus {
+  const { waiting: _waiting, ...details } = work;
+  return { ...details, activity };
+}
+
+export function statusTerminal(overrides: WorkStatusOverrides = {}): StatusTerminal {
   return { id: 'terminal-a', launchDirectory: '/fixed/worktree', repositoryRoot: '/fixed/repository', work: workStatus(overrides) };
 }
 
@@ -88,7 +102,7 @@ export interface WaitingStatusCase extends StatusCase {
 }
 
 const node = { program: 'node', others: 0 } as const;
-const waitingOn = (overrides: Partial<WorkStatus> = {}): WorkStatus => workStatus({ activity: 'waiting', waiting: node, ...overrides });
+const waitingOn = (overrides: Partial<ControllerWorkDetails> & { waiting?: { program: string; others: number } } = {}): WorkStatus => workStatus({ ...overrides, activity: 'waiting', waiting: overrides.waiting ?? node });
 
 const WAITING_CASES = {
   waiting: [caseTerminal('waiting', waitingOn()), 'Waiting · node', 'working', 'working', 'Waiting · node'],

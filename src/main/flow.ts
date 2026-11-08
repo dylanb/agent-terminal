@@ -10,7 +10,6 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import type { WaitingValue } from '../shared/waiting';
 import { normalizeTitle } from '../shared/statusBar';
-import { waitingBeside } from './windowStatus';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
@@ -35,7 +34,8 @@ export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity:
   if (view.status !== 'in_progress') return view;
   const todosTotal = todos.length;
   const todosDone = todos.filter((t) => t.status === 'done').length;
-  return { ...view, derived: { activity, waiting: waitingBeside(activity, waiting), todosDone, todosTotal, ready: todosDone === todosTotal } };
+  const live = activity === 'active' ? { activity, waiting: null } : { activity, waiting };
+  return { ...view, derived: { ...live, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3). A `required` input must be resolved on step
