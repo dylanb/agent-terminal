@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, readFile, realpath, stat } from 'node:fs/promises';
+import { access, open, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MCP_HOOK_ARG, MCP_SERVER_NAME } from '../shared/mcp';
@@ -44,7 +44,13 @@ function settingsFile(env: NodeJS.ProcessEnv): string {
 async function readJsonFile(file: string, label: string): Promise<{ value: unknown } | null> {
   let bytes: string;
   try {
-    bytes = await readFile(file, 'utf8');
+    const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      if (!(await handle.stat()).isFile()) throw new IntegrationFailure('The configuration is not a regular file.');
+      bytes = await handle.readFile('utf8');
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return null;
     throw new IntegrationFailure(`Could not read ${label} ${file}: ${errMsg(error)}`);
@@ -153,7 +159,7 @@ function runClaude(target: McpIntegrationTarget, args: string[]): Promise<Claude
       const output = (stderr.trim() || stdout.trim()).trim();
       if (error === null) return resolve({ exit: 0, output });
       if (typeof error.code === 'number') return resolve({ exit: error.code, output });
-      if (error.code === 'ENOENT' || error.code === 'EACCES') {
+      if (isErrno(error, 'ENOENT') || isErrno(error, 'EACCES')) {
         return reject(new IntegrationFailure(`Claude Code was not found: there is no claude command to run at ${claude}. Install Claude Code, then try again.`));
       }
       reject(new IntegrationFailure(`Claude Code did not finish ${['claude', ...args.slice(0, 2)].join(' ')}: ${errMsg(error)}`));
@@ -212,12 +218,18 @@ export function installMcpIntegration(target: McpIntegrationTarget): Promise<Mcp
     const file = settingsFile(target.env);
     await readSettings(file);
     const registered = await registeredServer(target);
-    if (registered.kind === 'theirs') {
-      throw new IntegrationFailure(`Claude Code already has a user-scope MCP server named ${MCP_SERVER_NAME} that runs ${registered.command}, which is not this app's. Remove it with \`claude mcp remove --scope user ${MCP_SERVER_NAME}\`, then install again.`);
-    }
-    if (registered.kind === 'absent') {
-      const added = await runClaude(target, ['mcp', 'add-json', '--scope', 'user', MCP_SERVER_NAME, JSON.stringify({ type: 'stdio', ...target.launch })]);
-      if (added.exit !== 0) throw new IntegrationFailure(`Claude Code did not register the agent-terminal server: ${added.output || `claude mcp add-json exited ${added.exit}`}`);
+    switch (registered.kind) {
+      case 'theirs':
+        throw new IntegrationFailure(`Claude Code already has a user-scope MCP server named ${MCP_SERVER_NAME} that runs ${registered.command}, which is not this app's. Remove it with \`claude mcp remove --scope user ${MCP_SERVER_NAME}\`, then install again.`);
+      case 'absent': {
+        const added = await runClaude(target, ['mcp', 'add-json', '--scope', 'user', MCP_SERVER_NAME, JSON.stringify({ type: 'stdio', ...target.launch })]);
+        if (added.exit !== 0) throw new IntegrationFailure(`Claude Code did not register the agent-terminal server: ${added.output || `claude mcp add-json exited ${added.exit}`}`);
+        break;
+      }
+      case 'ours':
+        break;
+      default:
+        registered satisfies never;
     }
     await afterServerChange('The agent-terminal server was registered with Claude Code, but its hooks were not written', 'Install', () =>
       rewriteSettings(file, (settings) => withOurHooks(settings, target.launch)));
@@ -229,14 +241,22 @@ export function removeMcpIntegration(target: McpIntegrationTarget): Promise<McpI
   return attempt(async () => {
     const file = settingsFile(target.env);
     await readSettings(file);
-    const ours = (await registeredServer(target)).kind === 'ours';
-    if (ours) {
-      const removed = await runClaude(target, ['mcp', 'remove', '--scope', 'user', MCP_SERVER_NAME]);
-      if (removed.exit !== 0) throw new IntegrationFailure(`Claude Code did not remove the agent-terminal server: ${removed.output || `claude mcp remove exited ${removed.exit}`}`);
-    }
+    const registered = await registeredServer(target);
     const removeHooks = (): Promise<void> => rewriteSettings(file, (settings) => withoutOurHooks(settings, target.launch));
-    if (ours) await afterServerChange('The agent-terminal server was removed from Claude Code, but its hooks were not removed', 'Remove', removeHooks);
-    else await removeHooks();
+    switch (registered.kind) {
+      case 'ours': {
+        const removed = await runClaude(target, ['mcp', 'remove', '--scope', 'user', MCP_SERVER_NAME]);
+        if (removed.exit !== 0) throw new IntegrationFailure(`Claude Code did not remove the agent-terminal server: ${removed.output || `claude mcp remove exited ${removed.exit}`}`);
+        await afterServerChange('The agent-terminal server was removed from Claude Code, but its hooks were not removed', 'Remove', removeHooks);
+        break;
+      }
+      case 'absent':
+      case 'theirs':
+        await removeHooks();
+        break;
+      default:
+        registered satisfies never;
+    }
   });
 }
 
@@ -270,11 +290,11 @@ function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutM
       const marked = (key: string): string | undefined =>
         stdout.split('\n').find((line) => line.startsWith(`${MARK}:${key}:`))?.slice(`${MARK}:${key}:`.length).trim();
       const found = marked('claude') ?? '';
-      const configDir = marked('config') ?? '';
+      const configDir = marked('config');
       resolve({
         claude: path.isAbsolute(found) ? found : null,
         path: marked('path') ?? '',
-        ...(configDir !== '' ? { claudeConfigDir: configDir } : {}),
+        ...(configDir !== undefined ? { claudeConfigDir: configDir } : {}),
       });
     });
     child.stdin?.end();

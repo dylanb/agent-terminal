@@ -113,7 +113,7 @@ export function bridgeLineReader(onMessage: (message: BridgeMessage | null) => v
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl);
       buffer = buffer.slice(nl + 1);
-      onMessage(parseBridgeMessage(line));
+      onMessage(line.length > MAX_BRIDGE_LINE ? null : parseBridgeMessage(line));
     }
     if (buffer.length > MAX_BRIDGE_LINE) {
       buffer = '';

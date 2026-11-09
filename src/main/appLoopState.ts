@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { lstatSync, readFileSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { constants, lstatSync, readFileSync, rmSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
@@ -343,7 +343,13 @@ export function createRoundReportReader(log: (line: string) => void): (repoDir: 
     const file = roundReportFile(repoDir, round);
     if (file === null) return null;
     try {
-      return JSON.parse(await readFile(file, 'utf8')) as unknown;
+      const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        if (!(await handle.stat()).isFile()) throw new Error('The round report is not a regular file.');
+        return JSON.parse(await handle.readFile('utf8')) as unknown;
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       if (isErrno(error, 'ENOENT')) return null;
       const line = `The round report ${file} was not read: ${errMsg(error)}`;

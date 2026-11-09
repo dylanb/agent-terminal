@@ -57,6 +57,33 @@ describe('the Claude Code integration install molecule', () => {
     expect(alert()).toBe('');
   });
 
+  it.each(['install', 'remove'] as const)('preserves a string rejection from %s and allows retry', async action => {
+    const operation = vi.fn<() => Promise<McpIntegrationOutcome>>()
+      .mockRejectedValueOnce('Claude Code settings could not be read')
+      .mockResolvedValueOnce({ ok: true });
+    createMcpInstallAction(host, { install: answering({ ok: true }), remove: answering({ ok: true }), [action]: operation });
+    const button = action === 'install' ? installButton() : removeButton();
+    button?.click();
+    await vi.waitFor(() => expect(alert()).toContain('Claude Code settings could not be read'));
+    expect(status()).toBe('');
+    button?.click();
+    await vi.waitFor(() => expect(status()).toMatch(action === 'install' ? /installed/i : /removed/i));
+    expect(alert()).toBe('');
+  });
+
+  it.each(['install', 'remove'] as const)('announces an empty rejection from %s instead of leaving a blank alert', async action => {
+    const operation = vi.fn<() => Promise<McpIntegrationOutcome>>()
+      .mockRejectedValueOnce(new Error(''))
+      .mockRejectedValueOnce('');
+    createMcpInstallAction(host, { install: answering({ ok: true }), remove: answering({ ok: true }), [action]: operation });
+    const button = action === 'install' ? installButton() : removeButton();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      button?.click();
+      await vi.waitFor(() => expect(alert()).toMatch(/failed/i));
+      expect(status()).toBe('');
+    }
+  });
+
   it('starts neither action while the other is pending', () => {
     let settle: (result: McpIntegrationOutcome) => void = () => undefined;
     const install = vi.fn(() => new Promise<McpIntegrationOutcome>((resolve) => (settle = resolve)));

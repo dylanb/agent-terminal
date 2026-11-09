@@ -693,6 +693,13 @@ test("tracer: a typed approve in the engine-driven session closes the gate and a
   });
   await approveTurn(m, typeCommand, 'mcp read_state {}');
   const beforeTodo = await shown();
+  const auditDir = join(m.appHome, '.agent-terminal/audit', basename(m.repo));
+  const auditFile = join(auditDir, readdirSync(auditDir).find(name => name.endsWith('.yaml'))!);
+  const beforeApproval = readFileSync(auditFile, 'utf8');
+  const engineAudit = parseAuditStream(beforeApproval).events.filter(event => event.mcp?.tool === 'approve');
+  expect(engineAudit).toHaveLength(1);
+  expect(engineAudit[0].mcp).toMatchObject({ origin: 'not-human', outcome: 'not-human-started', reason: expect.stringMatching(/not a human-started turn/i) });
+  expect(engineAudit[0].mcp?.promptId).toBeUndefined();
   const todo = await approveTurn(m, insertTodoAndSubmit, approveCall(AT_THE_GATE, 'repo'));
   const afterTodo = await shown();
   const typed = await approveTurn(m, typeCommand, approveCall(AT_THE_GATE));
@@ -712,6 +719,20 @@ test("tracer: a typed approve in the engine-driven session closes the gate and a
     approveStillOffered: false,
     sideEffect: expect.stringContaining('no PR to mark ready'),
   });
+  const auditText = readFileSync(auditFile, 'utf8');
+  expect(auditText.startsWith(beforeApproval)).toBe(true);
+  const events = parseAuditStream(auditText).events;
+  const prompts = events.filter(event => event.type === 'mcp.prompt' && event.text === approveCall(AT_THE_GATE));
+  expect(prompts).toHaveLength(1);
+  const prompt = prompts[0];
+  if (prompt.type !== 'mcp.prompt') throw new Error('missing typed approval prompt');
+  expect(Number.isFinite(Date.parse(prompt.ts))).toBe(true);
+  const decisions = events.filter(event => event.type === 'command' && gateDecisionKind(event.cmd)?.kind === 'decision');
+  expect(decisions).toHaveLength(1);
+  expect(decisions[0].mcp).toMatchObject({ tool: 'approve', origin: 'human', promptId: prompt.id, outcome: 'taken' });
+  expect(events.filter(event => event.mcp?.promptId === prompt.id && event.mcp.tool === 'approve')).toEqual(decisions);
+  expect(events.indexOf(prompt)).toBeLessThan(events.indexOf(decisions[0]));
+  expect(sessions(m)).toHaveLength(1);
 });
 
 test('with no gate waiting, an approve from a typed, pasted, post-/clear or post-/compact prompt gets past the guard to "no gate waiting", while a submitted todo is not human-started and another window is refused first', { tag: '@ownapp' }, async () => {

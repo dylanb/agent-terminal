@@ -70,4 +70,46 @@ describe("the window's Claude Code integration actions", () => {
       claudeRuns: 0,
     });
   });
+
+  it.each(['unset CLAUDE_CONFIG_DIR', "export CLAUDE_CONFIG_DIR=''"])('install/remove follow a shell that clears inherited configuration with %s', async clear => {
+    const m = machine();
+    mkdirSync(m.config);
+    const inheritedState = join(m.config, '.claude.json');
+    const inheritedSettings = join(m.config, 'settings.json');
+    writeFileSync(inheritedState, '{"mcpServers":{"mine":{"command":"keep"}}}');
+    writeFileSync(inheritedSettings, '{"theme":"dark"}');
+    const inherited = () => [readFileSync(inheritedState, 'utf8'), readFileSync(inheritedSettings, 'utf8')];
+    const before = inherited();
+    const home = m.ctx.env.HOME;
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    const stateFile = join(home, '.claude.json');
+    const settingsFile = join(home, '.claude', 'settings.json');
+    writeFileSync(stateFile, '{"mcpServers":{"other":{"command":"preserve"}}}');
+    writeFileSync(settingsFile, '{"theme":"light"}');
+    const shell = join(m.base, 'clearing-shell');
+    writeFileSync(shell, `#!/bin/sh\n${clear}\nfor last; do :; done\neval "$last"\n`, { mode: 0o755 });
+    const ctx = { ...m.ctx, env: { ...m.ctx.env, SHELL: shell } };
+    expect(await changeClaudeCodeIntegration('install', ctx)).toEqual({ ok: true });
+    const installed = JSON.parse(readFileSync(stateFile, 'utf8'));
+    expect(installed.mcpServers['agent-terminal']).toBeDefined();
+    expect(installed.mcpServers.other).toEqual({ command: 'preserve' });
+    expect(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.UserPromptSubmit).toBeDefined();
+    expect(inherited()).toEqual(before);
+    expect(await changeClaudeCodeIntegration('remove', ctx)).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(stateFile, 'utf8'))).toEqual({ mcpServers: { other: { command: 'preserve' } } });
+    expect(JSON.parse(readFileSync(settingsFile, 'utf8'))).toEqual({ theme: 'light' });
+    expect(inherited()).toEqual(before);
+  });
+
+  it.each([0, 1])('retains inherited configuration when the shell provides no probe result and exits %i', async code => {
+    const m = machine();
+    const shell = join(m.base, 'unavailable-probe');
+    writeFileSync(shell, `#!/bin/sh\nexit ${code}\n`, { mode: 0o755 });
+    const ctx = { ...m.ctx, env: { ...m.ctx.env, SHELL: shell } };
+    expect(await changeClaudeCodeIntegration('install', ctx)).toEqual({ ok: true });
+    expect(servers(m.config)['agent-terminal']).toBeDefined();
+    expect(existsSync(join(m.ctx.env.HOME, '.claude.json'))).toBe(false);
+    expect(await changeClaudeCodeIntegration('remove', ctx)).toEqual({ ok: true });
+    expect(servers(m.config)['agent-terminal']).toBeUndefined();
+  });
 });

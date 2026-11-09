@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -38,6 +40,28 @@ describe("the round report a session reads of its window's loop", () => {
     const read = createRoundReportReader((line) => logged.push(line));
     const halfWritten = repo({ 1: '{"round":1}', 2: '{"rou' });
     expect({ first: await read(halfWritten, 2), again: await read(halfWritten, 2), logged: logged.length }).toEqual({ first: null, again: null, logged: 1 });
+  });
+
+  it.each(['with available bytes', 'without a writer'])('refuses a FIFO report %s', async mode => {
+    const reports = repo({ 1: '{"round":1}' });
+    const file = join(reports, roundReportRel(2));
+    execFileSync('mkfifo', [file]);
+    const writer = mode === 'with available bytes'
+      ? spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], process.argv[2])', file, '{"round":2}'], { stdio: 'ignore' })
+      : undefined;
+    const exited = writer ? once(writer, 'exit') : undefined;
+    const logged: string[] = [];
+    const read = createRoundReportReader(line => logged.push(line));
+    try {
+      expect(await read(reports, 2)).toBeNull();
+      expect(await read(reports, 2)).toBeNull();
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(file);
+      expect(await read(reports, 1)).toEqual({ round: 1 });
+    } finally {
+      writer?.kill();
+      await exited;
+    }
   });
 });
 

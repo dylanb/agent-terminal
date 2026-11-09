@@ -65,7 +65,8 @@ export function createMcpInstallAction(host: HTMLElement, deps: McpInstallDeps):
       if (result.ok) showStatus('cli-status ok', done);
       else showError(result.error || failed);
     } catch (e) {
-      showError(e instanceof Error ? e.message : failed);
+      const reason = e instanceof Error ? e.message : String(e);
+      showError(reason || failed);
     }
   };
 

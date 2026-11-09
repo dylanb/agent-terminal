@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -243,6 +245,21 @@ describe("a server named agent-terminal that is not the integration's own", () =
 });
 
 describe('removing the Claude Code integration', () => {
+  it.each(['absent', 'theirs'])('removes leftover integration hooks with an %s server, preserving the server configuration', async kind => {
+    const m = machine();
+    await seedInstalled(m);
+    const state = kind === 'absent' ? USER_STATE : {
+      ...USER_STATE,
+      mcpServers: { ...USER_STATE.mcpServers, 'agent-terminal': { command: '/opt/other-server', args: [] } },
+    };
+    writeFileSync(m.state, JSON.stringify(state, null, 2));
+    const before = bytes(m.state);
+    const result = await removeMcpIntegration(m.target);
+    expect({ result, state: bytes(m.state), settings: readJson(m.settings) }).toEqual({
+      result: { ok: true }, state: before, settings: USER_SETTINGS,
+    });
+  });
+
   it('takes out only its own server, through Claude Code, and its own hooks', async () => {
     const m = machine();
     await seedInstalled(m);
@@ -302,6 +319,17 @@ describe('removing the Claude Code integration', () => {
     const result = await removeMcpIntegration({ ...m.target, claude: join(m.root, '..', 'nowhere', 'claude') });
     expect({ result, files: files(m) }).toEqual({ result: { ok: false, error: expect.stringContaining('Claude Code') }, files: before });
   });
+});
+
+it.each(['install', 'remove'] as const)('%s refuses a Claude executable without execute permission and preserves configuration', async action => {
+  const m = machine();
+  if (action === 'remove') await seedInstalled(m);
+  else seedUserConfig(m);
+  const before = files(m);
+  chmodSync(m.target.claude, 0o600);
+  const result = await (action === 'install' ? installMcpIntegration(m.target) : removeMcpIntegration(m.target));
+  expect(result).toEqual({ ok: false, error: expect.stringMatching(/Claude Code was not found.*Install Claude Code/s) });
+  expect(files(m)).toEqual(before);
 });
 
 describe('a change that stops after Claude Code has changed its server entry', () => {
@@ -420,5 +448,40 @@ describe('removing the integration from a hook group it shares with an operator 
     writeFileSync(m.settings, JSON.stringify(shared, null, 2));
     const result = await removeMcpIntegration(m.target);
     expect({ result, settings: readJson(m.settings) }).toEqual({ result: { ok: true }, settings: USER_SETTINGS });
+  });
+});
+
+describe.each(['install', 'remove'] as const)('%s with a non-regular configuration file', action => {
+  it.each([
+    ['state', 'with available bytes'], ['settings', 'with available bytes'],
+    ['state', 'without a writer'], ['settings', 'without a writer'],
+  ] as const)('refuses a FIFO %s %s, preserves configuration, and can retry after repair', async (which, mode) => {
+    const m = machine();
+    await seedInstalled(m);
+    const file = m[which];
+    const original = readFileSync(file, 'utf8');
+    const otherFile = which === 'state' ? m.settings : m.state;
+    const otherBefore = bytes(otherFile);
+    rmSync(file);
+    execFileSync('mkfifo', [file]);
+    const writer = mode === 'with available bytes'
+      ? spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], "{")', file], { stdio: 'ignore' })
+      : undefined;
+    const exited = writer ? once(writer, 'exit') : undefined;
+    const change = action === 'install' ? installMcpIntegration : removeMcpIntegration;
+    try {
+      const result = await change(m.target);
+      expect(result).toEqual({ ok: false, error: expect.stringContaining('not a regular file') });
+      if (!result.ok) expect(result.error).toContain(file);
+      expect(lstatSync(file).isFIFO()).toBe(true);
+      expect(bytes(otherFile)).toBe(otherBefore);
+    } finally {
+      writer?.kill();
+      await exited;
+    }
+    rmSync(file);
+    writeFileSync(file, original);
+    expect(await change(m.target)).toEqual({ ok: true });
+    expect(eventsRunning(m.settings, LAUNCH.command)).toEqual(action === 'install' ? GUARD_HOOK_EVENTS : []);
   });
 });
