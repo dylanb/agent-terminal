@@ -242,8 +242,6 @@ export function fieldsAt(p: PositionId, keys: readonly string[], values: Readonl
   return pick(samplesAt(p) as Record<string, unknown>, keys, values);
 }
 
-/** `keys` as the definitions that can load: one set per member of each exactly-one group at `p` that `keys` holds,
- *  the group's other members left out. */
 export function loadableKeySets(p: PositionId, keys: readonly string[]): string[][] {
   let sets: string[][] = [[...keys]];
   for (const group of ONE_OF_KEYS.filter((g) => g.position === p)) {
@@ -255,8 +253,6 @@ export function loadableKeySets(p: PositionId, keys: readonly string[]): string[
   return sets;
 }
 
-/** The members a definition of position `p`'s always-required keys adds so it can load: the first member of each
- *  exactly-one group there. */
 export function oneOfFirstMembers(p: PositionId): string[] {
   return ONE_OF_KEYS.filter((g) => g.position === p).map((g) => g.keys[0]);
 }

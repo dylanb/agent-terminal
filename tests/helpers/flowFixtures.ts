@@ -39,8 +39,6 @@ export const flowLocations = {
   },
 };
 
-/** A loop-back's count source: today's `count_input`, a `count_from` list, or a `repeat` mapping written as
- *  given, for a declaration no typed form can express (both keys, a non-string value). */
 export type RepeatSpec =
   | { backTo: string; countInput: string }
   | { backTo: string; countFrom: { artifact: string; format: string; list?: string } }
@@ -56,7 +54,6 @@ export type FlowStepSpec =
       namespace?: string;
       todoTemplate?: string;
       repeat?: RepeatSpec;
-      /** Written as `gate_authority`. */
       gateAuthority?: GateAuthority;
     };
 
@@ -121,9 +118,7 @@ export interface LoopDefSpec {
   charters?: readonly string[];
   /** The `gate` list, written as given. */
   gate?: readonly Record<string, unknown>[];
-  /** The `outputs` bindings, output id to artifact path. */
   outputs?: Readonly<Record<string, string>>;
-  /** `work.artifact`; `result` when omitted. */
   artifact?: string;
   /** References written into the definition but never created on disk. */
   absent?: readonly string[];

@@ -1143,10 +1143,6 @@ async function createWindow(): Promise<void> {
     sourceSliceCount: createRepeatSourcer({
       flow,
       readArtifact: readLoopArtifact,
-      repeatOf: (repoDir) => {
-        const load = resolveActiveDefinition(repoDir);
-        return load.ok ? load.definition.steps.find((st) => st.repeat !== undefined)?.repeat : undefined;
-      },
     }),
     // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
     reopenSlice: (repoDir, reopened) => reopenSliceFlow(repoDir, reopened),

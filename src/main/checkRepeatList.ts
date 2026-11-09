@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { ValidateFlowResult } from './validateFlow';
 import { MAX_LOOP_ARTIFACT_BYTES } from './appLoopPaths';
-import { readBoundedNoFollow, type BoundedRead } from './boundedRead';
+import { readBoundedResolved, type BoundedRead } from './boundedRead';
 import { CHECK_REPEAT_LIST_FLAG, CLI_COMMAND_NAME } from './cliShim';
 import { errMsg } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
@@ -53,7 +53,7 @@ export function runCheckRepeatList(operands: readonly string[], deps: CheckRepea
   } catch (e) {
     return { exitCode: 1, stdout: line(`${operand}: the working directory it is named from cannot be read: ${errMsg(e)}`), stderr: '' };
   }
-  const read = readBoundedNoFollow(file, MAX_LOOP_ARTIFACT_BYTES);
+  const read = readBoundedResolved(file, MAX_LOOP_ARTIFACT_BYTES);
   if (!read.ok) return { exitCode: 1, stdout: line(`${file}: ${READ_PROBLEMS[read.cause]}`), stderr: '' };
   const check = checkJsonList(read.text, list);
   if (!check.ok) return { exitCode: 1, stdout: line(`${file}: ${ruleProblem(check, list)}`), stderr: '' };

@@ -3,8 +3,6 @@ import { countToSource, repeatListTitles } from '../../src/shared/repeatList';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { JSON_LIST_CASES, jsonListText } from '../helpers/jsonListCases';
 
-// §28.4.1 — the titles a list gives in each format, and the shrink rule every count source shares.
-
 const IMPL_SLICES = { format: 'impl-slices' } as const;
 const STEPS = { format: 'json-list', list: 'steps' } as const;
 

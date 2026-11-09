@@ -210,7 +210,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
 
   // §27.10 — a step that records an operator decision after its done-signal writes it to its section file only.
   describe('a report assembled from step sections', () => {
-    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', leafPath: '/repo/a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
+    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
     const withSections = { resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l', defFile: '/t/l/loop.yaml' }) };
 
     it('is rebuilt from its sections on approve, before any side-effect publishes it', async () => {
@@ -1193,7 +1193,7 @@ describe('runAppGateDecision — a failed approve at a human gate holds the gate
   });
 
   it('a report that cannot be assembled holds the gate before any side-effect runs', async () => {
-    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', leafPath: '/repo/a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
+    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
     const { deps, rec } = mkDeps({
       holds: true,
       resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l', defFile: '/t/l/loop.yaml' }),

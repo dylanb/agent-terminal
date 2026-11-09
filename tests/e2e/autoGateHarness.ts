@@ -180,8 +180,6 @@ export function auditGateEntries(home: string, repo: string, opts: { run?: Audit
   return gateEntries(events);
 }
 
-/** The events of one run's §25 file, resolved with the writer's own `auditFilePath`; a missing file, or a
- *  document that does not parse, throws. */
 function runEvents(home: string, repo: string, run: AuditRunIdentity): { file: string; events: AuditEvent[] } {
   const file = auditFilePath(auditRootDir(home), repo, run.flow, new Date(run.startedAt));
   if (!existsSync(file)) throw new Error(`audit record: no audit file at ${file}`);
@@ -194,7 +192,6 @@ function runEvents(home: string, repo: string, run: AuditRunIdentity): { file: s
   return { file, events };
 }
 
-/** The steps one run went through, from its §25 file: the step `flow.started` names, then each `step.entered`. */
 export function auditStepSequence(home: string, repo: string, run: AuditRunIdentity = runIdentity(repo)): string[] {
   const { file, events } = runEvents(home, repo, run);
   if (events.filter((e) => e.type === 'flow.started').length > 1) throw new Error(`auditStepSequence: ${file} holds more than one run (two Starts in one second)`);

@@ -1,7 +1,3 @@
-// `agent-terminal --check-repeat-list <file> <list>` through the installed runtime, and through the launcher installed
-// from a running app's Settings: what the command prints, its exit status, and, for the launcher, that it runs in
-// the foreground, opens no instance and leaves the files around it as they were.
-
 import { expect, test, type ElectronApplication } from '@playwright/test';
 import { copyFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -10,16 +6,12 @@ import { useInstalledLauncher } from './installedLauncher';
 import { useInstalledRuntime } from './installedRuntime';
 import { PASSED, passOutcome, problemLine, problemOutcome, USAGE, usageOutcome, type RunResult } from './validateFlowHarness';
 
-/** The flag as a user types it: the command's contract, not an app constant. */
 const CHECK_REPEAT_LIST_FLAG = '--check-repeat-list';
-/** A literal 3-entry `json-list` file under the list key `steps`. */
 const LIST_FIXTURE = resolve(__dirname, '..', 'fixtures', 'repeat-list-flow', 'steps.json');
 
-/** A pass, and whether its line names `file`. */
 const passNaming = (result: RunResult, file: string) => ({ ...passOutcome(result), names: result.stdout.includes(file) });
 const PASSED_NAMING = { ...PASSED, names: true };
 
-/** Every window of `app`, with what an unrelated launch could change about it. */
 function windowStates(app: ElectronApplication): Promise<{ visible: boolean; minimized: boolean; bounds: unknown }[]> {
   return app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((w) => ({ visible: w.isVisible(), minimized: w.isMinimized(), bounds: w.getBounds() })));

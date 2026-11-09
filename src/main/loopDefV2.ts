@@ -121,9 +121,6 @@ export interface ArtifactBinding {
   id: string;
   path: string;
   rel: string;
-  /** `path` with the file's own name kept rather than resolved: a read here refuses a symlink at the leaf. Null
-   *  when the file's folder resolves outside the artifacts subtree, where no confined path names that leaf. */
-  leafPath: string | null;
   /** §27.10 — the folder each step writes its own section of this document to; the engine assembles the
    *  document from them. */
   sectionsDir?: { path: string; rel: string };
@@ -240,26 +237,23 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
 
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 
-export type ArtifactLocation = { kind: 'file'; path: string; rel: string; leafPath: string | null } | { kind: 'unresolvable-area' | 'escapes' | 'is-area' };
+export type ArtifactLocation = { kind: 'file'; path: string; rel: string } | { kind: 'unresolvable-area' | 'escapes' | 'is-area' };
 
 /** The one resolver for a file in the loop artifacts subtree: a def's input and output bindings, and an engine
  *  writer whose file a def reads as an input. */
 export function artifactLocation(repoDir: string, pattern: string): ArtifactLocation {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
   if (jail === null) return { kind: 'unresolvable-area' };
-  const lexical = path.resolve(jail, pattern);
-  const confined = confinedRealPath(jail, lexical);
+  const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) return { kind: 'escapes' };
   if (confined === jail) return { kind: 'is-area' };
-  const parent = confinedRealPath(jail, path.dirname(lexical));
-  const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
-  return { kind: 'file', path: confined, rel, leafPath: parent === null ? null : path.join(parent, path.basename(lexical)) };
+  return { kind: 'file', path: confined, rel: [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/') };
 }
 
 /** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
-function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string; leafPath: string | null } {
+function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string } {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
   // The composed `rel` is interpolated into the agent-facing work prompt, where a control character would
   // break the line it is named on and leave the remainder standing as its own instruction (CWE-74).
@@ -268,11 +262,11 @@ function confineArtifact(repoDir: string, pattern: string, what: string): { path
   if (located.kind === 'unresolvable-area') fail(`${what} loop area is unresolvable`);
   if (located.kind === 'escapes') fail(`${what} path escapes the artifacts subtree: ${pattern}`);
   if (located.kind !== 'file') fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
-  const { path: confined, rel, leafPath } = located;
+  const { path: confined, rel } = located;
   // `rel` is composed from the POST-realpath location, whose segment names are repo working-tree content
   // rather than def content (§27.8) — a symlink to a name carrying a control character passes the check above.
   if (CONTROL_CHAR.test(rel)) fail(`${what} path resolves through a name containing a control character`);
-  return { path: confined, rel, leafPath };
+  return { path: confined, rel };
 }
 
 function requireSegment(value: unknown, what: string): string {
@@ -358,10 +352,10 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
     // recorded id would select two bindings naming two different paths.
     if (seen.has(id)) fail(`${what} id is declared twice: ${id}`);
     seen.add(id);
-    const { path: p, rel, leafPath } = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
-    if (rec.sections_dir === undefined) return { id, path: p, rel, leafPath };
-    const { path: sectionsPath, rel: sectionsRel } = confineArtifact(repoDir, requireString(rec.sections_dir, `${what} ${id} sections_dir`), `${what} ${id} sections_dir`);
-    return { id, path: p, rel, leafPath, sectionsDir: { path: sectionsPath, rel: sectionsRel } };
+    const { path: p, rel } = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
+    if (rec.sections_dir === undefined) return { id, path: p, rel };
+    const sectionsDir = confineArtifact(repoDir, requireString(rec.sections_dir, `${what} ${id} sections_dir`), `${what} ${id} sections_dir`);
+    return { id, path: p, rel, sectionsDir };
   });
 }
 

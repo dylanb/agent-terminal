@@ -190,7 +190,6 @@ export interface AppLoopEngineDeps {
   reopenStep(repoDir: string): string | null;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
-  /** §28.4.1 — the list entry a work turn of `stepId` is on, or null when it is on none. */
   repeatEntry(repoDir: string, stepId: string): RepeatEntry | null;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;

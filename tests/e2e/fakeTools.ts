@@ -203,8 +203,6 @@ export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit
 //           none — write nothing on the review turn → review stall/retry→error.
 export interface HoldSpec {
   sentinel: string;
-  // Holds only the step's n-th turn of the kind, counted across the run (the agent's turn counts survive a
-  // re-seed); every other turn acts at once.
   turn?: number;
   // Prints a line to the terminal on every poll so the terminal stays active (QUIET_MS). Such a hold has no time
   // cap, so within a test only the sentinel or `.abandon` ends it; it also ends once its terminal is gone.
@@ -214,10 +212,7 @@ export interface HoldSpec {
 export interface StepScript {
   artifactRel: string;
   work: FakeWorkMode;
-  // `complete` copies this file to `artifactRel` instead of writing its own; the file carries the marker itself.
   artifactSource?: string;
-  // Writes the work artifact the prompt names in place of `artifactRel`: a loop-back re-entry (slice N>1) names
-  // its own `.slice-N` file.
   promptedArtifact?: boolean;
   // Holds this step's work turns (only the `turn`-th, when `hold.turn` is set) while the `sentinel` file exists. The held turn runs in the background
   // (the agent keeps reading its input) and first appends its pid to `<sentinel>.pids`; then, polled every
@@ -276,8 +271,6 @@ const doneSignal = (key: string): string => `mkdir -p .agent-terminal/loop; prin
 const byTurn = (counter: string, entries: string[] | undefined): string =>
   entries && entries.length > 0 ? `case "$${counter}" in ${entries.map((e, i) => `${i + 1}) ${e} ;;`).join(' ')} esac` : ':';
 
-/** Runs `action` in the background once `sentinel` is deleted (see `StepScript.hold`), so the agent keeps reading.
- *  A hold for one `turn` reads the turn number from `$n`. */
 function heldAction(hold: HoldSpec, action: string): string {
   if (hold.turn !== undefined) return `if [ "$n" = ${hold.turn} ]; then ${heldAction({ ...hold, turn: undefined }, action)} else ${action}; fi`;
   // `|| exit 0`: once the terminal's PTY is gone the write fails, so a leaked hold ends with its app.

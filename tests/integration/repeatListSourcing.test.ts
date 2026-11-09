@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createFlowManager, loadFlowDefinition, type FlowManager } from '../../src/main/flow';
+import { createFlowManager, type FlowManager } from '../../src/main/flow';
 import { MAX_LOOP_ARTIFACT_BYTES, readLoopArtifact } from '../../src/main/appLoopPaths';
 import { createRepeatSourcer } from '../../src/main/repeatSourcing';
 import { MAX_FLOW_STATE_BYTES, createFlowStateStore } from '../../src/main/flowState';
@@ -11,9 +11,6 @@ import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { createApproveDriver, type ApproveDriver } from '../helpers/repeatApprove';
 import { flowLocations, writeFlow, writeLoopDef, type FlowSpec, type FlowStepSpec, type RepeatSpec } from '../helpers/flowFixtures';
 import { JSON_LIST_CASES, distinctTitles, jsonListText } from '../helpers/jsonListCases';
-
-// §28.4.1 — a repeat's count re-sourced at each source approve, through the real approve path, the real
-// sourcer and a real flow manager over a temp repository. Each test observes the steps the flow goes through.
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -25,8 +22,6 @@ const tmp = (prefix: string): string => {
   return d;
 };
 
-/** What a step's work turn leaves at one of its outputs on its `n`-th run (from 1): text, bytes, a directory, or
- *  nothing. */
 type Leave = string | Buffer | { directory: true } | null;
 type Writes = Readonly<Record<string, (n: number) => Leave>>;
 
@@ -40,11 +35,8 @@ const SOURCE_LOOP = 'source-loop';
 const WORK_LOOP = 'work-loop';
 const GROUP_SOURCE_LOOP = 'group-source-loop';
 
-/** A list-form repeat over the `steps` output: `check` loops back to `build`. */
 const STEPS_LIST: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'steps', format: 'json-list', list: 'steps' } };
 
-/** `sources` loop steps that output `id`, then `build` and `check` (the group, `check` carrying `repeat`), then
- *  `finish` and a manual `done`. `buildSources` makes `build` output `id` too, so a source sits inside the group. */
 function flowSpec(repeat: RepeatSpec, sources: readonly string[], buildSources = false): FlowSpec {
   const steps: FlowStepSpec[] = [
     ...sources.map((id): FlowStepSpec => ({ id, kind: 'loop', loop: SOURCE_LOOP })),
@@ -56,8 +48,6 @@ function flowSpec(repeat: RepeatSpec, sources: readonly string[], buildSources =
   return { name: 'repeat-sourcing', steps };
 }
 
-/** The repository, its flow and loops, and an approve driver whose re-source is the real sourcer reading through
- *  `readArtifact` (production's `readLoopArtifact` unless a test injects another), or none when `resources` is false. */
 function rig(
   spec: FlowSpec,
   outputId: string,
@@ -79,10 +69,6 @@ function rig(
   const sourcer = createRepeatSourcer({
     flow: sourcerFlow(flow),
     readArtifact,
-    repeatOf: (repoDir) => {
-      const load = loadFlowDefinition(repoDir);
-      return load.ok ? load.definition.steps.find((s) => s.repeat !== undefined)?.repeat : undefined;
-    },
   });
   const sourceSliceCount: typeof sourcer = resources ? sourcer : () => {};
   const driver = createApproveDriver({
@@ -105,8 +91,6 @@ function leave(file: string, what: Leave): void {
 
 const MAX_STEPS = 400;
 
-/** Approves every loop step the flow reaches, each after its work turn leaves `writes[step]` at the output
- *  `outputId`, until the flow reaches a manual step. Returns the steps entered, in order. */
 async function play(r: Rig, outputId: string, writes: Writes, onStep: (step: string) => void = () => {}): Promise<string[]> {
   const seen: string[] = [];
   const runs: Record<string, number> = {};
@@ -123,7 +107,6 @@ async function play(r: Rig, outputId: string, writes: Writes, onStep: (step: str
   return seen;
 }
 
-/** The step sequence of a run whose sources come before the group and whose group runs `times` times. */
 const sequence = (sources: readonly string[], times: number): string[] => [...sources, ...Array.from({ length: times }, () => ['build', 'check']).flat(), 'finish', 'done'];
 
 const always = (what: Leave) => (): Leave => what;
@@ -267,7 +250,7 @@ describe('A failed re-source never blocks the advance', () => {
   });
 
   it('a sourced list that cannot be recorded still advances, and records a source-slices-failed entry', async () => {
-    const READS: ReadonlySet<PropertyKey> = new Set(['state', 'currentSlice', 'sliceStartStep']);
+    const READS: ReadonlySet<PropertyKey> = new Set(['state', 'currentSlice', 'sliceStartStep', 'repeatSource']);
     const unwritable = (flow: FlowManager): FlowManager =>
       new Proxy(flow, {
         get: (target, key, receiver) =>
@@ -293,8 +276,8 @@ describe('A failed re-source never blocks the advance', () => {
   });
 });
 
-describe('A link at the count_from artifact sources nothing', () => {
-  it('a list-form repeat whose count_from artifact is plan, with plan a link to a 3-slice plan, sources neither the count nor the slices input', async () => {
+describe('A link at a count source is followed, as at every output', () => {
+  it('a list-form repeat whose count_from artifact is plan, with plan a link to a 3-slice plan, sources both the count and the slices input', async () => {
     const fromPlan: RepeatSpec = { backTo: 'build', countFrom: { artifact: 'plan', format: 'impl-slices' } };
     const r = rig(flowSpec(fromPlan, ['plan']), 'plan');
     r.flow.start(r.repo);
@@ -305,70 +288,26 @@ describe('A link at the count_from artifact sources nothing', () => {
     symlinkSync(target, file);
     await r.driver.approve('plan');
     const sourced = createFlowStateStore(r.repo).read()?.inputs?.slices;
-    expect({ slices: sourced, seen: ['plan', ...(await play(r, 'plan', {}))] }).toEqual({ slices: undefined, seen: sequence(['plan'], 1) });
-  });
-
-  it("a list-form repeat counting from another artifact still writes the slices input from a plan output that is a link, as today", async () => {
-    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps', readLoopArtifact, ['plan']);
-    r.flow.start(r.repo);
-    const file = r.driver.outputPath('design', 'plan');
-    mkdirSync(dirname(file), { recursive: true });
-    const target = join(dirname(file), 'plan-target.md');
-    writeFileSync(target, exampleSlicePlan(3));
-    symlinkSync(target, file);
-    await r.driver.approve('design');
-    expect(createFlowStateStore(r.repo).read()?.inputs?.slices).toBe('3');
+    expect({ slices: sourced, seen: ['plan', ...(await play(r, 'plan', {}))] }).toEqual({ slices: '3', seen: sequence(['plan'], 3) });
   });
 });
 
-describe('A count_from artifact under a folder that links out of the artifacts folder sources nothing', () => {
-  /** A list-form rig whose `steps` output is `out/list.json`, with `out` a link to a folder outside the artifacts
-   *  folder and `list.json` there a link back to the artifacts folder's own 3-entry `list.json`. */
-  function linkedOut(readArtifact: (path: string) => string | null = readLoopArtifact): { r: Rig; outsideFile: string } {
+describe('A count_from artifact under a folder that links out of the artifacts folder is read at its confined real path', () => {
+  it('when its file, a link back in, is swapped for a regular file outside the artifacts folder before the read, it still reads only the confined file', async () => {
     const outside = tmp('repeat-sourcing-outside-');
-    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps', readArtifact, [], (flow) => flow, true, 'out/list.json');
+    const outsideFile = join(outside, 'list.json');
+    const swapThenRead = (file: string): string | null => {
+      rmSync(outsideFile, { force: true });
+      writeFileSync(outsideFile, list(5));
+      return readLoopArtifact(file);
+    };
+    const r = rig(flowSpec(STEPS_LIST, ['design']), 'steps', swapThenRead, [], (flow) => flow, true, 'out/list.json');
     const artifacts = dirname(dirname(r.driver.outputPath('design', 'steps')));
     mkdirSync(artifacts, { recursive: true });
     writeFileSync(join(artifacts, 'list.json'), list(3));
     symlinkSync(outside, join(artifacts, 'out'));
-    const outsideFile = join(outside, 'list.json');
     symlinkSync(join(artifacts, 'list.json'), outsideFile);
-    return { r, outsideFile };
-  }
-
-  it('when its file links back into the artifacts folder', async () => {
-    const { r } = linkedOut();
-    expect(await runFromStart(r, 'steps', {})).toEqual(sequence(['design'], 1));
-  });
-
-  it('when its file is swapped for a regular file outside the artifacts folder before the read', async () => {
-    let outsideFile = '';
-    const { r, outsideFile: at } = linkedOut((file) => {
-      rmSync(outsideFile, { force: true });
-      writeFileSync(outsideFile, list(3));
-      return readLoopArtifact(file);
-    });
-    outsideFile = at;
-    expect(await runFromStart(r, 'steps', {})).toEqual(sequence(['design'], 1));
-  });
-});
-
-describe('A source inside the group whose output is a link', () => {
-  it("is re-sourced on iteration 2 from the .slice-2 file its work turn is told to write", async () => {
-    const r = rig(flowSpec(STEPS_LIST, ['design'], true), 'steps');
-    r.flow.start(r.repo);
-    leave(r.driver.outputPath('design', 'steps'), list(3));
-    await r.driver.approve('design');
-    const base = r.driver.outputPath('build', 'steps');
-    mkdirSync(dirname(base), { recursive: true });
-    const target = join(dirname(base), 'group-target');
-    writeFileSync(target, list(3));
-    symlinkSync(target, base);
-    await r.driver.approve('build');
-    await r.driver.approve('check');
-    leave(r.driver.outputPath('build', 'steps'), list(2));
-    await r.driver.approve('build');
-    expect(['design', 'build', 'check', 'build', ...(await play(r, 'steps', {}))]).toEqual(sequence(['design'], 2));
+    expect(await runFromStart(r, 'steps', {})).toEqual(sequence(['design'], 3));
   });
 });
 
@@ -412,28 +351,17 @@ describe("Today's form is unchanged: count_input sourced from the plan output", 
     const plans = (n: number): Leave => exampleSlicePlan(n === 1 ? 3 : secondSlices);
     expect(await runFromStart(r, 'plan', { plan: always('no block'), build: plans })).toEqual(sequence(['plan'], times));
   });
-
-  it('a plan output that is a link to a plan inside the artifacts folder still sets the count, as before', async () => {
-    const r = rig(flowSpec(SLICES_INPUT, ['plan']), 'plan');
-    r.flow.start(r.repo);
-    const file = r.driver.outputPath('plan', 'plan');
-    mkdirSync(dirname(file), { recursive: true });
-    const target = join(dirname(file), 'plan-target.md');
-    writeFileSync(target, exampleSlicePlan(3));
-    symlinkSync(target, file);
-    expect(await play(r, 'plan', {})).toEqual(sequence(['plan'], 3));
-  });
 });
 
 describe('The sourced list in flow-state.yaml: its read boundary and its clearing', () => {
   const stateFile = (repo: string): string => join(repo, '.agent-terminal', 'flow-state.yaml');
-  /** A run planted at `build` whose persisted record is `record`, advanced to `done` with no source approve. */
   const plantedRun = (record: string, repeat: RepeatSpec = STEPS_LIST, extra = ''): Rig => {
     const r = rig(flowSpec(repeat, ['design']), 'steps');
     writeFileSync(stateFile(r.repo), `step: build\nstatus: in_progress\n${extra}${record}`);
     return r;
   };
   const TITLES_3 = '  titles:\n    - First\n    - Second\n    - Third\n';
+  const BAD_COUNTS = ['0', '-1', '2.5', 'three', '.nan', '.inf', '-.inf'];
   const advanceToDone = (r: Rig): string[] => {
     const seen: string[] = [];
     for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).stepName !== 'done'; i++) {
@@ -444,11 +372,13 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
   };
   const groupOf = (times: number): string[] => sequence([], times).slice(0, -1);
 
-  it('a persisted { count: 3, titles } record runs the group 3 times; a count of 0, -1, 2.5 or a word reads as no record', () => {
+  it('a valid persisted count sets the group count; a zero, negative, fractional, nonnumeric or non-finite count reads as no record', () => {
     expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: 3\n${TITLES_3}`))).toEqual(groupOf(3));
     expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: 60\n${TITLES_3}`)), 'clamped where it is used').toEqual(groupOf(50));
-    for (const bad of ['0', '-1', '2.5', 'three']) {
-      expect.soft(advanceToDone(plantedRun(`repeat_list:\n  count: ${bad}\n${TITLES_3}`)), bad).toEqual(groupOf(1));
+    for (const count of BAD_COUNTS) {
+      const bad = plantedRun(`repeat_list:\n  count: ${count}\n${TITLES_3}`);
+      expect.soft(bad.flow.entryFor(bad.repo, 'build'), count).toBeNull();
+      expect.soft(advanceToDone(bad), count).toEqual(groupOf(1));
     }
   });
 
@@ -471,7 +401,7 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
     const valid = plantedRun(`repeat_list:\n  count: 3\n${TITLES_3}`);
     expect.soft(() => valid.flow.setTitle(valid.repo, 'Named')).not.toThrow();
     expect.soft(advanceToDone(valid)).toEqual(groupOf(3));
-    const records = [...['0', '-1', '2.5', 'three'].map((count) => `repeat_list:\n  count: ${count}\n${TITLES_3}`), ...BAD_TITLES.map(([, titles]) => `repeat_list:\n  count: 3\n${titles}`)];
+    const records = [...BAD_COUNTS.map((count) => `repeat_list:\n  count: ${count}\n${TITLES_3}`), ...BAD_TITLES.map(([, titles]) => `repeat_list:\n  count: 3\n${titles}`)];
     for (const record of records) {
       const bad = plantedRun(record);
       const before = readFileSync(stateFile(bad.repo), 'utf8');
@@ -535,12 +465,8 @@ describe('The sourced list in flow-state.yaml: its read boundary and its clearin
   });
 });
 
-// The entry a repeated step's work turn names: the flow manager's entry read for each step the run
-// reaches, before that step is approved.
-
 type Named = readonly [step: string, entry: RepeatEntry | null];
 
-/** `play`, recording at each step the entry the flow manager names for it. */
 async function playNamed(r: Rig, outputId: string, writes: Writes): Promise<Named[]> {
   const named: Named[] = [];
   await play(r, outputId, writes, (step) => named.push([step, r.flow.entryFor(r.repo, step)]));
@@ -549,8 +475,6 @@ async function playNamed(r: Rig, outputId: string, writes: Writes): Promise<Name
 
 const entry = (position: number, count: number, title: string): RepeatEntry => ({ position, count, title });
 
-/** What a run names whose sources come before the group and whose group runs `count` times over `titles`: each
- *  group step names its iteration's entry, and every other step names none. */
 function namedRun(sources: readonly string[], titles: readonly string[], count = titles.length): Named[] {
   const group = Array.from({ length: count }, (_, i): Named[] => [
     ['build', entry(i + 1, count, titles[i])],
@@ -559,7 +483,6 @@ function namedRun(sources: readonly string[], titles: readonly string[], count =
   return [...sources.map((s): Named => [s, null]), ...group, ['finish', null], ['done', null]];
 }
 
-/** The steps of a run that names no entry anywhere. */
 const unnamed = (steps: readonly string[]): Named[] => steps.map((s): Named => [s, null]);
 
 const SLICES_INPUT_FORM: RepeatSpec = { backTo: 'build', countInput: 'slices' };
@@ -569,11 +492,8 @@ const REORDERED_BLOCK = '## Impl-slices\n\n### Impl-slice 2 — Second first\nAc
 const implSlices = (titles: readonly string[]): string =>
   ['## Impl-slices', '', ...titles.flatMap((t, i) => [`### Impl-slice ${i + 1} — ${t}`, `Acceptance criteria: criterion ${i + 1}`, ''])].join('\n');
 
-/** A manager over the same repository, as a relaunched app constructs one. */
 const relaunched = (): FlowManager => createFlowManager({ globalDir: tmp('repeat-sourcing-relaunch-global-') });
 
-/** From `build` on its first iteration, the entry a relaunched manager names for `build` on each iteration, moving
- *  the run on with `flow.advance` and no source approve. */
 function relaunchedEntriesAcross(r: Rig): (RepeatEntry | null)[] {
   const named: (RepeatEntry | null)[] = [];
   for (let i = 0; i < MAX_STEPS && r.flow.state(r.repo).stepName === 'build'; i++) {

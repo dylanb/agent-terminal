@@ -23,13 +23,8 @@ function artifactOf(leaf: string): { path: string; rel: string } {
   return { path: `/abs/repo/.agent-terminal/loop/artifacts/${leaf}`, rel: `.agent-terminal/loop/artifacts/${leaf}` };
 }
 
-/** An output's location, whose file is not a link, so its own name and its real path are one path. */
-function locationOf(leaf: string): { path: string; rel: string; leafPath: string } {
-  return { ...artifactOf(leaf), leafPath: artifactOf(leaf).path };
-}
-
-function binding(id: string, leaf: string): { id: string; path: string; rel: string; leafPath: string } {
-  return { id, ...locationOf(leaf) };
+function binding(id: string, leaf: string): { id: string; path: string; rel: string } {
+  return { id, ...artifactOf(leaf) };
 }
 
 function def(over: Partial<LoopDefV2>): LoopDefV2 {
@@ -79,7 +74,7 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
 describe('outputLocation on the first iteration (§27.12 — file-producing vs commit-producing, data-driven)', () => {
   it('resolves the confined output path whose id matches the work artifact (file-producing)', () => {
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'plan' } });
-    expect(outputLocation(d, d.work.artifact, 1)).toMatchObject(artifactOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toEqual(artifactOf('plan.md'));
   });
 
   it('returns null when the work artifact id has no matching output binding (commit-producing)', () => {
@@ -95,7 +90,7 @@ describe('outputLocation on the first iteration (§27.12 — file-producing vs c
         binding('plan', 'plan.md'),
       ],
     });
-    expect(outputLocation(d, d.work.artifact, 1)).toEqual(locationOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toEqual(artifactOf('plan.md'));
   });
 });
 
@@ -128,11 +123,11 @@ describe('outputLocation — where a work turn on an iteration writes an output'
   });
 
   it('names the work artifact by its iteration from slice 2 on', () => {
-    expect(outputLocation(red, 'red-result', 2)).toEqual(locationOf('red-result.slice-2.json'));
+    expect(outputLocation(red, 'red-result', 2)).toEqual(artifactOf('red-result.slice-2.json'));
   });
 
   it('keeps every other output at its binding on any iteration', () => {
-    expect(outputLocation(red, 'plan', 2)).toEqual(locationOf('plan.md'));
+    expect(outputLocation(red, 'plan', 2)).toEqual(artifactOf('plan.md'));
   });
 
   it('is null for an id the loop declares no output for', () => {

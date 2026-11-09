@@ -144,7 +144,6 @@ test.describe('agent-terminal --validate-flow checks loops, references, template
 
   test.describe('a count_from repeat whose artifact no step\'s loop outputs', () => {
     const REPEAT_STEP = 'repeat-here';
-    /** A repository catalog flow whose `design` loop outputs `steps`, and whose repeat counts from `artifact`. */
     const repeatFlow = (repo: string, artifact: string): { folder: string; flowFile: string } => {
       writeLoopDef(operatorLoops(), 'design-loop', { outputs: { steps: 'steps.json' }, artifact: 'steps' });
       writeLoopDef(operatorLoops(), 'work-loop');

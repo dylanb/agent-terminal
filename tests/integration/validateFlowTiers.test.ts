@@ -228,15 +228,11 @@ describe('a flow\'s loops resolve in the tier its folder sits in', () => {
   });
 });
 
-// A malformed `count_from` repeat fails `--validate-flow` with a flow.yaml line naming the repeat step; each
-// breaking declaration is paired with its mended one, which passes. The source loop outputs the declared artifact,
-// so the mended flow passes the artifact check too.
 describe('a count_from repeat declaration the flow loader refuses', () => {
   const REPEAT_STEP = 'repeat-here';
   const JSON_LIST = { artifact: 'steps', format: 'json-list', list: 'steps' };
   const IMPL_SLICES = { artifact: 'steps', format: 'impl-slices' };
 
-  /** A repository catalog flow whose `design` loop outputs `steps`, and whose repeat step carries `repeat`. */
   const repeatFlow = (repo: string, repeat: Readonly<Record<string, unknown>>): { folder: string; flowFile: string } => {
     writeLoopDef(operatorLoops(), 'design-loop', { outputs: { steps: 'steps.json' }, artifact: 'steps' });
     writeLoopDef(operatorLoops(), 'work-loop');
@@ -274,8 +270,6 @@ describe('a count_from repeat declaration the flow loader refuses', () => {
   });
 });
 
-// A list-form repeat whose `count_from.artifact` no step's loop outputs loads, but fails `--validate-flow`
-// with one flow.yaml line naming the repeat step and the artifact; once a loop outputs it, the flow passes.
 describe('a count_from artifact that no step\'s loop outputs', () => {
   const REPEAT_STEP = 'repeat-here';
 

@@ -51,16 +51,11 @@ export function sliceArtifact(artifact: { path: string; rel: string }, slice: nu
   return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
 }
 
-/** Where `def`'s work turn on iteration `slice` writes its output `id`: the work artifact under its per-slice name,
- *  any other output at its binding. Null when `def` declares no output `id`; for `def.work.artifact`, that is a
- *  commit-producing loop, which advances on the done-signal alone (§27.12). */
-export function outputLocation(def: LoopDefV2, id: string, slice: number): { path: string; rel: string; leafPath: string | null } | null {
+export function outputLocation(def: LoopDefV2, id: string, slice: number): { path: string; rel: string } | null {
   const binding = def.outputs.find((o) => o.id === id);
   if (binding === undefined) return null;
-  const at = { path: binding.path, rel: binding.rel, leafPath: binding.leafPath };
-  if (id !== def.work.artifact) return at;
-  const sliced = sliceArtifact({ path: at.path, rel: at.rel }, slice);
-  return sliced.path === at.path ? at : { ...sliced, leafPath: sliced.path };
+  const at = { path: binding.path, rel: binding.rel };
+  return id === def.work.artifact ? sliceArtifact(at, slice) : at;
 }
 
 /** Whether the artifact is well-formed (§27.12): present AND carrying the marker. `content` is the domain

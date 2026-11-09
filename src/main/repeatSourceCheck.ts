@@ -1,11 +1,7 @@
 import type { FlowDefinition, FlowStepDef } from './flow';
 
-/** The output ids a loop step's loop declares, or null when its loop does not resolve. */
 export type StepOutputIds = (step: FlowStepDef) => readonly string[] | null;
 
-/** §28.4.1 — why a list-form repeat cannot be sourced, naming the repeat step and the artifact no resolved loop
- *  outputs; null when it can be, and for every flow without a list-form repeat. The step id leads, so a display
- *  bound cuts only the flow-supplied artifact id. */
 export function countSourceRefusal(definition: FlowDefinition, outputIdsOf: StepOutputIds): string | null {
   const repeatStep = definition.steps.find((s) => s.repeat !== undefined);
   const source = repeatStep?.repeat?.source;

@@ -23,7 +23,6 @@ export interface StartTransitionDeps {
   /** The one resolution the Start acts on; null when the flow does not load (the Start then binds nothing). */
   resolveForStart: (repoKey: string) => StartRun | null;
   start: (repoKey: string, opts: { startedAt: number; run?: StartRun }) => FlowStateView;
-  /** §28.4.1 — why `run` may not start in `repoKey`, or null when it may. */
   countSourceRefusal: (repoKey: string, run: StartRun) => string | null;
   state: (repoKey: string) => FlowStateView;
   now: () => number;

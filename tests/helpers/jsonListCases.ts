@@ -1,10 +1,3 @@
-// The expected verdict on `json-list` file texts, written from the definition of a well-formed file (a title
-// blank after trimming is blank, the last of a repeated key wins, the first rule broken is the one reported), never
-// from the predicate it grades. One table serves the predicate's unit test, the engine's sourcing test, the
-// `--check-repeat-list` test and the test that the two agree. Every case is valid UTF-8 with no byte-order
-// mark, so a file holding the text is judged the same as the text: cases about bytes belong to the read.
-
-/** The rules a file can break, in the order they are checked. An entry rule is reported with its position. */
 export type JsonListRule =
   | 'parses'
   | 'top-level-object'
@@ -22,7 +15,6 @@ export type JsonListVerdict =
 
 export interface JsonListCase {
   name: string;
-  /** The list key the check is given. */
   list: string;
   text: string;
   expected: JsonListVerdict;
@@ -30,12 +22,10 @@ export interface JsonListCase {
 
 const KEY = 'steps';
 
-/** A file whose `list` holds one entry per title, beside a top-level `marker` key the rules ignore. */
 export function jsonListText(titles: readonly string[], list = KEY): string {
   return JSON.stringify({ marker: 'ignored', [list]: titles.map((title) => ({ title })) }, null, 2);
 }
 
-/** `n` titles, each different from every other. */
 export function distinctTitles(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `Entry ${i + 1} of the list`);
 }
@@ -54,7 +44,6 @@ const broken = (name: string, text: string, rule: JsonListRule, position?: numbe
 });
 const entries = (...items: unknown[]): string => JSON.stringify({ [KEY]: items });
 
-/** A well-formed file of `n` distinct entries: the count cases 1, several, the cap, and over it. */
 export const sizedJsonList = (n: number): JsonListCase => wellFormed(`${n} entries`, distinctTitles(n));
 
 export const JSON_LIST_CASES: readonly JsonListCase[] = [

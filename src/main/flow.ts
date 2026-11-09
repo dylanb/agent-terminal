@@ -71,7 +71,6 @@ export interface FlowStepDef {
   repeat?: { backTo: string; source: RepeatCountSource };
 }
 
-/** Where a repeat's count comes from: a flow input (`count_input`), or a list in an artifact (`count_from`). */
 export type RepeatCountSource =
   | { kind: 'input'; countInput: string }
   | ({ kind: 'list'; artifact: string } & RepeatListSpec);
@@ -186,8 +185,6 @@ const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v
 
 const MALFORMED_REPEAT = 'has a malformed repeat (needs back_to + count_input or count_from)';
 
-/** A step's `repeat` mapping as its loop-back, or the problem that fails the flow to load. `back_to` must name a
- *  step already in `earlier`: a repeat is a loop-BACK, so a forward, unknown or self target is a load error. */
 function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable<FlowStepDef['repeat']> | string {
   if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return MALFORMED_REPEAT;
   const backTo = raw.back_to;
@@ -313,11 +310,12 @@ export interface RunIdentity {
   flow: string;
 }
 
-/** What a source approve records: the sourced list and, for the input form, the count input it resolves in the
- *  same write. */
-export interface SourcedRepeatList extends RepeatListRecord {
-  inputs?: Record<string, string>;
+export interface SourcedLists {
+  plan: RepeatListRecord | null;
+  countFrom: RepeatListRecord | null;
 }
+
+const PLAN_SLICES_INPUT = 'slices';
 
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
@@ -360,16 +358,8 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): MachineView;
-  /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
-   *  (unlike provideInput, which answers a step-entry prompt and re-enters). A planning approve gate uses it
-   *  to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering the planning step would
-   *  restart its loop. Legal only while a step is in_progress. */
-  resolveInputs(values: Record<string, string>): MachineView;
-  /** §28.4.1 — record the list a source approve sourced the repeat's count from, WITHOUT re-entering the current
-   *  step (the `resolveInputs` rule). Legal only while a step is in_progress. */
-  sourceRepeatList(list: SourcedRepeatList): MachineView;
-  /** §28.4.1 — the entry a work turn of `stepId` is on, or null when the step is outside the group or no sourced
-   *  list names its iteration. */
+  recordSourcedLists(lists: SourcedLists): MachineView;
+  repeatSource(): RepeatCountSource | null;
   entryFor(stepId: string): RepeatEntry | null;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
@@ -425,8 +415,8 @@ export function createFlowMachine(
       reopenSlice: view,
       terminate: view,
       provideInput: view,
-      resolveInputs: view,
-      sourceRepeatList: view,
+      recordSourcedLists: view,
+      repeatSource: () => null,
       entryFor: () => null,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
@@ -438,7 +428,9 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
+  const repeatIndex = steps.findIndex((s) => s.repeat);
+  const repeatStep: FlowStepDef | undefined = steps[repeatIndex];
+  const returnStep = repeatStep?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
   const typedInput = (type: ActedInputType): { step: FlowStepDef; name: string } | undefined => {
@@ -612,7 +604,6 @@ export function createFlowMachine(
     },
     currentSlice: () => {
       hydrate(); // §19.1: reflect the on-disk progression, as state() does
-      const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
     sliceStartStep: () => returnStep,
@@ -704,36 +695,33 @@ export function createFlowMachine(
     provideInput: (values) => {
       requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };
-      // §28.4.1 — a count a person supplies names no list entry.
-      const source = steps.find((s) => s.repeat)?.repeat?.source;
+      const source = repeatStep?.repeat?.source;
       if (source?.kind === 'input' && Object.prototype.hasOwnProperty.call(values, source.countInput)) repeatList = null;
       persist();
       return enter(view());
     },
-    resolveInputs: (values) => {
-      requireStatus('in_progress', 'resolveInputs');
-      inputs = { ...inputs, ...values };
-      persist();
-      return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
-    },
-    sourceRepeatList: (list) => {
-      requireStatus('in_progress', 'sourceRepeatList');
-      repeatList = { count: list.count, titles: list.titles.slice(0, MAX_SLICES).map(repeatEntryTitle) };
-      if (list.inputs) inputs = { ...inputs, ...list.inputs };
+    recordSourcedLists: ({ plan, countFrom }) => {
+      const source = repeatStep?.repeat?.source;
+      const countsFromPlan = source?.kind === 'input' && source.countInput === PLAN_SLICES_INPUT;
+      const list = source?.kind === 'list' ? countFrom : countsFromPlan ? plan : null;
+      if (plan === null && list === null) return view();
+      requireStatus('in_progress', 'recordSourcedLists');
+      if (plan !== null) inputs = { ...inputs, [PLAN_SLICES_INPUT]: String(plan.count) };
+      if (list !== null) repeatList = { count: list.count, titles: list.titles.slice(0, MAX_SLICES).map(repeatEntryTitle) };
       persist();
       return view();
     },
+    repeatSource: () => repeatStep?.repeat?.source ?? null,
     entryFor: (stepId) => {
-      hydrate(); // §19.1: reflect the on-disk progression, as state() does
-      const repeatIndex = steps.findIndex((s) => s.repeat);
-      const repeat = steps[repeatIndex]?.repeat;
+      hydrate();
+      const repeat = repeatStep?.repeat;
       if (!repeat || repeatList === null) return null;
       const at = names.indexOf(stepId);
       if (at < names.indexOf(repeat.backTo) || at > repeatIndex) return null;
       const { source } = repeat;
       const listSetsCount = source.kind === 'list' || (Object.prototype.hasOwnProperty.call(inputs, source.countInput) && inputs[source.countInput] === String(repeatList.count));
       if (!listSetsCount) return null;
-      const position = repeatCounts[steps[repeatIndex].id] ?? 1;
+      const position = repeatCounts[repeatStep.id] ?? 1;
       const title = repeatList.titles[position - 1];
       return title === undefined ? null : { position, count: slicesFor(source), title };
     },
@@ -776,14 +764,8 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
-  /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
-   *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
-  resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
-  /** §28.4.1 — record the list a source approve sourced a repo's repeat count from, WITHOUT re-entering the
-   *  current step. Delegates to the machine keyed by `repoKey`. */
-  sourceRepeatList(repoKey: string, list: SourcedRepeatList): FlowStateView;
-  /** §28.4.1 — the entry a work turn of `stepId` is on, or null when the step is outside the group or no list
-   *  names it. */
+  recordSourcedLists(repoKey: string, lists: SourcedLists): FlowStateView;
+  repeatSource(repoKey: string): RepeatCountSource | null;
   entryFor(repoKey: string, stepId: string): RepeatEntry | null;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
@@ -963,8 +945,8 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };
     },
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
-    resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
-    sourceRepeatList: (k, list) => viewOf(k, (m) => m.sourceRepeatList(list)),
+    recordSourcedLists: (k, lists) => viewOf(k, (m) => m.recordSourcedLists(lists)),
+    repeatSource: (k) => machineFor(k).machine.repeatSource(),
     entryFor: (k, stepId) => machineFor(k).machine.entryFor(stepId),
     setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };

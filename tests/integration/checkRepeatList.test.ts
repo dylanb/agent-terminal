@@ -1,14 +1,11 @@
-// `--check-repeat-list <file> <list>`'s check, called directly: the line it prints and the status it returns for a
-// well-formed file, for each way a file can be bad, for a wrong operand count, and for operands taken verbatim.
-
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_LOOP_ARTIFACT_BYTES } from '../../src/main/appLoopPaths';
 import { runCheckRepeatList } from '../../src/main/checkRepeatList';
 import { createFedPipes } from '../helpers/fedPipe';
 import { JSON_LIST_CASES, distinctTitles, jsonListText, type JsonListCase } from '../helpers/jsonListCases';
+import { LIST_FILE_CASES, WELL_FORMED_LIST as WELL_FORMED } from '../helpers/jsonListFiles';
 import { passOutcome, problemOutcome, runText, type RunResult } from '../helpers/validateOutcome';
 
 const PASSED = { status: 0, oneLine: true, okLine: true, output: expect.any(String) };
@@ -42,55 +39,17 @@ function check(operands: readonly string[], cwd = root): RunResult {
   return { status: exitCode, signal: null, stdout, stderr };
 }
 
-/** A pass, and whether its line names `file`. */
 const passNaming = (result: RunResult, file: string) => ({ ...passOutcome(result), names: result.stdout.includes(file) });
 const PASSED_NAMING = { ...PASSED, names: true };
 
 const usageOutcome = (result: RunResult) => ({ status: result.status, stdout: result.stdout, stderrWritten: result.stderr.trim() !== '', output: runText(result) });
 
-const WELL_FORMED = jsonListText(distinctTitles(3));
-const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
-const overBound = (): string => `${WELL_FORMED.slice(0, -1)}, "pad": "${'x'.repeat(MAX_LOOP_ARTIFACT_BYTES)}"}`;
-const runningAsRoot = process.getuid?.() === 0;
-
-/** A bad file the read refuses: its name, the read's cause, and how to lay it at `file`. */
-interface ReadCase {
-  name: string;
-  cause: 'absent' | 'over-cap' | 'unreadable';
-  lay: (file: string) => void;
-}
-
-const READ_CASES: readonly ReadCase[] = [
-  { name: 'an absent file', cause: 'absent', lay: () => {} },
-  { name: 'a file over the 16 MiB read bound', cause: 'over-cap', lay: (file) => writeFileSync(file, overBound()) },
-  { name: 'a directory', cause: 'unreadable', lay: (file) => mkdirSync(file) },
-  {
-    name: 'a symlink to a well-formed file',
-    cause: 'unreadable',
-    lay: (file) => symlinkSync(fileWith('link-target.json', WELL_FORMED), file),
-  },
-  {
-    name: 'a file that is not valid UTF-8',
-    cause: 'unreadable',
-    lay: (file) => writeFileSync(file, Buffer.concat([Buffer.from('{"steps": [{"title": "'), Buffer.from([0xc3, 0x28]), Buffer.from('"}]}')])),
-  },
-  { name: 'a named pipe fed a well-formed list', cause: 'unreadable', lay: (file) => pipes.at(file, WELL_FORMED) },
-  ...(runningAsRoot
-    ? []
-    : [{
-      name: 'a file its reader may not read (mode 000)',
-      cause: 'unreadable' as const,
-      lay: (file: string) => {
-        writeFileSync(file, WELL_FORMED);
-        chmodSync(file, 0o000);
-      },
-    }]),
-];
+const LAID_WELL_FORMED = LIST_FILE_CASES.filter((c) => c.reads === 'well-formed');
+const READ_CASES = LIST_FILE_CASES.filter((c) => c.reads !== 'well-formed');
 
 const wellFormedCases = JSON_LIST_CASES.filter((c) => c.expected.wellFormed);
 const brokenCases = JSON_LIST_CASES.filter((c) => !c.expected.wellFormed);
 
-/** A broken case's rule and the entry position it is reported with, if any. */
 function ruleOf(c: JsonListCase): { rule: string; position?: number } {
   if (c.expected.wellFormed) throw new Error(`ruleOf(): ${c.name} is well-formed`);
   return { rule: c.expected.rule, position: c.expected.position };
@@ -102,8 +61,9 @@ describe('A well-formed file passes', () => {
     expect(passNaming(check([file, c.list]), file)).toEqual(PASSED_NAMING);
   });
 
-  it('a file that starts with a UTF-8 byte-order mark is judged on the rest', () => {
-    const file = fileWith('bom.json', Buffer.concat([BOM, Buffer.from(WELL_FORMED)]));
+  it.each(LAID_WELL_FORMED.map((c) => [c.name, c] as const))('%s prints one OK line naming the path as given and exits 0', (_name, c) => {
+    const file = join(root, 'list.json');
+    c.lay(file, pipes);
     expect(passNaming(check([file, 'steps']), file)).toEqual(PASSED_NAMING);
   });
 });
@@ -111,7 +71,7 @@ describe('A well-formed file passes', () => {
 describe('A bad file fails with one line', () => {
   it.each(READ_CASES.map((c) => [c.name, c] as const))('%s prints one line, its absolute path then the problem, and exits 1', (_name, c) => {
     const file = join(root, 'list.json');
-    c.lay(file);
+    c.lay(file, pipes);
     expect(problemOutcome(check([file, 'steps']), file)).toEqual(PROBLEM);
   });
 
@@ -120,13 +80,11 @@ describe('A bad file fails with one line', () => {
     expect(problemOutcome(check([file, c.list]), file)).toEqual(PROBLEM);
   });
 
-  /** The problem each bad file is reported with, beside what it is reported for: the predicate's first broken
-   *  rule and its position, or the read's cause. */
   function problems(): { name: string; reportedFor: string; list: string; byRule: boolean; problem: string }[] {
     const fromRead = READ_CASES.map((c, i) => {
       const file = join(dir(`read-${i}`), 'list.json');
-      c.lay(file);
-      return { name: c.name, reportedFor: c.cause, list: 'steps', byRule: false, problem: problemOutcome(check([file, 'steps']), file).problem };
+      c.lay(file, pipes);
+      return { name: c.name, reportedFor: c.reads, list: 'steps', byRule: false, problem: problemOutcome(check([file, 'steps']), file).problem };
     });
     const fromRule = brokenCases.map((c, i) => {
       const file = fileWith('list.json', c.text, dir(`rule-${i}`));

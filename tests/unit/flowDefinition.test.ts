@@ -11,7 +11,6 @@ import {
 } from '../../src/main/flow';
 import { MAX_SLICES } from '../../src/shared/engineCapabilities/flow';
 
-/** The steps a run of `flow` enters from where it stands until it is done, or the load error when it never loaded. */
 const entered = (flow: ReturnType<typeof createFlowMachine>): string[] => {
   if (flow.state().status === 'error') return [`load error: ${flow.state().error ?? ''}`];
   const seen: string[] = [];
@@ -283,9 +282,9 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
     expect(loadFlowDefinition(dir).ok).toBe(false); // missing back_to
     writeFlow("name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: ''\n");
-    expect(loadFlowDefinition(dir).ok).toBe(false); // empty count_input
+    expect(loadFlowDefinition(dir).ok).toBe(false);
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: 42\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // non-string count_input
+    expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 });
 
@@ -378,9 +377,6 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
   });
 });
 
-// A repeat may take its count from a list in an artifact: `count_from: { artifact, format, list }` in place
-// of `count_input`. Every rule `flow.yaml` alone decides fails when the flow loads, naming the repeat step; each
-// breaking declaration is paired with a mended one that must load.
 describe('a count_from repeat', () => {
   const REPEAT_STEP = 'repeat-here';
   let dir: string;
@@ -391,7 +387,6 @@ describe('a count_from repeat', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** Loads a flow whose last-but-one step carries `repeat` back to `build`, then a manual `finish`. */
   const loadWithRepeat = (repeat: unknown): FlowLoad => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     const doc = {

@@ -1,8 +1,6 @@
-/** The rules the document as a whole can break. */
 export const JSON_LIST_DOCUMENT_RULES = ['parses', 'top-level-object', 'key-present', 'value-array', 'at-least-one-entry'] as const;
 export type JsonListDocumentRule = (typeof JSON_LIST_DOCUMENT_RULES)[number];
 
-/** The rules one entry can break. */
 export const JSON_LIST_ENTRY_RULES = ['entry-object', 'title-string', 'title-not-blank', 'title-no-control-character'] as const;
 export type JsonListEntryRule = (typeof JSON_LIST_ENTRY_RULES)[number];
 
@@ -10,7 +8,6 @@ export const JSON_LIST_SHAPE = {
   entryTitleKey: 'title',
 } as const;
 
-/** The entry titles in order, or the first rule broken, with the entry's position counted from 1 for an entry rule. */
 export type JsonListCheck =
   | { ok: true; titles: readonly string[] }
   | { ok: false; rule: JsonListDocumentRule }
@@ -49,7 +46,6 @@ export function checkJsonList(text: string, list: string): JsonListCheck {
   return { ok: true, titles };
 }
 
-/** A well-formed `json-list` file holding `n` entries under `key`. */
 export function exampleJsonList(key: string, n: number): string {
   const entries = Array.from({ length: n }, (_, i) => ({ [JSON_LIST_SHAPE.entryTitleKey]: `Entry ${i + 1}` }));
   return `${JSON.stringify({ [key]: entries }, null, 2)}\n`;

@@ -1,7 +1,3 @@
-// Approves a flow step's gate through the real approve path (`runAppApprove`) over a real flow manager, as a
-// person's click does, so a test observes what an approve sources and where the flow goes next. Each step's
-// loop is resolved from the tiers the test wrote it into; every side effect unrelated to sourcing is inert.
-
 import { HUMAN_DECIDER, runAppApprove, stepScopedAdvance, type AppGateDecisionDeps, type GateApproveOutcome } from '../../src/main/appGateDecision';
 import type { FlowManager } from '../../src/main/flow';
 import { resolveLoopDefV2, type LoopDefV2Context } from '../../src/main/loopDefV2';
@@ -14,16 +10,11 @@ export interface AuditLine {
 }
 
 export interface ApproveDriver {
-  /** Approves the gate of `step`, the step the flow is on, as a person does. */
   approve(step: string): Promise<GateApproveOutcome>;
-  /** The path the work turn of `step` writes its output `id` to on the iteration the run is on, from the resolver
-   *  the engine's work turn uses. */
   outputPath(step: string, id: string): string;
-  /** Every §25 command entry the approves recorded, in order. */
   readonly audits: readonly AuditLine[];
 }
 
-/** `spec` is the flow the test wrote for `repoDir`; `sourceSliceCount` is the re-source dep under test. */
 export function createApproveDriver(opts: {
   repoDir: string;
   flow: FlowManager;

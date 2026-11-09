@@ -264,7 +264,6 @@ export const CROSS_FIELD_RULES = [
 
 export type OracleRuleId = (typeof CROSS_FIELD_RULES)[number]['rule'];
 
-/** Keys of which a position holds exactly one: a definition with none of them, or with two, fails to load. */
 export const ONE_OF_KEYS = [{ position: 'flow.steps[].repeat', keys: ['count_input', 'count_from'] }] as const satisfies readonly {
   position: FlowPositionId;
   keys: readonly string[];

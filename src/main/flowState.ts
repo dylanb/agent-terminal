@@ -33,8 +33,6 @@ export interface PersistedFlowState {
    *  reached), so a relaunch resumes the correct impl-slice instead of restarting the loop. Keyed by step
    *  id; each value a positive integer. Absent for a flow with no repeat steps or none yet reached. */
   repeatCounts?: Record<string, number>;
-  /** §28.4.1 — the list a source approve last sourced the repeat's count from: its raw entry count, clamped where
-   *  it is used, and its entry titles. Absent until a source approve sources one. */
   repeatList?: RepeatListRecord;
 }
 
@@ -113,8 +111,6 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-/** Null unless `raw` is a record whose `count` is a positive integer and whose `titles` are strings: a repo can
- *  plant flow-state.yaml, so no record fails toward the single pass, and each title is cleaned again. */
 function readRepeatList(raw: unknown): RepeatListRecord | null {
   if (!isRecord(raw) || !isRepeatCount(raw.count)) return null;
   const { titles } = raw;

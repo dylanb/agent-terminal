@@ -5,9 +5,6 @@ import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { RepeatEntry } from '../../src/shared/repeatList';
 import { createAppLoopEngineHarness, STEP } from '../helpers/appLoopEngineHarness';
 
-// §28.4.1 — which of a repeated step's turns name the list entry the run is on: every work turn, a goal
-// session's included, and never a review-and-fix or consolidate turn.
-
 const h = createAppLoopEngineHarness();
 const { resolved, makeEngine, fileDef } = h;
 
@@ -16,7 +13,6 @@ afterEach(h.tearDown);
 
 const ENTRY_LINE = /^entry \d+ of \d+: .*$/gm;
 const ENTRY: RepeatEntry = { position: 2, count: 3, title: 'Render the table' };
-/** The entry the run is on for this test's repository and step, and none for any other. */
 const onStep = (repoDir: string, stepId: string): RepeatEntry | null => (repoDir === h.repo && stepId === STEP ? ENTRY : null);
 const entryLines = (prompt: string): string[] => prompt.match(ENTRY_LINE) ?? [];
 const lastInjected = (): string => h.injected[h.injected.length - 1];

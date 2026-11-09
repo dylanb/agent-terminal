@@ -13,9 +13,6 @@ import { countSourceRefusal } from '../../src/main/repeatSourceCheck';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { flowLocations, writeFlow, writeLoopDef, type FlowSpec, type FlowStepSpec, type RepeatSpec } from '../helpers/flowFixtures';
 
-// §28.4.1 — a list-form repeat whose `count_from.artifact` no resolved loop outputs: the shared check, and
-// the Start it refuses through the production loop lookup.
-
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -30,8 +27,6 @@ const REPEAT_STEP = 'tally';
 const listForm = (artifact: string): RepeatSpec => ({ backTo: 'build', countFrom: { artifact, format: 'json-list', list: 'steps' } });
 const INPUT_FORM: RepeatSpec = { backTo: 'build', countInput: 'slices' };
 
-/** `before` loop steps, then `build` and `tally` (the group, `tally` carrying `repeat`), then `after` loop steps and
- *  a manual `done`. Each extra step is `[id, loop]`. */
 function flowSpec(name: string, repeat: RepeatSpec, before: readonly [string, string][], after: readonly [string, string][] = []): FlowSpec {
   const loopStep = ([id, loop]: readonly [string, string]): FlowStepSpec => ({ id, kind: 'loop', loop });
   return {
@@ -47,20 +42,17 @@ function flowSpec(name: string, repeat: RepeatSpec, before: readonly [string, st
 }
 
 describe('the shared check of a list-form repeat count source', () => {
-  /** The definition `spec` loads to, through the flow loader. */
   const definitionOf = (spec: FlowSpec): FlowDefinition => {
     const load = loadUntrustedFlowDefinition(writeFlow(tmp('repeat-source-check-flow-'), spec));
     if (!load.ok) throw new Error(`fixture: the flow does not load: ${load.error}`);
     return load.definition;
   };
-  /** Each loop's declared output ids; a loop absent from `outputs` does not resolve. */
   const outputsBy =
     (outputs: Readonly<Record<string, readonly string[]>>) =>
     (step: FlowStepDef): readonly string[] | null =>
       step.loop === undefined ? null : (outputs[step.loop] ?? null);
   const LOOPS = { 'source-loop': ['steps'], 'work-loop': ['result'] };
 
-  /** What the check says, as the facts a reader needs: refused or not, and whether it names the step and artifact. */
   const verdict = (reason: string | null, artifact: string) =>
     reason === null ? { refused: false } : { refused: true, namesStep: reason.includes(REPEAT_STEP), namesArtifact: reason.includes(artifact) };
   const REFUSED = { refused: true, namesStep: true, namesArtifact: true };
@@ -113,7 +105,6 @@ describe('the shared check of a list-form repeat count source', () => {
 
 describe('pressing Start on a list-form flow whose count source no resolved loop outputs', () => {
   const FLOW_ID = 'rl';
-  /** Differs from the folder id, so a loop scoped to the flow is found only by the run's flow name. */
   const FLOW_NAME = 'repeat-run';
 
   interface Rig {
@@ -125,9 +116,6 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     autoBound: () => boolean;
   }
 
-  /** A repository whose active flow is `spec` (a catalog entry) with every loop step's gate auto, so a run the auto
-   *  gate holds is observable, `work-loop` in the operator tier's shared folder, and the production Start composed
-   *  over the app-shaped loop tiers. */
   function rig(spec: FlowSpec): Rig {
     const repo = tmp('repeat-source-start-repo-');
     const globalDir = tmp('repeat-source-start-global-');
@@ -176,7 +164,6 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     };
   }
 
-  /** The Start's observable result: the view it returned, its notice's facts, and the run as persisted after. */
   const startOutcome = (r: Rig, artifact: string) => {
     const view = r.start();
     const notice = view.notice ?? '';
