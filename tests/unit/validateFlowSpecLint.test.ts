@@ -32,6 +32,7 @@ describe('the installed-runtime e2e specs run every process through the harness'
     expect(await flagged('tests/e2e/validateFlow.spec.ts')).toEqual(once);
     expect(await flagged('tests/e2e/validateFlowInstall.spec.ts')).toEqual(once);
     expect(await flagged('tests/e2e/finalizeInstalledAccess.spec.ts')).toEqual(once);
+    expect(await flagged('tests/e2e/checkRepeatList.spec.ts')).toEqual(once);
   });
 
   it('leaves the harness modules, the harness calls and other specs alone', async () => {

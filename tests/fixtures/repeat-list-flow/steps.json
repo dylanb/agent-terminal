@@ -1,0 +1,8 @@
+{
+  "marker": "<!-- agent-terminal:work-turn-complete:design -->",
+  "steps": [
+    { "title": "Parse the input" },
+    { "title": "Render the table" },
+    { "title": "Write the summary" }
+  ]
+}

@@ -7529,7 +7529,7 @@ test('§28.4 D1+D2+D3 — the approved plan sources the impl-slice count, and th
 // §28.4.1/§28.5.3 — a RED that finds a dependent increment the plan left inside its slice splits the slice in the
 // plan, and approving RED re-sources the count from that plan, so the run loops back for the extra slice instead
 // of ending one slice short. Wiring: RED gate approve → sourceSliceCount (red-loop declares the `plan` output) →
-// flow.resolveInputs; then the refactor loop-back reads the new count.
+// flow.recordSourcedLists; then the refactor loop-back reads the new count.
 test('§28.5.3 — a RED that splits its slice in the plan raises the slice count on approve, and the run loops back for the extra slice', { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(9));
   const repo = seedV3ChainRepo('agent-term-e2e-redsplit-');

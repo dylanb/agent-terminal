@@ -5,6 +5,7 @@
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
 import type { SliceBriefDelivery } from './sliceBriefReader';
+import type { RepeatEntry } from '../shared/repeatList';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
@@ -25,14 +26,6 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
   // one line, so collapse every CR/LF before interpolating — a newline would otherwise inject a second
   // command line into the agent's instruction channel (CWE-74).
   return policy.mode === 'compact' ? `/compact ${(policy.message ?? '').replace(/[\r\n]+/g, ' ')}` : '/clear';
-}
-
-/** The completion artifact the work turn must produce, resolved from the def (§27.12): the confined output
- *  binding whose id matches `work.artifact`. Null when no output backs that id — a commit-producing loop
- *  whose product is commits, which advances on the done-signal alone. Data-driven: never a loop-name check. */
-export function completionArtifact(def: LoopDefV2): { path: string; rel: string } | null {
-  const binding = def.outputs.find((o) => o.id === def.work.artifact);
-  return binding ? { path: binding.path, rel: binding.rel } : null;
 }
 
 /** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.json` →
@@ -56,6 +49,13 @@ function insertSliceSuffix(p: string, slice: number): string {
 export function sliceArtifact(artifact: { path: string; rel: string }, slice: number): { path: string; rel: string } {
   if (!Number.isInteger(slice) || slice <= 1) return artifact;
   return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
+}
+
+export function outputLocation(def: LoopDefV2, id: string, slice: number): { path: string; rel: string } | null {
+  const binding = def.outputs.find((o) => o.id === id);
+  if (binding === undefined) return null;
+  const at = { path: binding.path, rel: binding.rel };
+  return id === def.work.artifact ? sliceArtifact(at, slice) : at;
 }
 
 /** Whether the artifact is well-formed (§27.12): present AND carrying the marker. `content` is the domain
@@ -104,6 +104,7 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  entry?: RepeatEntry;
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
@@ -358,6 +359,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       : req.completion?.kind === 'red' || req.completion?.kind === 'green' || req.completion?.kind === 'refactor'
         ? req.completion.resultRel
         : undefined;
+  if (req.entry !== undefined) parts.push('', `entry ${req.entry.position} of ${req.entry.count}: ${req.entry.title}`);
   parts.push('', doneSignalInstruction(req.turnKey, verifyRel, req.doneRelPath));
   return `${parts.join('\n')}\n`;
 }

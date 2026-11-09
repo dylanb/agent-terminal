@@ -12,6 +12,7 @@ import { isTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../sr
 import { LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from '../../src/main/appLoopPaths';
 import { flowLoopsDir, resolveLoopDefV2, type LoopDefV2Lookup } from '../../src/main/loopDefV2';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import type { GateAuthority } from '../../src/shared/gateAuthority';
 import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { APP_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
 import { LOOP_DEF_V2_VERSION } from '../../src/shared/engineCapabilities/loop';
@@ -38,6 +39,11 @@ export const flowLocations = {
   },
 };
 
+export type RepeatSpec =
+  | { backTo: string; countInput: string }
+  | { backTo: string; countFrom: { artifact: string; format: string; list?: string } }
+  | { raw: Readonly<Record<string, unknown>> };
+
 export type FlowStepSpec =
   | { id: string; kind: 'manual'; todoTemplate?: string }
   | {
@@ -47,7 +53,8 @@ export type FlowStepSpec =
       /** Written as `loop_namespace`; `app` when omitted. */
       namespace?: string;
       todoTemplate?: string;
-      repeat?: { backTo: string; countInput: string };
+      repeat?: RepeatSpec;
+      gateAuthority?: GateAuthority;
     };
 
 export interface FlowSpec {
@@ -55,6 +62,13 @@ export interface FlowSpec {
   steps: readonly FlowStepSpec[];
   /** Template files to create in the folder's own `todo-templates/`, each named as a run looks it up. */
   templates?: readonly string[];
+}
+
+function repeatDoc(repeat: RepeatSpec): Readonly<Record<string, unknown>> {
+  if ('raw' in repeat) return repeat.raw;
+  if ('countInput' in repeat) return { back_to: repeat.backTo, count_input: repeat.countInput };
+  const { artifact, format, list } = repeat.countFrom;
+  return { back_to: repeat.backTo, count_from: { artifact, format, ...(list === undefined ? {} : { list }) } };
 }
 
 function stepDoc(step: FlowStepSpec): Record<string, unknown> {
@@ -66,7 +80,8 @@ function stepDoc(step: FlowStepSpec): Record<string, unknown> {
     loop: step.loop,
     loop_namespace: step.namespace ?? APP_LOOP_NAMESPACE,
     ...template,
-    ...(step.repeat === undefined ? {} : { repeat: { back_to: step.repeat.backTo, count_input: step.repeat.countInput } }),
+    ...(step.repeat === undefined ? {} : { repeat: repeatDoc(step.repeat) }),
+    ...(step.gateAuthority === undefined ? {} : { gate_authority: step.gateAuthority }),
   };
 }
 
@@ -103,6 +118,8 @@ export interface LoopDefSpec {
   charters?: readonly string[];
   /** The `gate` list, written as given. */
   gate?: readonly Record<string, unknown>[];
+  outputs?: Readonly<Record<string, string>>;
+  artifact?: string;
   /** References written into the definition but never created on disk. */
   absent?: readonly string[];
   /** References created as directories instead of files. */
@@ -122,12 +139,13 @@ export function writeLoopDef(loopsRoot: string, name: string, spec: LoopDefSpec 
   const doc = {
     version: LOOP_DEF_V2_VERSION,
     ...(spec.brief === undefined ? {} : { brief: spec.brief }),
-    work: { recipe, artifact: 'result' },
+    work: { recipe, artifact: spec.artifact ?? 'result' },
     reviewers: charters.map((charter, i) => ({ persona: `reviewer-${i + 1}`, charter })),
     ...(spec.consolidator === undefined ? {} : { consolidator: { recipe: spec.consolidator } }),
     boundaries: [],
     report: { sections: [] },
     gate: spec.gate ?? [],
+    ...(spec.outputs === undefined ? {} : { outputs: Object.entries(spec.outputs).map(([id, path]) => ({ id, path })) }),
   };
   mkdirSync(defDir, { recursive: true });
   writeFileSync(file, yaml.dump(doc));

@@ -51,9 +51,6 @@ export interface AppGateDecisionDeps {
   /** §27.10 — rebuild a report from the section files its steps wrote; throws when it cannot. */
   assembleReport(repoDir: string, report: SectionedReport): void;
   advanceFlow(repoDir: string, step: string): void;
-  /** §28.4.1 — on an approve whose `def` declares the `plan` output, re-source the `slices` flow input from that
-   *  plan WITHOUT re-entering the step; a later planning approve overwrites an earlier one (§28.8.1). Best-effort
-   *  — the caller wraps it, never aborting the advance. */
   sourceSliceCount(repoDir: string, def: LoopDefV2): void;
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
@@ -459,9 +456,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     for (const se of gateOpt.sideEffects) await runEffect(se, deps.emitNotice);
   }
 
-  // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
-  // loop-back reads the plan-decided count. Best-effort: on a failure the previously sourced count (or the
-  // count-1 default) stands, and the advance is never aborted.
   try {
     deps.sourceSliceCount(repoDir, r.def);
   } catch (e) {

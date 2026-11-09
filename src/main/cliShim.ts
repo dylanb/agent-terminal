@@ -16,6 +16,7 @@ export const CLI_COMMAND_NAME = 'agent-terminal';
 
 export const CONTROLLER_FLAG = '--controller';
 export const VALIDATE_FLOW_FLAG = '--validate-flow';
+export const CHECK_REPEAT_LIST_FLAG = '--check-repeat-list';
 export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
@@ -71,9 +72,9 @@ export function resolveLaunchInvocation(
 }
 
 // A dev build's main script is deliberately left out: in plain-Node mode the checker script is the program.
-function validateFlowBranch(invocation: LaunchInvocation, checkerScript: string): string[] {
+function checkerBranch(flag: string, invocation: LaunchInvocation, checkerScript: string): string[] {
   return [
-    `if [ "$#" -ge 1 ] && [ "$1" = ${shellQuote(VALIDATE_FLOW_FLAG)} ]; then`,
+    `if [ "$#" -ge 1 ] && [ "$1" = ${shellQuote(flag)} ]; then`,
     '  ELECTRON_RUN_AS_NODE=1',
     '  export ELECTRON_RUN_AS_NODE',
     `  exec ${shellQuote(invocation.execPath)} ${shellQuote(checkerScript)} "$@"`,
@@ -85,14 +86,16 @@ function validateFlowBranch(invocation: LaunchInvocation, checkerScript: string)
  * The POSIX shell launch shim (§23.4 / #25). An optional caller-supplied path crosses the OS boundary
  * as one verbatim directory operand, never shell-interpolated (CWE-78). A relative path resolves
  * against the invoking shell's cwd, not the launched process's; the instance starts detached so the
- * shell returns immediately. `--validate-flow` instead runs `checkerScript` in the foreground.
+ * shell returns immediately. `--validate-flow` and `--check-repeat-list` instead run `checkerScript` in the
+ * foreground.
  */
 export function generateShim(invocation: LaunchInvocation, checkerScript: string): string {
   const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
-    ...validateFlowBranch(invocation, checkerScript),
+    ...checkerBranch(VALIDATE_FLOW_FLAG, invocation, checkerScript),
+    ...checkerBranch(CHECK_REPEAT_LIST_FLAG, invocation, checkerScript),
     ...controllerBranch(invocation),
     'CWD=$(pwd)',
     'if [ "$#" -ge 1 ]; then',

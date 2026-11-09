@@ -11,6 +11,7 @@ import { loadFlowDefinitionFromFile, type FlowLoad } from '../../src/main/flow';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from '../../src/main/loopDefV2';
 import {
   LOOP_LAYOUT,
+  ONE_OF_KEYS,
   POSITIONS,
   positionKeys,
   type ClosedSet,
@@ -44,7 +45,8 @@ export const FLOW_SAMPLES: { [P in FlowPositionId]: Record<FlowKeyOf<P>, unknown
     repeat: { back_to: EARLIER_STEP.id, count_input: 'slices' },
   },
   'flow.steps[].inputs[]': { name: 'ticket', type: 'github-ticket', required: true },
-  'flow.steps[].repeat': { back_to: EARLIER_STEP.id, count_input: 'slices' },
+  'flow.steps[].repeat': { back_to: EARLIER_STEP.id, count_input: 'slices', count_from: { artifact: 'steps', format: 'json-list', list: 'steps' } },
+  'flow.steps[].repeat.count_from': { artifact: 'steps', format: 'json-list', list: 'steps' },
 };
 
 const RECIPE = 'recipe.md';
@@ -102,6 +104,7 @@ export const LOOP_SAMPLES: { [P in LoopPositionId]: Record<LoopKeyOf<P>, unknown
  *  would make a conditional key required (a loop step needs `loop`; a compact boundary needs `message`). */
 export const FLOW_REQUIRED_ONLY_VALUES: { [P in FlowPositionId]?: Partial<Record<FlowKeyOf<P>, unknown>> } = {
   'flow.steps[]': { kind: 'manual' },
+  'flow.steps[].repeat.count_from': { format: 'impl-slices' },
 };
 
 export const LOOP_REQUIRED_ONLY_VALUES: { [P in LoopPositionId]?: Partial<Record<LoopKeyOf<P>, unknown>> } = {
@@ -132,6 +135,8 @@ export function flowWith(p: FlowPositionId, fields: Doc): Doc {
       return step({ inputs: [fields] });
     case 'flow.steps[].repeat':
       return step({ repeat: fields });
+    case 'flow.steps[].repeat.count_from':
+      return step({ repeat: { back_to: EARLIER_STEP.id, count_from: fields } });
     default:
       return p satisfies never;
   }
@@ -219,6 +224,7 @@ export function loadLoopDoc(doc: Doc): LoopDefV2Result {
 /** Sample keys a closed-set value makes illegal at its position: a manual step cannot carry `gate_authority`. */
 const DROPPED_BY_VALUE: readonly { set: Pick<ClosedSet, 'position' | 'key'>; value: ClosedValue; drop: readonly string[] }[] = [
   { set: { position: 'flow.steps[]', key: 'kind' }, value: 'manual', drop: ['gate_authority'] },
+  { set: { position: 'flow.steps[].repeat.count_from', key: 'format' }, value: 'impl-slices', drop: ['list'] },
 ];
 
 /** The sample value of every key the oracle lists at position `p`. */
@@ -234,6 +240,21 @@ export function requiredOnlyValuesAt(p: PositionId): Readonly<Record<string, unk
 /** Position `p`'s `keys` at their samples, or at `values` where it names them. */
 export function fieldsAt(p: PositionId, keys: readonly string[], values: Readonly<Record<string, unknown>> = {}): Doc {
   return pick(samplesAt(p) as Record<string, unknown>, keys, values);
+}
+
+export function loadableKeySets(p: PositionId, keys: readonly string[]): string[][] {
+  let sets: string[][] = [[...keys]];
+  for (const group of ONE_OF_KEYS.filter((g) => g.position === p)) {
+    const members: readonly string[] = group.keys;
+    const held = members.filter((k) => keys.includes(k));
+    if (held.length < 2) continue;
+    sets = sets.flatMap((set) => held.map((keep) => set.filter((k) => k === keep || !members.includes(k))));
+  }
+  return sets;
+}
+
+export function oneOfFirstMembers(p: PositionId): string[] {
+  return ONE_OF_KEYS.filter((g) => g.position === p).map((g) => g.keys[0]);
 }
 
 export type DefLoad = { ok: true } | { ok: false; reason: string };

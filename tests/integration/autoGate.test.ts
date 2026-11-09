@@ -1732,6 +1732,8 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       autoGate: gate,
       resolveForStart: () => current,
       start: () => inProgress(STEP),
+      countSourceRefusal: () => null,
+      state: () => inProgress(STEP),
       now: () => Date.parse('2026-07-17T12:00:00.999Z'),
       record,
     });

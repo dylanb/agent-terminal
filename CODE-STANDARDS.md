@@ -253,6 +253,13 @@ A **composed prompt that instructs an LLM to produce a serialized artifact a pre
    does not judge lives in a file nothing parses. A hand-written grammar over Markdown yields a new valid
    edge case every round (fences, indented code, emphasis), never a repeat, so the spinning check cannot
    see it; JSON removes the class.
+4. **The self-check and runtime consumer have behavioral agreement tests through their public entry
+   points.** Run a shared, independently authored fixture corpus through both paths and check their
+   observable results against the corpus's expectations, not just against each other. Cover valid,
+   malformed and unreadable inputs: sharing a parser alone cannot prevent the command and runtime from
+   disagreeing because of file reads or integration. Agreement applies to the shared validity contract;
+   runtime-specific constraints are tested separately. `tests/integration/repeatListAgreement.test.ts`
+   is the shape to copy: it exercises the command and the engine's approval path with the same files.
 
 ## Independent-lifecycle state lives in its own file, disjoint from any wholesale-rewritten document
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   artifactWellFormed,
   boundaryCommand,
-  completionArtifact,
   sliceArtifact,
+  outputLocation,
   composeAppWorkPrompt,
   REPORT_SECTION_HEADING,
 } from '../../src/main/appWorkTurn';
@@ -71,17 +71,15 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
   });
 });
 
-describe('completionArtifact (§27.12 — file-producing vs commit-producing, data-driven)', () => {
+describe('outputLocation on the first iteration (§27.12 — file-producing vs commit-producing, data-driven)', () => {
   it('resolves the confined output path whose id matches the work artifact (file-producing)', () => {
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'plan' } });
-    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toEqual(artifactOf('plan.md'));
   });
 
   it('returns null when the work artifact id has no matching output binding (commit-producing)', () => {
-    // A loop whose product is commits declares no output file for its work artifact → advance on the
-    // done-signal alone. Read from the def, never a hard-coded loop name.
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'commits' }, outputs: [] });
-    expect(completionArtifact(d)).toBeNull();
+    expect(outputLocation(d, d.work.artifact, 1)).toBeNull();
   });
 
   it('resolves by artifact id, not list position, when the matching output is not first', () => {
@@ -92,7 +90,7 @@ describe('completionArtifact (§27.12 — file-producing vs commit-producing, da
         binding('plan', 'plan.md'),
       ],
     });
-    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
+    expect(outputLocation(d, d.work.artifact, 1)).toEqual(artifactOf('plan.md'));
   });
 });
 
@@ -115,6 +113,25 @@ describe('sliceArtifact (§28.4 D1 — per-slice result-artifact identity)', () 
     expect(sliceArtifact(a, 0)).toEqual(a);
     expect(sliceArtifact(a, 1.5)).toEqual(a);
     expect(sliceArtifact(a, Number.NaN)).toEqual(a);
+  });
+});
+
+describe('outputLocation — where a work turn on an iteration writes an output', () => {
+  const red = def({
+    work: { recipe: '/abs/prompts/work.md', artifact: 'red-result' },
+    outputs: [binding('red-result', 'red-result.json'), binding('plan', 'plan.md')],
+  });
+
+  it('names the work artifact by its iteration from slice 2 on', () => {
+    expect(outputLocation(red, 'red-result', 2)).toEqual(artifactOf('red-result.slice-2.json'));
+  });
+
+  it('keeps every other output at its binding on any iteration', () => {
+    expect(outputLocation(red, 'plan', 2)).toEqual(artifactOf('plan.md'));
+  });
+
+  it('is null for an id the loop declares no output for', () => {
+    expect(outputLocation(red, 'steps', 2)).toBeNull();
   });
 });
 
@@ -448,5 +465,22 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
 
   it('says nothing about sections for a step whose outputs declare none', () => {
     expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
+  });
+});
+
+describe('composeAppWorkPrompt — a repeated turn names the list entry it is on (§28.4.1)', () => {
+  const base = {
+    recipeBody: '# work turn\nBuild the entry.',
+    turnKey: 'work-build',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: null,
+  };
+  const ENTRY_LINE = /^entry \d+ of \d+: .*$/gm;
+
+  it('names the entry it is given as its own line, and names none without one', () => {
+    expect.soft(composeAppWorkPrompt({ ...base, entry: { position: 2, count: 3, title: 'Render the table' } }).match(ENTRY_LINE)).toEqual(['entry 2 of 3: Render the table']);
+    expect.soft(composeAppWorkPrompt({ ...base, entry: { position: 50, count: 50, title: '  spaced  ' } }).match(ENTRY_LINE)).toEqual(['entry 50 of 50:   spaced  ']);
+    expect.soft(composeAppWorkPrompt({ ...base, goalProgress: ['PROGRESS — keep two files.'], entry: { position: 1, count: 1, title: 'Only' } }).match(ENTRY_LINE)).toEqual(['entry 1 of 1: Only']);
+    expect.soft(composeAppWorkPrompt(base).match(ENTRY_LINE)).toBeNull();
   });
 });

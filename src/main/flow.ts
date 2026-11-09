@@ -9,7 +9,8 @@ import yaml from 'js-yaml';
 import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
-import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { createFlowStateStore, type FlowStateStore, type RepeatListRecord } from './flowState';
+import { repeatEntryTitle, type RepeatEntry, type RepeatListSpec } from '../shared/repeatList';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
@@ -26,7 +27,7 @@ import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bind
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
 import { isOneOf } from '../shared/oneOf';
-import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, REPEAT_LIST_FORMATS, type ActedInputType, type FlowBootstrap, type FlowStepKind, type RepeatListFormat } from '../shared/engineCapabilities/flow';
 
 const INPUT_TYPE_REFS: Readonly<Record<ActedInputType, keyof FlowRefs>> = { 'github-ticket': 'ticket', pr: 'pr' };
 
@@ -65,11 +66,14 @@ export interface FlowStepDef {
   bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
-   *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
-   *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
-   *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
-  repeat?: { backTo: string; countInput: string };
+   *  EARLIER step) instead of the next step, until it has looped back as many times as `source` gives —
+   *  resolved at runtime, clamped to [1, MAX_SLICES]. */
+  repeat?: { backTo: string; source: RepeatCountSource };
 }
+
+export type RepeatCountSource =
+  | { kind: 'input'; countInput: string }
+  | ({ kind: 'list'; artifact: string } & RepeatListSpec);
 
 export function stepTemplateRef(step: FlowStepDef): string | null {
   return step.todoTemplate ? step.todoTemplate : null;
@@ -177,6 +181,39 @@ function flowLoadOf(read: BoundedRead, file: string, label: string): FlowLoad {
   }
 }
 
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+
+const MALFORMED_REPEAT = 'has a malformed repeat (needs back_to + count_input or count_from)';
+
+function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable<FlowStepDef['repeat']> | string {
+  if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return MALFORMED_REPEAT;
+  const backTo = raw.back_to;
+  const source = parseCountSource(raw.count_input, raw.count_from);
+  if (typeof source === 'string') return source;
+  if (!earlier.some((s) => s.id === backTo)) return `repeat.back_to "${backTo}" is not an earlier step`;
+  return { backTo, source };
+}
+
+function parseCountSource(countInput: unknown, countFrom: unknown): RepeatCountSource | string {
+  if (countInput !== undefined && countFrom !== undefined) return 'has a repeat declaring both count_input and count_from (declare exactly one)';
+  if (countFrom === undefined) {
+    return isNonEmptyString(countInput) ? { kind: 'input', countInput } : MALFORMED_REPEAT;
+  }
+  if (!isRecord(countFrom)) return 'has a repeat.count_from that is not a mapping of artifact + format';
+  const { artifact, format, list } = countFrom;
+  if (!isNonEmptyString(artifact)) return 'has a repeat.count_from without a non-empty artifact';
+  if (!isOneOf(REPEAT_LIST_FORMATS, format))
+    return `has a repeat.count_from with unsupported format "${String(format)}" (supports: ${REPEAT_LIST_FORMATS.join(', ')})`;
+  return LIST_SOURCE_FOR[format](artifact, list);
+}
+
+const LIST_SOURCE_FOR: Readonly<Record<RepeatListFormat, (artifact: string, list: unknown) => RepeatCountSource | string>> = {
+  'json-list': (artifact, list) =>
+    isNonEmptyString(list) ? { kind: 'list', artifact, format: 'json-list', list } : 'has a json-list repeat.count_from without a non-empty list key',
+  'impl-slices': (artifact, list) =>
+    list === undefined ? { kind: 'list', artifact, format: 'impl-slices' } : 'has an impl-slices repeat.count_from with a list key, which only json-list takes',
+};
+
 function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
   try {
@@ -232,20 +269,11 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
-    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
-    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
-    let repeat: { backTo: string; countInput: string } | undefined;
+    let repeat: FlowStepDef['repeat'];
     if (raw.repeat !== undefined) {
-      if (
-        !isRecord(raw.repeat) ||
-        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
-        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
-      )
-        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
-      const backTo = raw.repeat.back_to;
-      if (!steps.some((s) => s.id === backTo))
-        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
-      repeat = { backTo, countInput: raw.repeat.count_input };
+      const parsed = parseRepeat(raw.repeat, steps);
+      if (typeof parsed === 'string') return { ok: false, error: `flow.yaml step "${raw.id}" ${parsed}` };
+      repeat = parsed;
     }
     steps.push({
       id: raw.id,
@@ -281,6 +309,13 @@ export interface RunIdentity {
   startedAt: number;
   flow: string;
 }
+
+export interface SourcedLists {
+  plan: RepeatListRecord | null;
+  countFrom: RepeatListRecord | null;
+}
+
+const PLAN_SLICES_INPUT = 'slices';
 
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
@@ -323,11 +358,9 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): MachineView;
-  /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
-   *  (unlike provideInput, which answers a step-entry prompt and re-enters). A planning approve gate uses it
-   *  to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering the planning step would
-   *  restart its loop. Legal only while a step is in_progress. */
-  resolveInputs(values: Record<string, string>): MachineView;
+  recordSourcedLists(lists: SourcedLists): MachineView;
+  repeatSource(): RepeatCountSource | null;
+  entryFor(stepId: string): RepeatEntry | null;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
@@ -382,7 +415,9 @@ export function createFlowMachine(
       reopenSlice: view,
       terminate: view,
       provideInput: view,
-      resolveInputs: view,
+      recordSourcedLists: view,
+      repeatSource: () => null,
+      entryFor: () => null,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
         return view();
@@ -393,7 +428,9 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
+  const repeatIndex = steps.findIndex((s) => s.repeat);
+  const repeatStep: FlowStepDef | undefined = steps[repeatIndex];
+  const returnStep = repeatStep?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
   const typedInput = (type: ActedInputType): { step: FlowStepDef; name: string } | undefined => {
@@ -416,6 +453,7 @@ export function createFlowMachine(
   // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
   // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
   let repeatCounts: Record<string, number> = Object.create(null);
+  let repeatList: RepeatListRecord | null = null;
   // §22.3.1.
   let userTitle: string | null = null;
   let identity: RunIdentity | null = null;
@@ -430,6 +468,7 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     repeatCounts = Object.create(null);
+    repeatList = null;
     identity = null;
     const persisted = store.read();
     if (persisted) {
@@ -440,6 +479,7 @@ export function createFlowMachine(
       if (persisted.startedAt !== undefined && persisted.flow !== undefined) identity = { startedAt: persisted.startedAt, flow: persisted.flow };
       if (persisted.inputs) inputs = { ...persisted.inputs };
       if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
+      repeatList = persisted.repeatList ?? null;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -457,8 +497,9 @@ export function createFlowMachine(
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
   // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
-  const slicesFor = (countInput: string): number => {
-    const n = numericInput(countInput);
+  const slicesFor = (source: RepeatCountSource): number => {
+    if (source.kind === 'list') return repeatList === null ? 1 : Math.min(repeatList.count, MAX_SLICES);
+    const n = numericInput(source.countInput);
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
   };
@@ -533,6 +574,7 @@ export function createFlowMachine(
       ...(identity !== null ? { startedAt: identity.startedAt, flow: identity.flow } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
+      ...(repeatList !== null ? { repeatList } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
   };
@@ -562,7 +604,6 @@ export function createFlowMachine(
     },
     currentSlice: () => {
       hydrate(); // §19.1: reflect the on-disk progression, as state() does
-      const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
     sliceStartStep: () => returnStep,
@@ -580,7 +621,7 @@ export function createFlowMachine(
       if (step.repeat) {
         const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
         const backIndex = names.indexOf(step.repeat.backTo);
-        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+        if (completed < slicesFor(step.repeat.source) && backIndex >= 0) {
           repeatCounts[step.id] = completed + 1;
           index = backIndex;
           persist();
@@ -602,6 +643,7 @@ export function createFlowMachine(
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
       repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
+      repeatList = null;
       persist();
       return enter(view());
     },
@@ -621,6 +663,7 @@ export function createFlowMachine(
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
+        repeatList = null;
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -645,20 +688,42 @@ export function createFlowMachine(
       status = 'not_started';
       inputs = {};
       repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
+      repeatList = null;
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
     provideInput: (values) => {
       requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };
+      const source = repeatStep?.repeat?.source;
+      if (source?.kind === 'input' && Object.prototype.hasOwnProperty.call(values, source.countInput)) repeatList = null;
       persist();
       return enter(view());
     },
-    resolveInputs: (values) => {
-      requireStatus('in_progress', 'resolveInputs');
-      inputs = { ...inputs, ...values };
+    recordSourcedLists: ({ plan, countFrom }) => {
+      const source = repeatStep?.repeat?.source;
+      const countsFromPlan = source?.kind === 'input' && source.countInput === PLAN_SLICES_INPUT;
+      const list = source?.kind === 'list' ? countFrom : countsFromPlan ? plan : null;
+      if (plan === null && list === null) return view();
+      requireStatus('in_progress', 'recordSourcedLists');
+      if (plan !== null) inputs = { ...inputs, [PLAN_SLICES_INPUT]: String(plan.count) };
+      if (list !== null) repeatList = { count: list.count, titles: list.titles.slice(0, MAX_SLICES).map(repeatEntryTitle) };
       persist();
-      return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
+      return view();
+    },
+    repeatSource: () => repeatStep?.repeat?.source ?? null,
+    entryFor: (stepId) => {
+      hydrate();
+      const repeat = repeatStep?.repeat;
+      if (!repeat || repeatList === null) return null;
+      const at = names.indexOf(stepId);
+      if (at < names.indexOf(repeat.backTo) || at > repeatIndex) return null;
+      const { source } = repeat;
+      const listSetsCount = source.kind === 'list' || (Object.prototype.hasOwnProperty.call(inputs, source.countInput) && inputs[source.countInput] === String(repeatList.count));
+      if (!listSetsCount) return null;
+      const position = repeatCounts[repeatStep.id] ?? 1;
+      const title = repeatList.titles[position - 1];
+      return title === undefined ? null : { position, count: slicesFor(source), title };
     },
     setTitle: (text) => {
       hydrate(); // §19.1
@@ -699,9 +764,9 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
-  /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
-   *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
-  resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
+  recordSourcedLists(repoKey: string, lists: SourcedLists): FlowStateView;
+  repeatSource(repoKey: string): RepeatCountSource | null;
+  entryFor(repoKey: string, stepId: string): RepeatEntry | null;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -880,7 +945,9 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };
     },
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
-    resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
+    recordSourcedLists: (k, lists) => viewOf(k, (m) => m.recordSourcedLists(lists)),
+    repeatSource: (k) => machineFor(k).machine.repeatSource(),
+    entryFor: (k, stepId) => machineFor(k).machine.entryFor(stepId),
     setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }
