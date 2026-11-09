@@ -37,6 +37,8 @@ export function createControllerFixture() {
       git(dir, 'config', 'user.name', 'Controller fixture');
       git(dir, 'config', 'user.email', 'fixture@example.invalid');
       git(dir, 'commit', '--allow-empty', '-m', 'fixture');
+      // The app names origin's repository on every gh read, so each fixture repository is a GitHub one.
+      git(dir, 'remote', 'add', 'origin', `https://github.com/example/${parent}-project.git`);
       return dir;
     });
     const worktrees = ['worktree-a', 'worktree-b'].map(name => {

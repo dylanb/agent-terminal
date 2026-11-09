@@ -6,6 +6,7 @@ import { createFlowManager, flowHomeDir } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { runDispositionFile } from '../../src/main/runDisposition';
 import { worktreeStartedness } from '../../src/main/startedness';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A2 (#133) §18.7.2 AC6 / §18.7.3 AC9 — Terminate is the route out of every begun run, including one held at the
 // §18.1 error because its recorded source cannot be verified. Driven through the production resolver wiring.
@@ -18,7 +19,7 @@ describe('Terminate recovers every begun run (§18.7.2 AC6, §18.7.3 AC9)', () =
     const wt = fx.makeWorktree(prefix);
     const globalDir = fx.makeWorktree(`${prefix}-global`);
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (k) => resolve(k) });
     return { wt, mgr };
   };
@@ -67,7 +68,7 @@ describe('Terminate recovers every begun run (§18.7.2 AC6, §18.7.3 AC9)', () =
   it('Terminate on a never-started worktree whose flow fails to load is refused and writes nothing', () => {
     const wt = fx.makeWorktree('a2-term-never-started-error');
     const globalDir = fx.makeWorktree('a2-term-never-started-error-global');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (k) => resolve(k) });
     expect(mgr.state(wt).status).toBe('error');
 

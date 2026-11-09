@@ -56,6 +56,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **Epics.** An epic-capable plan is parsed into ordered sub-tickets. At the approve gate, a confirm-first **promote** action creates them on GitHub, and the preview and the promotion read the same parse.
 - **Goal-mode work turns.** A loop step can run as an agent `/goal` session that reports progress through a validated progress file.
 - **Context hygiene.** `/clear` is sent at loop boundaries (`boundary: pre-work`), and goal loops send `/compact` as a checkpoint every `checkpoint.passes` review passes (set per loop), with an optional boundary `/compact`.
+- **Runs on an existing pull request.** A flow step can adopt a pull request instead of picking up a ticket (`pickup: { adopt: pr }`). The run takes its intent only from the tickets the PR closes, works on its own fix branch at the PR's head, and publishes nothing until you approve at the human gate. On approval it publishes one outcome: a draft fix PR into the reviewed PR's branch with a linking comment, a report comment, or a report-and-patch comment. See [spec §27.10](docs/spec/27-in-terminal-loop-engine-the-live-design.md) and §27.13.
 - **Conflict hold at pickup.** If the ticket's branch or PR already exists, the run holds and offers to inspect it, delete the branch or close the PR, each confirm-first.
 - **Runs are bound to their flow.** A started run keeps the flow definition it started with. If that definition changes or vanishes, the run is held and you can rebind or terminate it.
 

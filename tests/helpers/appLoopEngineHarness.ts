@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { LifecycleTerminateResult } from '../../src/main/flowLifecycle';
 import type { FlowStateView } from '../../src/shared/ipc';
-import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
+import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry, type WorkRefs } from '../../src/main/appLoopEngine';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import {
   clearBaselineCommit,
@@ -95,7 +95,7 @@ export class AppLoopEngineHarness {
   clearBaselineError!: string | null;
   /** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null. */
   refactorResultLocationNull!: boolean;
-  workRefsResult!: { ticket: number | null; pr: number | null };
+  workRefsResult!: WorkRefs;
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
   /** The step the engine's `reopenStep` dep names as the back-to-red return step. */

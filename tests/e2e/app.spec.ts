@@ -3391,7 +3391,8 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     await loopReadout().click({ timeout: 10_000 });
     await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
     await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
-    await page.evaluate((repoKey) => window.flow.advance(repoKey, 'done'), repo);
+    await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+    await flowControl().click();
     await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
     rmSync(saved);
@@ -7366,12 +7367,14 @@ async function passAutoGate(home: string, repo: string, step: string, consumes?:
       .toMatch(new RegExp(`^step: ${step}$[\\s\\S]*chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`, 'm'));
   }
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: AUTO_GATE_PASS_MS }).not.toContain(`step: ${step}\n`);
-  const deciders = auditRunFiles(home, repo).flatMap((f) =>
-    stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
-      e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
-    ),
-  );
-  expect(deciders, step).toEqual(['engine']);
+  // The audit recorder writes off the flow path, so the decision can land after the flow has moved on.
+  const deciders = () =>
+    auditRunFiles(home, repo).flatMap((f) =>
+      stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
+        e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
+      ),
+    );
+  await expect.poll(deciders, { message: step, timeout: AUTO_GATE_PASS_MS }).toEqual(['engine']);
 }
 
 /** Approve `human` step `step` once its gate is clean, and wait for the flow to leave it. */

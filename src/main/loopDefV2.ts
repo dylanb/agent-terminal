@@ -151,6 +151,18 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
+/** A pickup that adopts the existing pull request the step's `pr`-typed input names, instead of opening one for a
+ *  ticket. */
+export interface AdoptPickupV2 {
+  adopt: 'pr';
+}
+
+export type PickupV2 = PickupContractV2 | AdoptPickupV2;
+
+export function isAdoptPickup(pickup: PickupV2): pickup is AdoptPickupV2 {
+  return 'adopt' in pickup;
+}
+
 /** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
  *  full-catalog sweep. Closed set, recognized by exact string. */
 export const POLISH_POLICIES = ['fix', 'defer'] as const;
@@ -185,7 +197,7 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2 | null;
+  pickup: PickupV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
@@ -387,9 +399,15 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   });
 }
 
-function toPickup(raw: unknown): PickupContractV2 | null {
+function toPickup(raw: unknown): PickupV2 | null {
   if (raw === undefined) return null;
   const pickup = requireRecord(raw, 'pickup');
+  if ('adopt' in pickup) {
+    if (pickup.adopt !== 'pr') fail(`pickup adopt must be pr: ${String(pickup.adopt)}`);
+    const stray = Object.keys(pickup).find((key) => key !== 'adopt');
+    if (stray !== undefined) fail(`pickup adopt: pr takes no other key: ${stray}`);
+    return { adopt: 'pr' };
+  }
   return {
     initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
     branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),

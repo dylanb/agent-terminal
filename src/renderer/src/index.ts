@@ -8,6 +8,7 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
+import { createAdoptTicketChoice } from './adoptTicketChoice';
 import { createSetupCheckDialog } from './setupCheckDialog';
 import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
@@ -300,6 +301,12 @@ if (flowStripHost) {
       return () => viewListeners.delete(cb);
     },
     confirm: (key, run, pr, ticket) => window.flow.confirmRunPickup(key, run, pr, ticket),
+    onFocusLost: landFocus,
+  });
+  const adoptTicketChoiceHost = document.getElementById('adopt-ticket-choice-modal-host');
+  if (adoptTicketChoiceHost) createAdoptTicketChoice(adoptTicketChoiceHost, {
+    onOffer: (cb) => window.flow.onAdoptTicketChoice(cb),
+    answer: (repoKey, step, choiceId, answer) => window.flow.resolveAdoptTicket(repoKey, step, choiceId, answer),
     onFocusLost: landFocus,
   });
   const strip = createFlowStrip(flowStripHost, {

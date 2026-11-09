@@ -1,4 +1,4 @@
-import type { AppBootstrapConflictTarget } from '../appBootstrap';
+import type { AppBootstrapConflictTarget, TicketRef } from '../appBootstrap';
 import type { ConsolidatorVerdict } from '../consolidatorOutput';
 import type { StartednessSignal } from '../flowStarted';
 import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
@@ -80,6 +80,14 @@ export const FLOW_CHANNELS = {
   flowResolveAppBootstrapConflict: {
     name: 'flow:resolveAppBootstrapConflict',
     does: 'The renderer answers a branch conflict for the step it names, either wiping the conflicting branch or leaving it.',
+  },
+  flowOnAdoptTicketChoice: {
+    name: 'flow:onAdoptTicketChoice',
+    does: 'Main asks the operator which of the tickets a pull request closes is the primary ticket of the run adopting it.',
+  },
+  flowResolveAdoptTicket: {
+    name: 'flow:resolveAdoptTicket',
+    does: 'The renderer answers one ticket-choice offer with the ticket the operator picked, or with Cancel, and learns whether main accepted it.',
   },
   flowOnEpicPromotionPreview: {
     name: 'flow:onEpicPromotionPreview',
@@ -330,7 +338,11 @@ export interface FlowStateView {
 /** §27.13 */
 export type PickupConfirmView =
   | { run: RunIdentity; state: 'looking' }
-  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
+  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[]; adopted?: AdoptedPickupConfirm };
+
+/** An adopting run's confirm: the primary ticket its start recorded, shown read-only, or why it cannot be
+ *  recovered. The confirm sends the primary's number; its repository stays in main's record. */
+export type AdoptedPickupConfirm = { recoverable: true; primary: TicketRef } | { recoverable: false; reason: string };
 
 /** §6 — the run is named so a confirm can only release the hold the operator was shown. */
 export interface FlowConfirmRunPickupMsg {
@@ -385,6 +397,32 @@ export interface FlowResolveAppBootstrapConflictMsg
   step: string;
   wipe: boolean;
 }
+
+/** §6/§27.10 — the tickets a pull request closes, offered for the adopting run's primary. `choiceId` ties an answer
+ *  to this offer alone. */
+export interface FlowAdoptTicketChoiceMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  pr: number;
+  choiceId: string;
+  tickets: TicketRef[];
+}
+
+export type AdoptTicketOffer = Omit<FlowAdoptTicketChoiceMsg, 'sessionId'>;
+
+export type AdoptTicketAnswer = { kind: 'ticket'; ticket: TicketRef } | { kind: 'cancel' };
+
+/** §6/§27.10. */
+export interface FlowResolveAdoptTicketMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  choiceId: string;
+  answer: AdoptTicketAnswer;
+}
+
+export type ResolveAdoptTicketResult = { ok: true } | { ok: false; reason: string };
 
 /** §6/§28.7 — the confirm-first preview naming every GitHub mutation the operator authorizes by confirming:
  *  the sub-tickets promotion will create, plus the epic tracking-issue edit and the epic PR close. `epic`/`pr`
@@ -684,6 +722,10 @@ export interface FlowApi {
     wipe: boolean,
     target: AppBootstrapConflictTarget,
   ): void;
+  /** §6/§27.10. */
+  onAdoptTicketChoice(cb: (offer: AdoptTicketOffer) => void): () => void;
+  /** §6/§27.10. */
+  resolveAdoptTicket(repoKey: string, step: string, choiceId: string, answer: AdoptTicketAnswer): Promise<ResolveAdoptTicketResult>;
   /** §6/§28.7 — subscribe to the epic-promotion confirm-first preview (main → renderer). Returns unsubscribe. */
   onEpicPromotionPreview(
     cb: (preview: { repoKey: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }) => void,

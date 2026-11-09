@@ -55,6 +55,8 @@ const TERMINAL_WIRE_NAMES = {
   flowOnBootstrapError: 'flow:onBootstrapError',
   flowOnAppBootstrapConflict: 'flow:onAppBootstrapConflict',
   flowResolveAppBootstrapConflict: 'flow:resolveAppBootstrapConflict',
+  flowOnAdoptTicketChoice: 'flow:onAdoptTicketChoice',
+  flowResolveAdoptTicket: 'flow:resolveAdoptTicket',
   flowOnEpicPromotionPreview: 'flow:onEpicPromotionPreview',
   flowResolveEpicPromotion: 'flow:resolveEpicPromotion',
   flowGithubRef: 'flow:githubRef',

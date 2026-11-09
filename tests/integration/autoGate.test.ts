@@ -1681,7 +1681,7 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
   return {
     readRunState: () => GATE_RUN,
     resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),
     runPushSideEffect: async () => {},

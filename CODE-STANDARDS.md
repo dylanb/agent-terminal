@@ -152,6 +152,10 @@ side parses** (CWE-78). Instances: paste-breakout sanitization at the injection 
 §23.5 launch target crossing the OS boundary as a distinct env value rather than spliced into a command
 line. When the boundary is a POSIX shell, the enforcement is the shell-quoting rule below.
 
+A `gh` PR, issue or comment body is free text of any length, so it travels on stdin (`--body-file -`, or
+`--input -` for `gh api`), never as an `argv` element: Linux caps one argument at 131,072 bytes. The
+`local/no-gh-body-argv` ESLint rule enforces this over `src/` and `scripts/`.
+
 ## Git in a checked-out repository — `src/main/gitHardening.ts`, never a second copy
 
 A repository's own config can make git run code during an ordinary local command: a planted `core.fsmonitor`
@@ -161,6 +165,9 @@ outranks any repository value. So a new `git` call that runs in a checked-out re
 copy. This is a floor, not complete hardening. Each caller still neutralizes its own command's execution
 surfaces (textconv and external diff, filter and merge drivers, and so on), and a call that reaches the network
 adds protocol and credential hardening on top. Existing callers stay as they are; this rule governs new work.
+The `local/git-hardening` ESLint rule enforces it over `src/`: a call whose first argument is `'git'` must lead
+its argv with a spread of `coreExecHardeningArgs(…)` or `bootstrapProtectedArgs(…)`, directly or through a
+`const` holding one. Each older caller carries a line-level exemption that states its reason.
 
 ## Shell quoting — `src/shared/shellQuote.ts`, never hand-rolled
 
@@ -243,6 +250,16 @@ to `iteration - baseline >= cap` flips the safe direction, so a planted baseline
 (or `NaN` / `±Inf`) makes the backstop **never fire** — unbounded autonomous iteration from one line of
 untrusted YAML. Each layer gets its own RED test: the reader over the hostile numeric family (`-1`, `NaN`,
 `±Inf`, non-integer), the decision over the relational violation.
+
+## A GitHub read checks that the answer is the one it asked for
+
+`gh` answers whatever its arguments resolve to: a redirected repository, a renamed one, or a default `--repo`
+the caller did not intend. So a read of one GitHub object (a pull request, an issue, a comment) checks the
+answer's identity before using any field of it: the number it asked for, and a URL in the repository it asked.
+An answer that fails either check is refused with a reason naming what was asked, never read as a near miss.
+The parser takes what was asked as a parameter, so the check cannot be skipped by a caller. The pattern to copy
+is `parseGitHubPullRequest` in `src/main/githubPullRequest.ts`, which also refuses a state, a branch or a
+closing ticket it cannot read. Existing reads stay as they are; this rule governs new work.
 
 ## An agent-produced artifact contract — one vocabulary, a minimal predicate, a self-check
 
@@ -458,6 +475,16 @@ deleted and its PR closed regardless of `on_conflict`, because the policy was co
 that *asked*). The confirm-first rule for hard-to-reverse and outward-facing actions stands on top of this,
 not instead of it.
 
+## An outward side effect that writes more than once runs every refusal before its first write
+
+A gate effect that makes several outward writes (a push, then a PR, then a comment) decides every refusal it
+can before it makes the first one: the state of the branch on GitHub, whether its PR exists, whether the
+comment fits. A refusal discovered between two writes leaves a half-published result on GitHub that the next
+attempt must reconcile, and the operator sees a partial outcome nothing in the app named. Read what the
+refusals need once, in the check phase, and have the write phase use that answer instead of reading it again.
+A write can still fail on its own; that failure is reported, and a retry finds the earlier writes and continues
+from them. `publish-pr-review` (`src/main/publishPrReview.ts`) is the reference.
+
 ## Every entry in the run log must be true
 
 The §25 audit log is read afterwards as a statement of fact — "we showed a confirmation", "we skipped this
@@ -533,6 +560,16 @@ ceiling, and a **worker that cannot tear down**. A worker-teardown timeout belon
 cannot absorb it: Playwright reports `1 error was not a part of any test` and exits non-zero with every test
 green. Generally: when a shared fixture is expensive and only *some* tests can use it, make it opt-out and
 pin the opt-out.
+
+## An e2e test that checks what the screen shows gets there by pressing the control
+
+When an e2e test asserts what the UI shows after an action, it takes that action through the UI: it presses
+the control, types into the field, picks the option. Calling the preload API directly (`window.flow.*`,
+`window.term.*`) skips the renderer's own path from the press to the repaint, so the test can pass while the
+control is broken, or fail because the screen was never told to repaint. The Restart test in `app.spec.ts`
+flaked for exactly that reason until it pressed the strip's Advance control. Calling the API remains fine for
+setup the assertion does not depend on, such as bringing a run to the step under test. Existing tests stay
+as they are; this rule governs new work.
 
 ## Test runs own their GUI windows through cleanup
 

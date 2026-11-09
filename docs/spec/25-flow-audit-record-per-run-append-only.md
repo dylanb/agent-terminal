@@ -26,7 +26,7 @@ A header document, then one `---`-delimited document per event, so appending an 
 
 ### 25.5 Event vocabulary (D-audit-5)
 
-The vocabulary is the `AuditEvent` union in `src/shared/audit.ts`. Ticket/PR numbers come only from resolved inputs and the loop engine's run state (§25.7). A §27.9 gate-decision `command` entry the engine decided carries an engine-decided mark; one without it was decided by a human. An `auto` halt records every reason that holds (§27.9.1 N9b.9).
+The vocabulary is the `AuditEvent` union in `src/shared/audit.ts`. Ticket/PR numbers come only from resolved inputs and the loop engine's run state (§25.7). A §27.9 gate-decision `command` entry the engine decided carries an engine-decided mark; one without it was decided by a human. An `auto` halt records every reason that holds (§27.9.1 N9b.9). `ticket.assoc` carries an optional `repo` (`<owner>/<name>`): a run that adopts a pull request (§27.10) records its primary ticket with that ticket's repository, since a head-repository ticket's number can equal one in the base repository; a ticket run's entry has no `repo`, and an entry without it still parses.
 
 ### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
 

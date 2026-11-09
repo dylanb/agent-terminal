@@ -309,3 +309,41 @@ describe('relocation (UI-STANDARDS §3.3)', () => {
     });
   });
 });
+
+describe('an adopting run held for its pull request and primary ticket (#304 AC 24)', () => {
+  const PRIMARY = { repo: 'contributor/fork', number: 177 };
+  const adopted = (over: Partial<Extract<PickupConfirmView, { state: 'proposed' }>> = {}): PickupConfirmView =>
+    proposed({ branch: 'agent-terminal/review-pr-41-1792407818398', pr: 41, ticket: 177, adopted: { recoverable: true, primary: PRIMARY }, ...over });
+  const description = (d: HTMLElement): string =>
+    (d.getAttribute('aria-describedby') ?? '').split(/\s+/).map((id) => modalHost.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
+
+  it('shows the PR and the primary with its repository as text, with nothing to edit, in the dialog’s description', () => {
+    push('/repo', view(adopted()));
+    const d = dialog()!;
+    expect.soft(d.querySelectorAll('input, textarea, select')).toHaveLength(0);
+    expect.soft(description(d)).toMatch(/#41/);
+    expect.soft(description(d)).toMatch(/contributor\/fork#177/);
+    expect.soft(description(d)).not.toMatch(/correct/i);
+    expect.soft(d.ownerDocument.activeElement).toBe(button(d, 'Confirm'));
+  });
+
+  it('confirms the recorded PR and the primary’s number', async () => {
+    push('/repo', view(adopted({ problems: ['Pull request #41 is closed, not open.'] })));
+    const d = dialog()!;
+    expect.soft(d.ownerDocument.activeElement).toBe(button(d, 'Confirm'));
+    button(d, 'Confirm').click();
+    await flush();
+    expect.soft(confirm).toHaveBeenCalledWith('/repo', RUN, 41, 177);
+  });
+
+  it('with no recoverable primary, says so and asks nothing of main on Confirm', async () => {
+    const reason = 'This run’s primary ticket cannot be recovered. Terminate the run and start it again.';
+    push('/repo', view(adopted({ ticket: null, problems: [reason], adopted: { recoverable: false, reason } })));
+    const d = dialog()!;
+    expect.soft(description(d)).toMatch(/cannot be recovered/);
+    button(d, 'Confirm').click();
+    await flush();
+    expect.soft(confirm).not.toHaveBeenCalled();
+    expect.soft(d.querySelector('[role="alert"]')?.textContent).toBe(reason);
+  });
+});
