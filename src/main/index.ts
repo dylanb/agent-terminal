@@ -19,7 +19,7 @@ import {
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
-import { createInjector, DEFER_DEADLINE_MS, type Injector } from './inject';
+import { createInjector, wrapForPaste, DEFER_DEADLINE_MS, type Injector } from './inject';
 import { catalogListResult, listCatalog } from './flowCatalogList';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
@@ -145,6 +145,9 @@ import { MCP_HOOK_REPORT } from '../shared/mcp';
 import { createMcpActions } from './mcpActions';
 import { startedAnswer, terminatedAnswer } from './mcpFlowOutcome';
 import { createSessionTurns, readSessionLaunch } from './mcpSessionTurns';
+import { sessionRecipient } from './mcpSessionProcess';
+import { createPaneInjector } from './mcpPaneInjector';
+import { createRecipientInjector } from './recipientInjector';
 import { isValidClaudeCodeIntegration } from './ipcValidation';
 import { errMsg } from './errno';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
@@ -487,7 +490,7 @@ async function createWindow(): Promise<void> {
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
-  const sessionTurns = createSessionTurns({ launchOf: readSessionLaunch });
+  const sessionTurns = createSessionTurns({ launchOf: readSessionLaunch, recipientOf: (pid, tmux) => sessionRecipient(pid, ptyProcess.pid, tmux)?.identity ?? null });
   const inject: Injector = (text, opts) => {
     sessionTurns.injected(text, { submitted: opts?.submit ?? false });
     writeInjection(text, opts);
@@ -1337,6 +1340,7 @@ async function createWindow(): Promise<void> {
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
   // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.
   ptyProcess.onData((data) => {
+    sessionTurns.cancelInterruptedSends();
     outputGate.send(data);
     shadow.write(data);
   });
@@ -1453,7 +1457,26 @@ async function createWindow(): Promise<void> {
     return list;
   }
   const captureReport = () => captureLastReport(SESSION_ID, store, scanner);
-  deliverMcpTodos = () => sessionTurns.deliverPending(agentActivity === 'quiet', text => inject(text, { submit: true }));
+  deliverMcpTodos = () => sessionTurns.deliverPending(agentActivity === 'quiet', (text, pid, identity, tmux, delivery) => {
+    const onDrop = (reason: string): void => { delivery.finish(); console.error('MCP todo delivery dropped:', reason); };
+    const onInject = (): void => {
+      sessionTurns.injected(text, { submitted: true, sendingSession: pid });
+      suppressor.noteInjection();
+    };
+    let writer: Injector;
+    if (tmux === undefined) {
+      writer = createRecipientInjector({
+        canReceive: delivery.canReceive,
+        paste: data => ptyIo.io.write(wrapForPaste(data, shadow.isBracketedPaste())),
+        write: data => ptyIo.io.write(data), onInject, onDrop,
+      });
+    } else {
+      const recipient = sessionRecipient(pid, ptyProcess.pid, tmux);
+      if (recipient?.identity !== identity || recipient.pane === undefined) { onDrop('the destination pane changed.'); return; }
+      writer = createPaneInjector(tmux, recipient.pane, delivery.canReceive, onInject, onDrop);
+    }
+    writer(text, { submit: true, onComplete: delivery.finish });
+  });
   const mcpActions = createMcpActions({
     todos: todoOperations,
     captureReport: () => {
@@ -1490,7 +1513,7 @@ async function createWindow(): Promise<void> {
   });
   answerMcp = async (request, caller) => {
     if (request.tool !== MCP_HOOK_REPORT) return mcpActions.call(request, caller);
-    if (caller.session !== null) sessionTurns.hook(caller.session, request.args);
+    if (caller.session !== null) sessionTurns.hook(caller.session, request.args, caller.tmux);
     deliverMcpTodos();
     return null;
   };

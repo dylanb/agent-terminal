@@ -15,8 +15,10 @@ let app: ElectronApplication | undefined;
 let page: Page;
 const roots: string[] = [];
 const suspended = new Set<number>();
+const nestedProcesses = new Set<number>();
+const tmuxSockets = new Set<string>();
 const temp = (prefix: string): string => { const p = realpathSync(mkdtempSync(join(tmpdir(), prefix))); roots.push(p); return p; };
-test.afterEach(async () => { for (const pid of suspended) { try { process.kill(pid, 'SIGCONT'); } catch {} } suspended.clear(); await app?.close(); app = undefined; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+test.afterEach(async () => { await app?.evaluate(() => process.getBuiltinModule('node:test').mock.timers.reset()).catch(() => {}); for (const pid of suspended) { try { process.kill(pid, 'SIGCONT'); } catch {} } suspended.clear(); for (const pid of nestedProcesses) { try { process.kill(pid, 'SIGKILL'); } catch {} } nestedProcesses.clear(); for (const socket of tmuxSockets) { try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore' }); } catch {} } tmuxSockets.clear(); await app?.close(); app = undefined; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function machine() {
   const home = temp('mcp-entry-home-'); const appHome = temp('mcp-entry-app-'); const repo = temp('mcp-entry-repo-');
@@ -35,7 +37,7 @@ type Machine = ReturnType<typeof machine>;
 async function type(text: string): Promise<void> {
   await page.locator('.xterm-screen').click(); await page.keyboard.type(text); await page.keyboard.press('Enter');
 }
-async function launch(m: Machine, env: Record<string, string> = {}): Promise<void> {
+async function launch(m: Machine, env: Record<string, string> = {}, command = 'claude'): Promise<void> {
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: m.home, APP_HOME_DIR: m.appHome,
     CLAUDE_CONFIG_DIR: m.config, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', PATH: `${m.binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: m.logFile, ...env } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -46,7 +48,7 @@ async function launch(m: Machine, env: Record<string, string> = {}): Promise<voi
   await page.locator('[data-viewbtn="1"]').click();
   await type(`cd "${m.repo}"`);
   await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start');
-  await type('claude');
+  await type(command);
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'session')).toBe(true);
 }
 
@@ -228,4 +230,220 @@ test('MCP cancellation control: permitting idle delivers an uninterrupted accept
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === readFakeClaudeLog(m.claude.logFile).find(c => c.event === 'held')?.promptId)).toBe(true);
   await idle();
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === sent.state.todos[0].text).length).toBe(1);
+});
+
+for (const nested of [false, true]) {
+  test(`MCP recipient interruption: ${nested ? 'outer nested terminal' : 'caller'} restored before idle cannot revive the send`, { tag: '@ownapp' }, async () => {
+    const m = machine();
+    await launch(m, { APP_QUIET_MS: '1000000' }, nested ? "script -q -c 'exec claude' /dev/null" : 'claude');
+    await freezeTime();
+    const sent = await beginSend(m, 'todo-1');
+    expect(sent.result.error).toBe(false);
+    const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+    rmSync(m.hold);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+    const stopped = nested ? Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(accepted.pid)], { encoding: 'utf8' }).trim()) : accepted.pid;
+    if (nested) { nestedProcesses.add(stopped); nestedProcesses.add(accepted.pid); }
+    if (nested) expect(execFileSync('ps', ['-o', 'args=', '-p', String(stopped)], { encoding: 'utf8' })).toContain('script -q');
+    suspended.add(stopped);
+    process.kill(stopped, 'SIGSTOP');
+    const barrier = join(m.home, 'returned-to-shell');
+    await type(`printf ready > '${barrier}'`);
+    await expect.poll(() => existsSync(barrier)).toBe(true);
+    await type('fg');
+    await expect.poll(() => {
+      const [state, group, foreground] = execFileSync('ps', ['-o', 'stat=,pgid=,tpgid=', '-p', String(stopped)], { encoding: 'utf8' }).trim().split(/\s+/);
+      return !state.startsWith('T') && group === foreground;
+    }).toBe(true);
+    await idle();
+    await prompt(m, 'after restoration barrier');
+    expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === sent.state.todos[0].text)).toEqual([]);
+  });
+}
+
+test('MCP nested control: an uninterrupted nested caller receives its accepted send', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  await launch(m, { APP_QUIET_MS: '1000000' }, "script -q -c 'exec claude' /dev/null");
+  await freezeTime();
+  const sent = await beginSend(m, 'todo-1');
+  expect(sent.result.error).toBe(false);
+  const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+  nestedProcesses.add(accepted.pid);
+  nestedProcesses.add(Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(accepted.pid)], { encoding: 'utf8' }).trim()));
+  rmSync(m.hold);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+  await idle();
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === sent.state.todos[0].text).length).toBe(1);
+});
+
+for (const switchPane of [false, true]) {
+  test(`MCP tmux recipient: ${switchPane ? 'switching panes permanently cancels' : 'an uninterrupted pane receives'} the accepted send`, { tag: '@ownapp' }, async () => {
+    const m = machine();
+    const socket = join(m.home, 'tmux.sock');
+    tmuxSockets.add(socket);
+    const leaked = join(m.home, 'unexpected-pane-delivery');
+    const barrier = join(m.home, 'pane-barrier');
+    const items = distinctTodos(m.repo, ['active']);
+    items[0].text = switchPane ? `printf leaked > '${leaked}'` : 'first line\nsecond line \x1b[201~end';
+    writeFileSync(join(m.repo, '.agent-terminal/todos.json'), JSON.stringify(items));
+    await launch(m, { APP_QUIET_MS: '1000000' }, `tmux -f /dev/null -S '${socket}' new-session -s send 'exec claude'`);
+    await freezeTime();
+    const sent = await beginSend(m, items[0].id);
+    expect(sent.result.error).toBe(false);
+    const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+    rmSync(m.hold);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+    const tmux = (...args: string[]) => execFileSync('tmux', ['-S', socket, ...args], { encoding: 'utf8' });
+    if (switchPane) {
+      tmux('split-window', '-d', '-t', 'send:0', 'exec bash --noprofile --norc');
+      tmux('select-pane', '-t', 'send:0.1');
+      await type(`printf ready > '${barrier}'`);
+      await expect.poll(() => existsSync(barrier)).toBe(true);
+      await page.evaluate(() => {
+        const probe = window as typeof window & { cancellationEcho?: string };
+        probe.cancellationEcho = '';
+        window.term.onData(data => { probe.cancellationEcho += data; });
+      });
+      await idle();
+      rmSync(barrier);
+      await type(`printf checked > '${barrier}'`);
+      await expect.poll(() => existsSync(barrier)).toBe(true);
+      expect.soft(existsSync(leaked)).toBe(false);
+      expect.soft(await page.evaluate(() => (window as typeof window & { cancellationEcho?: string }).cancellationEcho)).not.toContain('leaked');
+      tmux('select-pane', '-t', 'send:0.0');
+      await idle();
+      await prompt(m, 'original pane restored barrier');
+      expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === items[0].text)).toEqual([]);
+    } else {
+      await idle();
+      await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === 'first line\nsecond line end').length).toBe(1);
+    }
+  });
+}
+
+test('MCP tmux recipient: an interactive popup cannot receive the caller pane’s accepted send', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const socket = join(m.home, 'tmux.sock');
+  tmuxSockets.add(socket);
+  const leaked = join(m.home, 'unexpected-popup-delivery');
+  const barrier = join(m.home, 'popup-barrier');
+  const items = distinctTodos(m.repo, ['active']);
+  items[0].text = `printf leaked > '${leaked}'`;
+  writeFileSync(join(m.repo, '.agent-terminal/todos.json'), JSON.stringify(items));
+  await launch(m, { APP_QUIET_MS: '1000000' }, `tmux -f /dev/null -S '${socket}' new-session -s send 'exec claude'`);
+  await freezeTime();
+  const sent = await beginSend(m, items[0].id);
+  expect(sent.result.error).toBe(false);
+  const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+  rmSync(m.hold);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+  execFileSync('tmux', ['-S', socket, 'bind-key', '-n', 'F12', 'display-popup', '-E', 'exec bash --noprofile --norc']);
+  await page.keyboard.press('F12');
+  await type(`printf ready > '${barrier}'`);
+  await expect.poll(() => existsSync(barrier)).toBe(true);
+  await idle();
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === items[0].text).length).toBe(1);
+  rmSync(barrier);
+  await type(`printf checked > '${barrier}'`);
+  await expect.poll(() => existsSync(barrier)).toBe(true);
+  expect.soft(existsSync(leaked)).toBe(false);
+  execFileSync('tmux', ['-S', socket, 'display-popup', '-C']);
+  await idle();
+  await prompt(m, 'popup closed barrier');
+  expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === items[0].text)).toHaveLength(1);
+});
+
+test('MCP tmux recipient: a command prompt cannot receive the caller pane’s accepted send', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const socket = join(m.home, 'tmux.sock');
+  tmuxSockets.add(socket);
+  const leaked = join(m.home, 'unexpected-command-delivery');
+  const items = distinctTodos(m.repo, ['active']);
+  items[0].text = `run-shell "printf leaked > '${leaked}'"`;
+  writeFileSync(join(m.repo, '.agent-terminal/todos.json'), JSON.stringify(items));
+  await launch(m, { APP_QUIET_MS: '1000000' }, `tmux -f /dev/null -S '${socket}' new-session -s send 'exec claude'`);
+  await freezeTime();
+  const sent = await beginSend(m, items[0].id);
+  expect(sent.result.error).toBe(false);
+  const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+  rmSync(m.hold);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+  execFileSync('tmux', ['-S', socket, 'bind-key', '-n', 'F11', 'command-prompt', '-p', 'ROUTE_PROMPT']);
+  await page.keyboard.press('F11');
+  await expect(page.locator('.xterm-rows')).toContainText('ROUTE_PROMPT');
+  await page.evaluate(() => {
+    const probe = window as typeof window & { cancellationEcho?: string };
+    probe.cancellationEcho = '';
+    window.term.onData(data => { probe.cancellationEcho += data; });
+  });
+  await idle();
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === items[0].text).length).toBe(1);
+  expect.soft(existsSync(leaked)).toBe(false);
+  expect.soft(await page.evaluate(() => (window as typeof window & { cancellationEcho?: string }).cancellationEcho)).not.toContain('ROUTE_PROMPT run-shell');
+  await page.keyboard.press('Control+g');
+  await expect(page.locator('.xterm-rows')).not.toContainText('ROUTE_PROMPT');
+  await idle();
+  await prompt(m, 'command prompt closed barrier');
+  expect.soft(existsSync(leaked)).toBe(false);
+  expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === items[0].text)).toHaveLength(1);
+});
+
+test('MCP delayed submit: foreground loss after paste cannot submit a shell draft', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const leaked = join(m.home, 'unexpected-delayed-submit');
+  const barrier = join(m.home, 'delayed-submit-barrier');
+  await launch(m, { APP_QUIET_MS: '1000000', APP_SUBMIT_DELAY_MS: '10000000' });
+  await freezeTime();
+  const sent = await beginSend(m, 'todo-1');
+  expect(sent.result.error).toBe(false);
+  const accepted = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'call' && r.tool === 'todo_send')!;
+  rmSync(m.hold);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === ('promptId' in accepted ? accepted.promptId : ''))).toBe(true);
+  await idle();
+  expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === sent.state.todos[0].text)).toEqual([]);
+  suspended.add(accepted.pid);
+  process.kill(accepted.pid, 'SIGSTOP');
+  await type(`printf ready > '${barrier}'`);
+  await expect.poll(() => existsSync(barrier)).toBe(true);
+  await page.keyboard.type(`printf leaked > '${leaked}'`);
+  await tick(10000000);
+  await page.keyboard.press('Control+u');
+  rmSync(barrier);
+  await type(`printf checked > '${barrier}'`);
+  await expect.poll(() => existsSync(barrier)).toBe(true);
+  expect(existsSync(leaked)).toBe(false);
+});
+
+test('MCP failed paste: a later identical human prompt remains human-started', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const socket = join(m.home, 'tmux.sock');
+  tmuxSockets.add(socket);
+  const fail = join(m.home, 'fail-paste');
+  const attempted = join(m.home, 'paste-attempted');
+  const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(m.binDir, 'tmux'), `#!/bin/sh
+for arg do
+  if [ "$arg" = load-buffer ] && [ -e "$MCP_TEST_TMUX_FAIL" ]; then
+    printf attempted > "$MCP_TEST_TMUX_ATTEMPTED"
+    exit 1
+  fi
+done
+exec "$MCP_TEST_REAL_TMUX" "$@"
+`, { mode: 0o700 });
+  await launch(m, { APP_QUIET_MS: '1000000', MCP_TEST_TMUX_FAIL: fail, MCP_TEST_TMUX_ATTEMPTED: attempted, MCP_TEST_REAL_TMUX: realTmux }, `tmux -f /dev/null -S '${socket}' new-session -s send 'exec claude'`);
+  await freezeTime();
+  const state = await current(m);
+  const todoText = `mcp start ${JSON.stringify({ window: state.window.id, repo: m.repo })}`;
+  await page.evaluate(({ repo, text }) => window.monitor.todoUpdate(repo, 'todo-1', text), { repo: m.repo, text: todoText });
+  const sent = await beginSend(m, 'todo-1');
+  expect(sent.result.error).toBe(false);
+  writeFileSync(fail, 'fail');
+  rmSync(m.hold);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'stop' && r.promptId === readFakeClaudeLog(m.claude.logFile).find(c => c.event === 'held')?.promptId)).toBe(true);
+  await idle();
+  await expect.poll(() => existsSync(attempted)).toBe(true);
+  expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === todoText)).toEqual([]);
+  rmSync(fail);
+  const result = answer(await prompt(m, todoText));
+  expect(result.error, result.message).toBe(false);
 });

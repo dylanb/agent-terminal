@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { stripPasteBreakout } from '../shared/paste';
+import type { McpTmux } from '../shared/mcpBridge';
 import type { TurnOrigin } from '../shared/turnOrigin';
 
 /** How a Claude Code session was launched, as its command line shows: `print` for `-p`/`--print`, `launchPrompt` for
@@ -14,13 +15,14 @@ export interface SessionLaunch {
 /** The turns of the Claude Code sessions in the window's terminal, each session named by its process id. */
 export interface SessionTurns {
   /** A Claude Code hook's report: `input` is what Claude Code wrote to the hook's stdin. */
-  hook(session: number, input: unknown): void;
+  hook(session: number, input: unknown, tmux?: McpTmux): void;
   /** Text main's injector wrote to the terminal; `submitted` when it also pressed Enter, rather than leaving the text
    *  for the operator to submit (an Insert). */
-  injected(text: string, opts?: { submitted: boolean }): void;
+  injected(text: string, opts?: { submitted: boolean; sendingSession?: number }): void;
   origin(session: number): Promise<TurnOrigin>;
   acceptSend(session: number, todo: { id: string; text: string }, persist?: () => void): string | null;
-  deliverPending(idle: boolean, inject: (text: string) => void): void;
+  cancelInterruptedSends(): void;
+  deliverPending(idle: boolean, inject: (text: string, session: number, recipient: string, tmux: McpTmux | undefined, delivery: { canReceive(): boolean; finish(): void }) => void): void;
 }
 
 /** `injected`: the prompt matched text the window injected; `unmatched`: an Insert was waiting and the prompt
@@ -36,9 +38,11 @@ interface Turn {
   /** The injection count when it started, so an injection made during it is told apart. */
   injectionsAtStart: number;
   match: PromptMatch;
+  sentTodoId?: string;
 }
 
 interface Session {
+  tmux?: McpTmux;
   transcriptPath: string | null;
   /** `unknown` when Claude Code's latest report could not be read, so the turn it reported is not known. */
   turn: Turn | 'unknown' | null;
@@ -48,7 +52,7 @@ interface Session {
   /** The injections this session's prompts have used up. Each session keeps its own, so another session's prompt
    *  never uses up text meant for this one. */
   used: Set<number>;
-  pending?: { id: string; text: string; turn: Turn; ready: boolean };
+  pending?: { id: string; text: string; turn: Turn; ready: boolean; recipient: string; delivering?: boolean };
 }
 
 interface Injection {
@@ -132,7 +136,7 @@ function transcriptOrigin(transcript: string, promptId: string, prompt: string):
  *  reported within its own turn, and an Insert, which only the operator submits, is never dropped. */
 const MAX_WAITING_SUBMITTED = 64;
 
-export function createSessionTurns(deps: { launchOf: (session: number) => Promise<SessionLaunch | null> }): SessionTurns {
+export function createSessionTurns(deps: { launchOf: (session: number) => Promise<SessionLaunch | null>; recipientOf?: (session: number, tmux?: McpTmux) => string | null }): SessionTurns {
   const sessions = new Map<number, Session>();
   let injections: Injection[] = [];
   let count = 0;
@@ -173,30 +177,45 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
     if (injection !== undefined) use(session, injection);
   };
 
+  const recipientOf = deps.recipientOf ?? (() => 'session');
+  const cancelInterruptedSends = (): void => {
+    for (const [id, session] of sessions) {
+      if (session.pending && recipientOf(id, session.tmux) !== session.pending.recipient) delete session.pending;
+    }
+  };
+
   return {
+    cancelInterruptedSends,
     acceptSend(id, todo, persist) {
       const session = sessions.get(id);
       if (!session || !session.turn || session.turn === 'unknown') return 'the calling turn is no longer open.';
-      if (session.pending) return `todo ${JSON.stringify(session.pending.id)} is already waiting for this turn to end.`;
+      if (session.turn.sentTodoId !== undefined) return `todo ${JSON.stringify(session.turn.sentTodoId)} was already accepted in this turn.`;
+      const recipient = recipientOf(id, session.tmux);
+      if (recipient === null) return 'the calling session is no longer the terminal recipient.';
       persist?.();
-      session.pending = { ...todo, turn: session.turn, ready: false };
+      session.turn.sentTodoId = todo.id;
+      session.pending = { ...todo, turn: session.turn, ready: false, recipient };
       return null;
     },
     deliverPending(idle, inject) {
-      if (!idle) return;
-      for (const session of sessions.values()) {
-        if (!session.pending?.ready || session.turn !== null) continue;
-        const { text } = session.pending;
-        delete session.pending;
-        inject(text);
+      cancelInterruptedSends();
+      for (const [id, session] of sessions) {
+        if (!idle || !session.pending?.ready || session.pending.delivering || session.turn !== null) continue;
+        const pending = session.pending;
+        pending.delivering = true;
+        inject(pending.text, id, pending.recipient, session.tmux, {
+          canReceive: () => session.pending === pending && recipientOf(id, session.tmux) === pending.recipient,
+          finish: () => { if (session.pending === pending) delete session.pending; },
+        });
       }
     },
-    hook(id, input) {
+    hook(id, input, tmux) {
       const report = parseHookReport(input);
       if (report === 'ignored') return;
       if (report !== null && report.event === 'SessionStart' && report.source === 'startup') sessions.set(id, fresh());
       const session = sessions.get(id) ?? fresh();
       sessions.set(id, session);
+      session.tmux = tmux;
       if (report === null) {
         session.turn = 'unknown';
         return;
@@ -213,6 +232,7 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
           if (report.source === 'compact') takeCommand(session, (text) => text === '/compact' || text.startsWith('/compact '));
           return;
         case 'SessionEnd':
+          delete session.pending;
           session.turn = null;
           if (report.reason !== 'clear') {
             sessions.delete(id);
@@ -230,6 +250,7 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
             if (match === 'injected' || (match === 'unmatched' && open.match === 'none')) open.match = match;
             return;
           }
+          delete session.pending;
           session.turns += 1;
           session.turn = { promptId: report.promptId, prompt: promptText(report.prompt), ordinal: session.turns, injectionsAtStart: count, match };
           return;
@@ -241,6 +262,9 @@ export function createSessionTurns(deps: { launchOf: (session: number) => Promis
     injected(text, opts) {
       const injection = promptText(text);
       if (injection === '') return;
+      for (const [id, session] of sessions) {
+        if (session.turn === null && id !== opts?.sendingSession) delete session.pending;
+      }
       count += 1;
       injections.push({ at: count, text: injection, submitted: opts?.submitted ?? false });
       prune();

@@ -394,7 +394,7 @@ test('a gate that stops for the operator asks the agent why: a `human` gate says
     .poll(() => injectedLog(repo), { timeout: UI_MS })
     .toContain('Why does this gate need me?')
     .catch(failWithDiagnosis(home, repo));
-  expect(injectedLog(repo)).toMatch(/the operator's by design/);
+  await expect.poll(() => injectedLog(repo), { timeout: UI_MS }).toMatch(/the operator's by design/);
   expect(flowState(repo)).toMatch(/^step: green$/m);
 });
 

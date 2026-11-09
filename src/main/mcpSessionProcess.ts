@@ -1,5 +1,8 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
 import { MCP_LAUNCHER_NAME } from '../shared/mcp';
+import type { McpTmux } from '../shared/mcpBridge';
+import { runTmux } from './mcpTmuxCommand';
+import { terminalRecipient, type TerminalRecipient } from './mcpTerminalRoute';
 
 export interface ProcessEntry {
   ppid: number;
@@ -32,6 +35,20 @@ export function readProcessEntry(pid: number): ProcessEntry | null {
     const line = execFileSync('ps', ['-o', 'ppid=', '-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: PS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] });
     const match = /^\s*(\d+)\s+(.*)$/s.exec(line.trimEnd());
     return match ? { ppid: Number(match[1]), args: match[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function sessionRecipient(pid: number, shellPid: number, tmux?: McpTmux): TerminalRecipient | null {
+  if (![pid, shellPid].every(id => Number.isSafeInteger(id) && id > 1)) return null;
+  try {
+    const options: ExecFileSyncOptionsWithStringEncoding = { encoding: 'utf8', timeout: PS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] };
+    const processes = execFileSync('ps', ['-axo', 'pid=,ppid=,stat=,pgid=,tpgid=,tty='], options);
+    const clients = tmux === undefined ? '' : runTmux(tmux, [
+      'list-clients', '-F', '#{client_pid} #{pane_pid} #{pane_in_mode} #{client_readonly} #{client_key_table} #{synchronize-panes} #{pane_id}',
+    ]);
+    return terminalRecipient(processes, pid, shellPid, clients);
   } catch {
     return null;
   }

@@ -1,7 +1,7 @@
 // The agent-terminal MCP server and its Claude Code hooks, run by the installed launcher in plain-Node mode.
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { MCP_HOOK_ARG, MCP_HOOK_REPORT, MCP_WINDOW_ENV, mcpAckTimeoutMs } from '../shared/mcp';
-import type { AckTimers } from '../shared/mcpBridge';
+import { isMcpTmux, type AckTimers } from '../shared/mcpBridge';
 import { errMsg } from './errno';
 import { mcpBuildId } from './mcpBuildId';
 import { createMcpServer } from './mcpServer';
@@ -19,7 +19,11 @@ function ownBuild(): string {
 const endpoint = process.env[MCP_WINDOW_ENV]?.trim() || null;
 const ackTimeoutMs = mcpAckTimeoutMs(process.env);
 const timers: AckTimers<NodeJS.Timeout> = { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle) };
-const caller = () => ({ session: claudeSessionOf(process.ppid, readProcessEntry) });
+const tmux = { socket: /^(.*),\d+,\d+$/.exec(process.env.TMUX ?? '')?.[1], searchPath: process.env.PATH };
+const caller = () => ({
+  session: claudeSessionOf(process.ppid, readProcessEntry),
+  ...(isMcpTmux(tmux) ? { tmux } : {}),
+});
 
 /** Hands the window Claude Code's hook input. Claude Code waits on the hook, so the window, which answers a report
  *  as soon as it reads it, gets the ack timeout for the whole exchange; the hook always exits 0 and prints nothing. */

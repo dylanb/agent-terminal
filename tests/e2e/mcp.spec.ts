@@ -526,6 +526,7 @@ async function readInSession(m: Machine): Promise<ReadState | undefined> {
   const callsBefore = readCalls(session()).length;
   await typeCommand('mcp read_state {}');
   await expect.poll(stops).toBe(turnsBefore + 1);
+  await expect.poll(() => readCalls(session())[callsBefore]?.result).toBeDefined();
   return resultState(readCalls(session())[callsBefore]?.result) as ReadState | undefined;
 }
 

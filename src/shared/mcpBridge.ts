@@ -9,6 +9,7 @@ export interface WindowRequest {
 /** The Claude Code session a call comes from: its process id, or null when the server could not tell. */
 export interface McpCaller {
   session: number | null;
+  tmux?: McpTmux;
 }
 
 /** A window's answer to a call it did not carry out as asked: a `refusal` names one of the ticket's refusal
@@ -54,6 +55,21 @@ export function encodeBridgeMessage(message: BridgeMessage): string {
   return `${JSON.stringify(message)}\n`;
 }
 
+export interface McpTmux {
+  socket: string;
+  searchPath: string;
+}
+
+export function isMcpTmux(value: unknown): value is McpTmux {
+  return isRecord(value) && typeof value.socket === 'string' && value.socket.startsWith('/') && !value.socket.includes('\0')
+    && typeof value.searchPath === 'string' && !value.searchPath.includes('\0');
+}
+
+const callerOf = (value: unknown): McpCaller => ({
+  session: sessionOf(value),
+  ...(isRecord(value) && isMcpTmux(value.tmux) ? { tmux: { socket: value.tmux.socket, searchPath: value.tmux.searchPath } } : {}),
+});
+
 /** A caller whose session is not a process id is judged as one the server could not tell. */
 const sessionOf = (caller: unknown): number | null =>
   isRecord(caller) && typeof caller.session === 'number' && Number.isSafeInteger(caller.session) && caller.session > 0 ? caller.session : null;
@@ -76,7 +92,7 @@ export function parseBridgeMessage(line: string): BridgeMessage | null {
       return { type: 'other-build' };
     case 'call':
       return isRecord(parsed.request) && typeof parsed.request.tool === 'string'
-        ? { type: 'call', request: { tool: parsed.request.tool, args: parsed.request.args }, caller: { session: sessionOf(parsed.caller) } }
+        ? { type: 'call', request: { tool: parsed.request.tool, args: parsed.request.args }, caller: callerOf(parsed.caller) }
         : null;
     case 'result':
       return { type: 'result', value: parsed.value };
