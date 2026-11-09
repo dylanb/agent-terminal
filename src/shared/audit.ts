@@ -3,6 +3,7 @@
 // tests, and a future viewer so the format and its meaning cannot drift (CLAUDE.md src/shared rule).
 
 import yaml from 'js-yaml';
+import type { TurnOrigin } from './turnOrigin';
 import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
 import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
@@ -20,7 +21,21 @@ export interface AuditHeader {
  *  view (which is a benign malformed-request view, not a recorded run state). */
 export type AuditFlowStatus = Exclude<FlowStatus, 'error'>;
 
-export type AuditEvent =
+export interface McpAuditCall {
+  callId: string;
+  tool: string;
+  outcome: string;
+  origin: TurnOrigin;
+  promptId?: string;
+  reason?: string;
+}
+
+export type AuditEvent = AuditEventBody & { mcp?: McpAuditCall };
+
+type AuditEventBody =
+  | { ts: string; type: 'mcp.prompt'; id: string; text: string }
+  | { ts: string; type: 'mcp.call'; mcp: McpAuditCall }
+  | { ts: string; type: 'mcp.delivery'; sendId: string; outcome: 'submitted' | 'dropped'; reason?: string }
   | { ts: string; type: 'flow.started'; step: string }
   | { ts: string; type: 'flow.status'; from: AuditFlowStatus; to: AuditFlowStatus }
   | { ts: string; type: 'step.entered'; step: string }
@@ -100,8 +115,11 @@ const flowStatus: FieldCheck = (value) => value === 'not_started' || value === '
 
 // Each event's required fields are checked here before replay, including syntactically valid partial appends.
 const eventFields: {
-  [K in AuditEvent['type']]: Record<Exclude<keyof Extract<AuditEvent, { type: K }>, 'ts' | 'type'>, FieldCheck>
+  [K in AuditEvent['type']]: Record<Exclude<keyof Extract<AuditEvent, { type: K }>, 'ts' | 'type' | 'mcp'>, FieldCheck>
 } = {
+  'mcp.prompt': { id: textField, text: textField },
+  'mcp.call': {},
+  'mcp.delivery': { sendId: textField, outcome: value => value === 'submitted' || value === 'dropped', reason: value => value === undefined || textField(value) },
   'flow.started': { step: textField },
   'flow.status': { from: flowStatus, to: flowStatus },
   'step.entered': { step: textField },
@@ -128,6 +146,15 @@ function isAuditEvent(value: unknown): value is AuditEvent {
   if (!value || typeof value !== 'object') return false;
   const doc = value as Record<string, unknown>;
   if (!textField(doc.ts) || typeof doc.type !== 'string' || !Object.hasOwn(eventFields, doc.type)) return false;
+  if (doc.type === 'mcp.call' || doc.mcp !== undefined) {
+    if (!doc.mcp || typeof doc.mcp !== 'object') return false;
+    const call = doc.mcp as Record<string, unknown>;
+    if (![call.callId, call.tool, call.outcome].every(textField)
+      || typeof call.origin !== 'string' || !['human', 'not-human', 'undetermined'].includes(call.origin)
+      || (call.promptId !== undefined && !textField(call.promptId))
+      || (call.reason !== undefined && !textField(call.reason))) return false;
+  }
+  if (doc.type === 'mcp.delivery' && doc.outcome === 'dropped' && !textField(doc.reason)) return false;
   return Object.entries(eventFields[doc.type as AuditEvent['type']]).every(([field, check]) => check(doc[field]));
 }
 

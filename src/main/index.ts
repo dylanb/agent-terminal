@@ -99,6 +99,7 @@ import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
 import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
+import { createAuditObservation } from './auditObservation';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
@@ -839,6 +840,10 @@ async function createWindow(): Promise<void> {
       return load.ok ? load.definition.name : null;
     },
   });
+  const auditObservation = createAuditObservation({
+    observe: () => audit.recordPrompts(sessionTurns.discoverHumanPrompts()),
+    cancel: () => sessionTurns.cancelAuditDiscovery(),
+  });
   const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
 
   const trustedAppBootstraps = createTrustedPickups({
@@ -1104,7 +1109,7 @@ async function createWindow(): Promise<void> {
       pickupRecordPredatesRun.add(repoKey);
     },
     endRun: composeLifecycleEndRun(autoGate),
-    recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    recordTerminate: (repoKey) => { void recordHumanPrompts(); audit.recordTerminate(repoKey); },
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
@@ -1340,6 +1345,7 @@ async function createWindow(): Promise<void> {
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
   // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.
   ptyProcess.onData((data) => {
+    void recordHumanPrompts();
     sessionTurns.cancelInterruptedSends();
     outputGate.send(data);
     shadow.write(data);
@@ -1458,7 +1464,7 @@ async function createWindow(): Promise<void> {
   }
   const captureReport = () => captureLastReport(SESSION_ID, store, scanner);
   deliverMcpTodos = () => sessionTurns.deliverPending(agentActivity === 'quiet', (text, pid, identity, tmux, delivery) => {
-    const onDrop = (reason: string): void => { delivery.finish(); console.error('MCP todo delivery dropped:', reason); };
+    const onDrop = (reason: string): void => { delivery.finish(reason); console.error('MCP todo delivery dropped:', reason); };
     const onInject = (): void => {
       sessionTurns.injected(text, { submitted: true, sendingSession: pid });
       suppressor.noteInjection();
@@ -1484,9 +1490,10 @@ async function createWindow(): Promise<void> {
       if (events.length) send(CH.captureChanged, { sessionId: SESSION_ID, events });
       return events;
     },
-    sendTodo: (caller, todo, persist) => caller.session === null ? 'the calling session is unknown.' : sessionTurns.acceptSend(caller.session, todo, persist),
+    sendTodo: (caller, todo, persist) => caller.session === null ? 'the calling session is unknown.' : sessionTurns.acceptSend(caller.session, todo, persist, audit.deliveryObserver()),
     windowId,
     originOf: (caller) => (caller.session === null ? Promise.resolve('undetermined') : sessionTurns.origin(caller.session)),
+    originObserved: (origin, caller) => audit.observeMcpOrigin(origin, caller.session === null ? null : sessionTurns.prompt(caller.session)),
     readState: readMcpWindowState,
     readGateState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
     readActionState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
@@ -1511,9 +1518,26 @@ async function createWindow(): Promise<void> {
       return terminatedAnswer(result);
     },
   });
+  function recordHumanPrompts(): Promise<void> {
+    return auditObservation.observe();
+  }
   answerMcp = async (request, caller) => {
-    if (request.tool !== MCP_HOOK_REPORT) return mcpActions.call(request, caller);
-    if (caller.session !== null) sessionTurns.hook(caller.session, request.args, caller.tmux);
+    const repo = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
+    if (request.tool !== MCP_HOOK_REPORT) {
+      const origin = caller.session === null ? 'undetermined' : await sessionTurns.origin(caller.session);
+      const prompt = caller.session === null ? null : sessionTurns.prompt(caller.session);
+      return audit.recordMcpCall(repo, request.tool, origin, prompt, () => mcpActions.call(request, caller));
+    }
+    if (caller.session !== null) {
+      void recordHumanPrompts();
+      const previous = sessionTurns.prompt(caller.session);
+      sessionTurns.hook(caller.session, request.args, caller.tmux);
+      const prompt = sessionTurns.prompt(caller.session);
+      if (previous && previous.id !== prompt?.id) audit.forgetPrompt(previous);
+      if (prompt) audit.beginPrompt(repo, prompt);
+      await sessionTurns.origin(caller.session);
+      void recordHumanPrompts();
+    }
     deliverMcpTodos();
     return null;
   };
@@ -1797,11 +1821,23 @@ async function createWindow(): Promise<void> {
     },
   );
 
+  let auditClose: Promise<void> | undefined;
+  let auditClosed = false;
+  win.on('close', event => {
+    if (auditClosed) return;
+    event.preventDefault();
+    auditClose ??= auditObservation.close().finally(() => {
+      auditClosed = true;
+      win.close();
+    });
+  });
+
   win.on('closed', () => {
     // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
       unregisterController,
+      () => sessionTurns.cancelPending('the terminal closed.'),
       closeMcpBridge,
       () => disposeIpc(),
       () => ptyProcess.kill(),

@@ -1,3 +1,17 @@
+## #322 — Claude Code can operate its own window through MCP
+
+§30 (new), v2.227: explicit user decision 1 extends the §27.9.1 human-decided gate to MCP calls during a
+human-started turn. Explicit user decision 2 extends §25 with full human prompts and attributed MCP calls
+only while a run is open, plus distinct send delivery outcomes. Existing action events carry provenance
+without duplicate call events; UI actions remain distinguishable and legacy streams remain readable.
+
+The 2026-11-07 install amendment permits explicit Install/Remove actions to register the integration's own
+user-scope server and hooks in Claude Code configuration, preserving other entries. It supersedes the original
+no-user-config-write restriction; repository and `.gitignore` writes remain forbidden. The accepted limits
+are one pending send per turn, crash-only loss before a prompt is recorded, current-turn attribution of
+background calls, and treating nested terminals as the window's terminal. Codex and other-window summaries
+remain in #323 and #324. No §5 shell-launch amendment is made.
+
 ## Stalled loop turns resume from the gate question
 
 §27.12/§27.9.1 N9b.10 (operator decision 2026-11-06): a work turn that started a long test run in the background and then waited for it left its screen still, and the stall watchdog stopped the turn after ten minutes. The *why does this gate need me?* question that followed told the agent to write no done-file, so the turn could not finish when its run came back, although §27.12 makes such a stall resumable. Each such stop needed a Retry, which restarted the whole turn. Now:

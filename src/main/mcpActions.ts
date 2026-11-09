@@ -24,6 +24,7 @@ export interface McpActionDeps {
   sendTodo?: (caller: McpCaller, todo: { id: string; text: string }, persist: () => void) => string | null;
   windowId: string;
   originOf(caller: McpCaller): Promise<TurnOrigin>;
+  originObserved?: (origin: TurnOrigin, caller: McpCaller) => void;
   readState(): Promise<McpWindowState>;
   readGateState(): Pick<McpWindowState, 'repo' | 'gate'>;
   readActionState?: () => McpWindowState;
@@ -125,6 +126,11 @@ interface ActionArguments {
 
 /** The window's answer to a tool call, which the server turns into the call's tool result. */
 export function createMcpActions(deps: McpActionDeps): { call(request: WindowRequest, caller: McpCaller): Promise<unknown> } {
+  const originOf = async (caller: McpCaller): Promise<TurnOrigin> => {
+    const origin = await deps.originOf(caller);
+    deps.originObserved?.(origin, caller);
+    return origin;
+  };
   const humanApprove = composeHumanApprove(deps.gate.autoGate, deps.gate);
 
   const checkInputs = (args: ActionArguments, action: 'start' | 'approve'): WindowAnswerFailure | null => {
@@ -143,7 +149,7 @@ export function createMcpActions(deps: McpActionDeps): { call(request: WindowReq
   };
   const act = async (tool: Exclude<McpToolName, 'read_state' | 'approve' | TodoTool>, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
-    const origin = await deps.originOf(caller);
+    const origin = await originOf(caller);
     if (origin !== 'human') return ORIGIN_REFUSALS[origin];
     const state = deps.readActionState ? deps.readActionState() : await deps.readState();
     const decidesGate = tool === 'request_changes' || tool === 'redo' || tool === 'polish';
@@ -201,7 +207,7 @@ export function createMcpActions(deps: McpActionDeps): { call(request: WindowReq
 
   const approve = async (args: ActionArguments, caller: McpCaller): Promise<unknown> => {
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}, not ${quote(args.window)}.`);
-    const origin = await deps.originOf(caller);
+    const origin = await originOf(caller);
     if (origin !== 'human') return ORIGIN_REFUSALS[origin];
     const state = deps.readGateState();
     const gate = state.gate;
@@ -241,7 +247,7 @@ export function createMcpActions(deps: McpActionDeps): { call(request: WindowReq
   const todo = async (tool: TodoTool, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
     if (tool === 'todo_send') {
-      const origin = await deps.originOf(caller);
+      const origin = await originOf(caller);
       if (origin !== 'human') return ORIGIN_REFUSALS[origin];
     }
     const state = deps.readActionState ? deps.readActionState() : await deps.readState();

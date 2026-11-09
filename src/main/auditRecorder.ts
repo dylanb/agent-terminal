@@ -5,6 +5,11 @@
 
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import type { TurnOrigin } from '../shared/turnOrigin';
+import { isWindowAnswerFailure } from '../shared/mcpBridge';
+import { gateDecisionKind, type McpAuditCall } from '../shared/audit';
 import yaml from 'js-yaml';
 import {
   auditTimestamp,
@@ -26,6 +31,7 @@ import {
 import { auditFilePath } from './auditPaths';
 import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
+import { confinedRealPath, resolveOwnedDirJail } from './confinedPath';
 
 const POINTER_REL = path.join('.agent-terminal', 'audit-pointer.yaml');
 
@@ -65,7 +71,26 @@ export interface AuditRunStart {
   flow: string;
 }
 
+type AuditPrompt = Extract<AuditEvent, { type: 'mcp.prompt' }>;
+
+interface McpRecording {
+  repo: string;
+  call: McpAuditCall;
+  prompt: AuditPrompt | null;
+  active: boolean;
+  events: { file: string; event: AuditEvent }[];
+  file: string | null;
+}
+
 export interface AuditRecorder {
+  beginPrompt(repo: string, prompt: AuditPrompt): void;
+  forgetPrompt(prompt: AuditPrompt): void;
+  recordPrompt(prompt: AuditPrompt): void;
+  recordPrompts(discovery: Promise<AuditPrompt[]>): Promise<void>;
+  recordMcpCall(repo: string, tool: string, origin: TurnOrigin, prompt: AuditPrompt | null, act: () => Promise<unknown>): Promise<unknown>;
+  observeMcpOrigin(origin: TurnOrigin, prompt: AuditPrompt | null): void;
+  deliveryObserver(): (reason?: string) => void;
+
   recordTransition(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike, start?: AuditRunStart): void;
   /** Record a todo-list mutation, but only while a run is open for the repo (§25.4). */
   recordTodoChange(repoKey: string, before: TodoLike[], after: TodoLike[]): void;
@@ -89,6 +114,71 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
   const { root, now, flowName } = deps;
   const log = deps.log ?? ((m, e): void => console.error(m, e));
   const open = new Map<string, string>();
+  const calls = new AsyncLocalStorage<McpRecording>();
+  const recordedPrompts = new Map<string, Set<string>>();
+  const promptRuns = new Map<string, { repo: string; file: string | null }>();
+  const pendingCalls = new Map<string, Set<object>>();
+  const endings = new Map<string, AuditEvent[]>();
+  const closed = new Set<string>();
+  const confinedFile = (file: string): string => {
+    const jail = resolveOwnedDirJail(root);
+    const resolved = jail === null || !path.isAbsolute(file) ? null : confinedRealPath(jail, file);
+    if (resolved === null) throw new Error('Audit destination is outside its owned root or cannot be resolved.');
+    return resolved;
+  };
+  const writeEvents = (file: string, events: AuditEvent[]): void => {
+    const recorded = recordedPrompts.get(file) ?? new Set<string>();
+    const pending = events.filter(event => event.type !== 'mcp.prompt' || !recorded.has(event.id));
+    if (pending.length === 0) return;
+    appendFileSync(confinedFile(file), pending.map(serializeDoc).join(''));
+    for (const event of pending) if (event.type === 'mcp.prompt') recorded.add(event.id);
+    if (recorded.size) recordedPrompts.set(file, recorded);
+  };
+  const release = (call: McpRecording): void => {
+    if (!call.file) return;
+    const pending = pendingCalls.get(call.file);
+    pending?.delete(call);
+    if (pending?.size === 0) pendingCalls.delete(call.file);
+    safe(() => finishRun(call.file!));
+  };
+  const attach = (call: McpRecording, file: string): void => {
+    if (call.file && call.file !== file) {
+      for (const item of call.events) safe(() => writeEvents(item.file, [item.event]));
+      call.events = [];
+      release(call);
+    }
+    call.file = file;
+    const pending = pendingCalls.get(file) ?? new Set<object>();
+    pending.add(call);
+    pendingCalls.set(file, pending);
+  };
+  const finishRun = (file: string): void => {
+    const ending = endings.get(file);
+    if (!ending || pendingCalls.get(file)?.size) return;
+    endings.delete(file);
+    recordedPrompts.delete(file);
+    writeEvents(file, ending);
+  };
+  const safe = (act: () => void): void => {
+    try { act(); } catch (error) { log('audit MCP recording failed', error); }
+  };
+  const append = (repo: string, file: string, events: AuditEvent[]): void => {
+    const call = calls.getStore();
+    if (call?.active && call.repo === repo) {
+      if (call.file === null) attach(call, file);
+      call.events.push(...events.map(event => ({ file: call.file!, event })));
+    } else writeEvents(file, events);
+  };
+  const recordPromptAt = (repo: string, file: string, prompt: AuditPrompt): void => safe(() => {
+    const recorded = recordedPrompts.get(file) ?? new Set<string>();
+    if (recorded.has(prompt.id)) return;
+    append(repo, file, [prompt]);
+  });
+  const recordPrompt = (prompt: AuditPrompt): void => {
+    const binding = promptRuns.get(prompt.id);
+    if (binding?.file && currentFile(binding.repo) === binding.file) recordPromptAt(binding.repo, binding.file, prompt);
+  };
+
   // Last agent-loop state seen within the current run, for the per-observation diff (§25.5). Reset on
   // a fresh start so a re-run re-records the initial loop status rather than diffing against the prior run.
   const lastLoop = new Map<string, LoopLike>();
@@ -96,9 +186,10 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
   // Append complete event documents to a run file iff one is open for the repo (§25.4); no-op otherwise.
   const appendIfOpen = (repoKey: string, events: AuditEvent[]): void => {
     if (events.length === 0) return;
-    const file = currentFile(repoKey);
+    const context = calls.getStore();
+    const file = context?.active && context.repo === repoKey ? context.file : currentFile(repoKey);
     if (!file) return;
-    appendFileSync(file, events.map(serializeDoc).join(''));
+    append(repoKey, file, events);
   };
 
   const pointerPath = (repoKey: string): string => path.join(repoKey, POINTER_REL);
@@ -114,11 +205,13 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
   const currentFile = (repoKey: string): string | null => {
     const live = open.get(repoKey);
     if (live) return live;
+    if (closed.has(repoKey)) return null;
     try {
       const p = yaml.load(readFileSync(pointerPath(repoKey), 'utf8'));
       if (isRecord(p) && typeof p.file === 'string' && p.file.length > 0) {
-        open.set(repoKey, p.file);
-        return p.file;
+        const file = confinedFile(p.file);
+        open.set(repoKey, file);
+        return file;
       }
     } catch {
       /* no pointer yet → no open run */
@@ -127,6 +220,96 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
   };
 
   return {
+    beginPrompt(repo, prompt) {
+      if (!promptRuns.has(prompt.id)) promptRuns.set(prompt.id, { repo, file: currentFile(repo) });
+    },
+    forgetPrompt(prompt) { promptRuns.delete(prompt.id); },
+    recordPrompt,
+    async recordPrompts(discovery) {
+      const bindings = new Map([...promptRuns].filter(([, binding]) => binding.file && currentFile(binding.repo) === binding.file));
+      const files = new Set([...bindings.values()].map(binding => binding.file!));
+      const observation = {};
+      for (const file of files) {
+        const pending = pendingCalls.get(file) ?? new Set<object>();
+        pending.add(observation);
+        pendingCalls.set(file, pending);
+      }
+      try {
+        for (const prompt of await discovery) {
+          const binding = bindings.get(prompt.id);
+          if (binding?.file) safe(() => writeEvents(binding.file!, [prompt]));
+        }
+      } catch (error) { log('audit prompt discovery failed', error); }
+      finally {
+        for (const file of files) {
+          const pending = pendingCalls.get(file);
+          pending?.delete(observation);
+          if (pending?.size === 0) pendingCalls.delete(file);
+          safe(() => finishRun(file));
+        }
+      }
+    },
+    observeMcpOrigin(origin, prompt) {
+      const context = calls.getStore();
+      if (!context?.active) return;
+      context.call.origin = origin;
+      context.prompt = origin === 'human' ? prompt : null;
+      delete context.call.promptId;
+      if (context.prompt) {
+        context.call.promptId = context.prompt.id;
+        if (context.file) recordPromptAt(context.repo, context.file, context.prompt);
+      }
+    },
+    deliveryObserver() {
+      const context = calls.getStore();
+      const file = context?.file;
+      return reason => safe(() => {
+        if (!context || !file || currentFile(context.repo) !== file) return;
+        writeEvents(file, [{ type: 'mcp.delivery', ts: auditTimestamp(now()), sendId: context.call.callId,
+          outcome: reason === undefined ? 'submitted' : 'dropped', ...(reason === undefined ? {} : { reason }) }]);
+      });
+    },
+    async recordMcpCall(repo, tool, origin, prompt, act) {
+      const context: McpRecording = { repo, prompt: origin === 'human' ? prompt : null, active: true,
+        file: currentFile(repo), events: [], call: { callId: randomUUID(), tool, origin, outcome: 'result-unknown',
+          ...(origin === 'human' && prompt ? { promptId: prompt.id } : {}) } };
+      if (context.file) {
+        attach(context, context.file);
+        if (context.prompt) recordPromptAt(repo, context.file, context.prompt);
+      }
+      return calls.run(context, async () => {
+        let result: unknown;
+        try {
+          result = await act();
+          context.call.outcome = isRecord(result) && typeof result.kind === 'string' ? result.kind : 'success';
+          if (isWindowAnswerFailure(result)) context.call.reason = result.message;
+          return result;
+        } finally {
+          context.active = false;
+          safe(() => {
+            const unguarded = tool === 'read_state' || (tool.startsWith('todo_') && tool !== 'todo_send') || tool === 'capture_report';
+            const record = context.call.origin === 'human' || !unguarded || (tool !== 'read_state' && !isWindowAnswerFailure(result));
+            const candidates = context.events.filter(({ event }) =>
+              (tool.startsWith('todo_') && event.type.startsWith('todo.'))
+              || (tool === 'start' && event.type === 'flow.started')
+              || (['approve', 'request_changes', 'redo', 'polish'].includes(tool)
+                && ((event.type === 'command' && gateDecisionKind(event.cmd)?.kind === 'decision')
+                  || (tool === 'approve' && event.type === 'step.entered'))));
+            const chosen = candidates.find(({ event }) => event.type === 'command') ?? candidates[0];
+            if (record && context.file) {
+              if (chosen) chosen.event = { ...chosen.event, mcp: context.call };
+              else {
+                const event: AuditEvent = { type: 'mcp.call', ts: auditTimestamp(now()), mcp: context.call };
+                const end = context.events.findIndex(item => item.event.type === 'flow.terminated');
+                context.events.splice(end < 0 ? context.events.length : end, 0, { file: context.file, event });
+              }
+            }
+            for (const { file, event } of context.events) safe(() => writeEvents(file, [event]));
+          });
+          release(context);
+        }
+      });
+    },
     recordTransition(repoKey, kind, before, after, start) {
       try {
         const date = kind === 'start' && start !== undefined ? new Date(start.startedAt) : now();
@@ -135,14 +318,22 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
           if (after.status !== 'in_progress') return;
           const flow = start !== undefined ? start.flow : flowName(repoKey);
           if (!flow) return;
-          const file = auditFilePath(root, repoKey, flow, date);
+          const file = confinedFile(auditFilePath(root, repoKey, flow, date));
           const header: AuditHeader = { flow, repo: path.basename(repoKey), repoPath: repoKey, started: ts };
           const events = lifecycleEvents('start', before, after, ts);
           // The record carries the repo path, resolved input values, and injected commands — owner-only
           // so a shared host cannot read another user's flow (CWE-276).
           mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-          writeFileSync(file, serializeDoc(header) + events.map(serializeDoc).join(''), { mode: 0o600 });
+          writeFileSync(file, serializeDoc(header), { mode: 0o600 });
           open.set(repoKey, file);
+          closed.delete(repoKey);
+          const call = calls.getStore();
+          if (call?.active && call.repo === repoKey && call.call.tool === 'start') attach(call, file);
+          if (call?.active && call.repo === repoKey && call.prompt) {
+            promptRuns.set(call.prompt.id, { repo: repoKey, file });
+            recordPrompt(call.prompt);
+          }
+          append(repoKey, file, events);
           lastLoop.delete(repoKey);
           writePointer(repoKey, file);
           return;
@@ -150,7 +341,7 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         const file = currentFile(repoKey);
         if (!file) return;
         const events = lifecycleEvents(kind, before, after, ts);
-        if (events.length > 0) appendFileSync(file, events.map(serializeDoc).join(''));
+        if (events.length > 0) append(repoKey, file, events);
       } catch (e) {
         log('audit recordTransition failed', e);
       }
@@ -214,9 +405,11 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
     recordTerminate(repoKey) {
       try {
         const file = currentFile(repoKey);
-        if (file) appendFileSync(file, terminateEvents(auditTimestamp(now())).map(serializeDoc).join(''));
+        if (file) endings.set(file, terminateEvents(auditTimestamp(now())));
+        closed.add(repoKey);
         open.delete(repoKey);
         lastLoop.delete(repoKey);
+        if (file) safe(() => finishRun(file));
         rmSync(pointerPath(repoKey), { force: true }); // §25.4 restart-surviving run pointer
       } catch (e) {
         log('audit recordTerminate failed', e);

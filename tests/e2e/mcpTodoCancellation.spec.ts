@@ -90,7 +90,13 @@ async function freezeTime(): Promise<void> {
   });
 }
 async function tick(ms: number): Promise<void> {
-  await app!.evaluate((_electron, ms) => { process.getBuiltinModule('node:test').mock.timers.tick(ms); }, ms);
+  // A real immediate keeps the clock advance outside the inspector evaluation that can lose its result promise.
+  await app!.evaluate((_electron, ms) => new Promise<void>((resolve, reject) => {
+    setImmediate(() => {
+      try { process.getBuiltinModule('node:test').mock.timers.tick(ms); resolve(); }
+      catch (error) { reject(error); }
+    });
+  }), ms);
 }
 
 async function idle(): Promise<void> {

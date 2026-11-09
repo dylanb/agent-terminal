@@ -374,6 +374,29 @@ Legend: neither step has reviewers.
 
 Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<repo>/.agent-terminal/flows/<id>/` (that repo only). When names clash, the repo copy wins. The folder form lets a flow keep its own templates beside it. See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) for the format, [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md) for the loop engine, and [§28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md) for how the full TDD chain is built.
 
+## Claude Code window tools
+
+In **Settings → Claude Code**, choose **Install the agent-terminal tools for Claude Code**. The explicit
+install adds a user-scope MCP server and hooks to your Claude Code configuration (`CLAUDE_CONFIG_DIR` is
+honored). It preserves other entries and writes no repository configuration or `.gitignore`. Use the Remove
+action in the same view to remove only this integration. Start a new Claude Code session after installing.
+
+Claude Code sessions inside an Agent Terminal window, including loop-engine sessions, get tools to read that
+window's state, decide gates, choose/start a flow with ticket inputs, terminate a run, manage and send todos,
+and capture the latest report. This also lets you operate your window through Claude Code Remote Control.
+Sessions outside Agent Terminal list no tools. Codex support is tracked separately in #323.
+
+Gate decisions, start/stop and sending a todo work only in a **human-started turn**: type or paste your request
+into the terminal, or send it over Remote Control. Engine prompts, app injections, scheduled work and unknown
+origins are refused with a reason. Reading state and other todo actions work in any turn. A send is accepted
+for delivery after the current turn ends; one may wait per turn, and an interruption drops it. Actions that
+need a blocking dialog tell you what is waiting at the machine.
+
+While a flow run is open, its audit contains full human prompt text and time, MCP calls and outcomes, and send
+submissions/drops. MCP actions are distinguishable from UI actions. Completed runs remain open until
+Terminate; nothing is recorded outside a run. Calls are attributed to the session's current turn, including
+background work, and nested terminals count as the window's terminal. See [the feature specification](docs/spec/30-claude-code-window-tools.md).
+
 ## Settings (environment variables)
 
 | Variable | Default | Meaning |
@@ -382,6 +405,7 @@ Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<rep
 | `APP_LAUNCH_DIR` | `$HOME` | Directory the session starts in. An unusable directory falls back to the default. |
 | `APP_HOME_DIR` | `$HOME` | Where app state lives (`<dir>/.agent-terminal/`). Must be an absolute path. |
 | `APP_SUBMIT_DELAY_MS` | `50` | Settle delay between an injected paste and the submitting `\r`. Raise on loaded machines/CI if "Insert & submit" submissions are swallowed. |
+| `APP_MCP_ACK_TIMEOUT_MS` | `5000` | Time to acknowledge that a window can begin an MCP operation. It does not limit a running action. Positive integer milliseconds; invalid values use the default and values above 2147483647 are clamped. |
 | `APP_QUIET_MS` | `1000` | How long the screen must stay unchanged before the agent reads as quiet. |
 | `APP_STARTUP_EXIT_GRACE_MS` | `1000` | A shell that exits sooner than this is treated as a startup failure, and the window stays open to show the diagnostic. |
 | `APP_SHELL_INTEGRATION` | on | `0` disables the bash OSC 133 hooks used for command capture. |

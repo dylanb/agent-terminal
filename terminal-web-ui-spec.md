@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.226
+**Document status:** Draft v2.227
 **Scope:** An Electron app that hosts coding agents in a PTY-attached shell, models the screen in the main process, captures what the agent shows, and runs development work as flows: chains of §27 loops (§28) moving a ticket from groom to plan to implementation. On conflict with §17–§25, §27 wins for the in-app loop.
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
@@ -35,3 +35,4 @@
 - [27. In-terminal loop engine — the live design](docs/spec/27-in-terminal-loop-engine-the-live-design.md)
 - [28. The full-TDD development process — a chain of §27 loops](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md)
 - [29. Repository setup check and the repo-setup flow](docs/spec/29-repository-setup-check.md)
+- [30. Claude Code window tools](docs/spec/30-claude-code-window-tools.md)

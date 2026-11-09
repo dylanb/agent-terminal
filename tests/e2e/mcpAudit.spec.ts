@@ -248,7 +248,8 @@ test('MCP audit: start opens with its original prompt, done stays open, and term
   expect.soft(auditFiles(m)).toEqual([]);
   const text = [command('start'), command('todo_create', { text: 'inside run after start' })].join('\n');
   const began = Date.now(); const result = await prompt(m, text); const ended = Date.now(); expect(answer(result).error).toBe(false);
-  const event = expectCall(m, 'start', 'started', 'human', text);
+  const startCall = readFakeClaudeLog(m.claude.logFile).find((r): r is Extract<FakeClaudeRecord, { event: 'call' }> => r.event === 'call' && r.tool === 'start');
+  const event = expectCall(m, 'start', resultKind(startCall), 'human', text);
   expect.soft(entries(m)[0]).toMatchObject({ type: 'mcp.prompt', text });
   expect.soft(event?.type).toBe('flow.started');
   expect.soft(entries(m).filter(e => e.type === 'flow.started')).toHaveLength(1);
@@ -336,7 +337,17 @@ for (const interruption of ['none', 'clear', 'session exit', 'process exit', 'fo
     const deliveries = entries(m).filter(e => e.type === 'mcp.delivery');
     expect.soft(deliveries).toHaveLength(1);
     expect.soft(deliveries[0]).toMatchObject({ outcome: drop ? 'dropped' : 'submitted', sendId: accepted?.mcp?.callId ?? 'missing send' });
-    if (drop) expect.soft(deliveries[0]?.reason).toEqual(expect.any(String));
+    const reasons = {
+      none: undefined,
+      clear: 'the calling session ended.',
+      'session exit': 'the calling session ended.',
+      'process exit': 'the calling session is no longer the terminal recipient.',
+      'foreground loss': 'the calling session is no longer the terminal recipient.',
+      'new prompt': 'a new prompt interrupted delivery.',
+      'app injection': 'an app injection interrupted delivery.',
+      'terminal close': 'the terminal closed.',
+    };
+    expect.soft(deliveries[0]?.reason).toBe(reasons[interruption]);
     expect.soft(deliveries[0]?.mcp).toBeUndefined();
     expect.soft(prompts(m, state.todos[0].text)).toEqual([]);
   });
@@ -415,7 +426,7 @@ test('MCP audit: a run opened later in an existing human turn uses the original 
   const started = readFakeClaudeLog(m.claude.logFile).slice(offset).find((r): r is Extract<FakeClaudeRecord, { event: 'call' }> => r.event === 'call' && r.tool === 'start');
   expect(answer(started).error).toBe(false);
   await app!.evaluate(() => process.getBuiltinModule('node:test').mock.timers.reset());
-  expectCall(m, 'start', 'started', 'human', initial);
+  expectCall(m, 'start', resultKind(started), 'human', initial);
   const recorded = prompts(m, initial)[0];
   const submitted = Date.parse(recorded?.ts ?? 'missing');
   expect.soft(submitted >= Math.floor(began / 1000) * 1000 && submitted <= ended).toBe(true);
@@ -427,16 +438,17 @@ test('MCP audit: adding a call to a held human turn appends without rewriting it
   writeFileSync(m.hold, 'held');
   const offset = entries(m).length;
   const logOffset = readFakeClaudeLog(m.claude.logFile).length;
-  const initial = 'keep this original prompt immutable before its first tool call';
+  const beforePrompt = auditText(m);
+  const initial = 'mcp read_state {}\nkeep this original prompt immutable after its first tool call';
   await type(initial);
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(logOffset).some(r => r.event === 'held')).toBe(true);
-  await expect.soft.poll(() => prompts(m, initial)).toHaveLength(1);
   const snapshot = auditText(m);
-  const later = ['mcp read_state {}', command('todo_create', { text: 'second call in held turn' })].join('\n');
+  const later = command('todo_create', { text: 'second call in held turn' });
   await type(later);
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(logOffset).some(r => r.event === 'prompt' && r.text === later)).toBe(true);
   rmSync(m.hold);
   await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(logOffset).some(r => r.event === 'stop')).toBe(true);
+  expect.soft(auditText(m).startsWith(beforePrompt)).toBe(true);
   expect.soft(auditText(m).startsWith(snapshot)).toBe(true);
   const recorded = prompts(m, initial);
   expect.soft(recorded).toHaveLength(1);
@@ -495,4 +507,106 @@ test('MCP audit: a failed human approval side effect records the returned neithe
   expect.soft(call?.mcp?.reason).toBe(JSON.parse(answer(result).message).message);
   const after = await current(m); expect.soft(after.gate).toEqual(state.gate);
   await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('plan');
+});
+
+test('MCP audit: closing the window records a held human prompt with no calls or Stop', { tag: '@ownapp' }, async () => {
+  const m = machine(); await launch(m); await start(m);
+  writeFileSync(m.hold, 'held');
+  const text = 'human request still working when window closes';
+  const offset = readFakeClaudeLog(m.claude.logFile).length;
+  await type(text);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'held')).toBe(true);
+  await app!.close(); app = undefined;
+  expect(prompts(m, text)).toHaveLength(1);
+});
+
+for (const boundary of ['UI start', 'UI terminate', 'replacement run'] as const) {
+  test(`MCP audit: prompt eligibility follows submission across ${boundary}`, { tag: '@ownapp' }, async () => {
+    const m = machine(); await launch(m);
+    if (boundary !== 'UI start') await start(m);
+    const firstFile = auditFiles(m)[0];
+    writeFileSync(m.hold, 'held');
+    const text = `held human request across ${boundary}`;
+    const offset = readFakeClaudeLog(m.claude.logFile).length;
+    await type(text);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'held')).toBe(true);
+    if (boundary !== 'UI start') await page.evaluate(repo => window.flow.terminate(repo), m.repo);
+    if (boundary !== 'UI terminate') await page.locator('#flow-strip .flow-control').click();
+    rmSync(m.hold);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'stop')).toBe(true);
+    if (boundary === 'UI start') expect(prompts(m, text)).toEqual([]);
+    else {
+      const original = parseAuditStream(readFileSync(firstFile, 'utf8')).events;
+      expect(original.filter(e => e.type === 'mcp.prompt' && e.text === text)).toHaveLength(1);
+      expect(original.at(-1)?.type).toBe('flow.terminated');
+      if (boundary === 'replacement run') {
+        const next = auditFiles(m).find(file => file !== firstFile)!;
+        expect(parseAuditStream(readFileSync(next, 'utf8')).events.filter(e => e.type === 'mcp.prompt' && e.text === text)).toEqual([]);
+      }
+    }
+  });
+}
+
+test('MCP audit: process loss without hooks retains a no-call human prompt while the app stays open', { tag: '@ownapp' }, async () => {
+  const m = machine(); await launch(m); await start(m);
+  writeFileSync(m.hold, 'held');
+  const text = 'human request before abrupt Claude exit';
+  const offset = readFakeClaudeLog(m.claude.logFile).length;
+  await type(text);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'held')).toBe(true);
+  const session = readFakeClaudeLog(m.claude.logFile).find(r => r.event === 'session');
+  if (!session) throw new Error('fixture did not start a session');
+  process.kill(session.pid, 'SIGKILL');
+  const barrier = join(m.home, 'after-exit');
+  await type(`printf ready > '${barrier}'`);
+  await expect.poll(() => existsSync(barrier)).toBe(true);
+  await expect.poll(() => prompts(m, text)).toHaveLength(1);
+});
+
+
+test('MCP audit: a failed paste records its injector cause as a linked drop, never submitted', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  const socket = join(m.home, 'tmux.sock');
+  const fail = join(m.home, 'fail-paste');
+  const attempted = join(m.home, 'paste-attempted');
+  const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(m.binDir, 'tmux'), `#!/bin/sh
+for arg do
+  if [ "$arg" = load-buffer ] && [ -e "$MCP_TEST_TMUX_FAIL" ]; then
+    printf attempted > "$MCP_TEST_TMUX_ATTEMPTED"
+    exit 1
+  fi
+done
+exec "$MCP_TEST_REAL_TMUX" "$@"
+`, { mode: 0o700 });
+  try {
+    await launch(m, { APP_QUIET_MS: '1000000', MCP_TEST_TMUX_FAIL: fail, MCP_TEST_TMUX_ATTEMPTED: attempted, MCP_TEST_REAL_TMUX: realTmux });
+    await start(m);
+    await type('/exit');
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'session-end')).toBe(true);
+    await type(`tmux -f /dev/null -S '${socket}' new-session -s send 'exec claude'`);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'session').length).toBe(2);
+    for (const record of readFakeClaudeLog(m.claude.logFile)) if (record.event === 'session') ownedSessions.add(record.pid);
+    const state = await current(m);
+    writeFileSync(m.hold, 'held');
+    const offset = readFakeClaudeLog(m.claude.logFile).length;
+    const text = command('todo_send', { todo: state.todos[0].id });
+    await type(text);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'held')).toBe(true);
+    writeFileSync(fail, 'fail');
+    await app!.evaluate(() => process.getBuiltinModule('node:test').mock.timers.enable({ apis: ['setTimeout'] }));
+    rmSync(m.hold);
+    await expect.poll(() => readFakeClaudeLog(m.claude.logFile).slice(offset).some(r => r.event === 'stop')).toBe(true);
+    await expect.poll(async () => {
+      await app!.evaluate(() => process.getBuiltinModule('node:test').mock.timers.tick(1000000));
+      return existsSync(attempted);
+    }).toBe(true);
+    const accepted = expectCall(m, 'todo_send', 'accepted', 'human', text);
+    const delivery = entries(m).filter(e => e.type === 'mcp.delivery');
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]).toMatchObject({ sendId: accepted?.mcp?.callId, outcome: 'dropped', reason: expect.stringMatching(/^Command failed: .*tmux -S .* load-buffer /) });
+    expect(readFakeClaudeLog(m.claude.logFile).filter(r => r.event === 'prompt' && r.text === state.todos[0].text)).toEqual([]);
+  } finally {
+    try { execFileSync(realTmux, ['-S', socket, 'kill-server'], { stdio: 'ignore' }); } catch {}
+  }
 });
