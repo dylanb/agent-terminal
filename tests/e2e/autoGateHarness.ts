@@ -1,3 +1,4 @@
+import { writeExampleFlow } from './fakeTools';
 // Helpers for the e2e that drive a real gate (§27.9.1), built on the shared fake tools.
 
 import { expect, type Page } from '@playwright/test';
@@ -75,7 +76,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   );
   const inputs = opts.ticket === undefined ? '' : `inputs:\n  ticket: ${JSON.stringify(opts.ticket)}\n`;
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: ${firstStep}\nstatus: not_started\n${inputs}`);
-  if (opts.localFlowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.localFlowYaml);
+  if (opts.localFlowYaml !== undefined) writeExampleFlow(join(dir, '.agent-terminal', 'flow.yaml'), opts.localFlowYaml);
   git('add', '-A');
   git('commit', '-qm', 'baseline');
   return dir;

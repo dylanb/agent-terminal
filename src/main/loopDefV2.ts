@@ -186,6 +186,7 @@ export interface ExecSideEffect {
  *  `consolidator`, each `inputs[]`/`outputs[]` path) is already confined to the boundary its role dictates;
  *  an escape is a resolution failure, so a parsed def carries no escaping path. */
 export interface LoopDefV2 {
+  flow?: string;
   version: string;
   name: string;
   work: WorkRecipe;
@@ -641,7 +642,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Lookup): LoopDefV2R
     if (!read.ok && read.cause === 'absent') continue;
     if (!read.ok) return { ok: false, reason: `cannot read def ${name}: ${unreadReason(read, MAX_LOOP_DEF_BYTES)}`, defFile };
     try {
-      return { ok: true, def: parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), tierRoot, defDir, defFile };
+      return { ok: true, def: { ...parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), ...(ctx.flow !== undefined ? { flow: ctx.flow } : {}) }, tierRoot, defDir, defFile };
     } catch (e) {
       return { ok: false, reason: errMsg(e), defFile };
     }

@@ -30,6 +30,7 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
 /** A reviewer persona and the confined path of its charter (§27.4). The one shape the roster source, the
  *  prompt request, and the engine's in-flight review turn all share, so the three cannot drift. */
 export interface RosterEntry {
+  flow?: string;
   loop: string;
   persona: string;
   charter: string;
@@ -39,12 +40,12 @@ export interface RosterEntry {
 /** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
  *  subset selection is the consolidator's job (N4). */
 export function reviewRoster(def: LoopDefV2): RosterEntry[] {
-  return def.reviewers.map((r) => ({ loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
+  return def.reviewers.map((r) => ({ ...(def.flow !== undefined ? { flow: def.flow } : {}), loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
 }
 
 /** §27.4 */
-export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'loop' | 'persona'>): string {
-  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona) : reviewerAgentName(r.loop, r.persona);
+export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'flow' | 'loop' | 'persona'>): string {
+  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona, r.flow) : reviewerAgentName(r.loop, r.persona, r.flow);
 }
 
 /** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the

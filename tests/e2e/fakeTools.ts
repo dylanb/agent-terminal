@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { load } from 'js-yaml';
+import { load, YAMLException } from 'js-yaml';
 import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
@@ -14,7 +14,7 @@ import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
-import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
+import { seedSharedExampleConfig, seedExampleReviewers } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 import type { ReviewerSession } from './reviewerSession';
@@ -482,7 +482,7 @@ export const agentSwitchesBranchSh = (branch: string): string => `git checkout -
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {
   const file = catalogEntryDefFile(home, id);
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, yamlText);
+  writeExampleFlow(file, yamlText);
 }
 
 export function seedCommitGateConfig(prefix: string): string {
@@ -606,4 +606,19 @@ export function v3ImplGoals(opts: { before?: Record<string, string>; blocked?: R
       return [step, opts.checkpointFirstLeg?.includes(step) ? `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${run}; fi` : run];
     }),
   );
+}
+
+export function writeExampleFlow(file: string, yamlText: string, config = exampleConfigDir): void {
+  writeFileSync(file, yamlText);
+  let flow: { name: string; steps?: { kind?: string; loop?: string }[] };
+  try {
+    flow = load(yamlText) as typeof flow;
+  } catch (error) {
+    if (error instanceof YAMLException) return;
+    throw error;
+  }
+  if (typeof flow?.name === 'string' && Array.isArray(flow.steps)) {
+    const loops = flow.steps.flatMap((step) => step?.kind === 'loop' && typeof step.loop === 'string' ? [step.loop] : []);
+    seedExampleReviewers(config, flow.name, loops);
+  }
 }

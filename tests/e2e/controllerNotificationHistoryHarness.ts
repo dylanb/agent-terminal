@@ -1,3 +1,4 @@
+import { seedExampleReviewers } from '../helpers/e2eExampleConfig';
 import { expect } from '@playwright/test';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dump, load } from 'js-yaml';
@@ -34,6 +35,7 @@ export async function historyGate() {
     const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
     def.gate = [{ option: 'approve' }, { option: 'request-changes' }];
     writeFileSync(defPath, dump(def));
+    seedExampleReviewers(config, 'history-flow', ['red-loop']);
     relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome);
     seedTrustedFlow(h.fixture.home, repo, 'history-flow', autoGateFlowYaml([
       { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' }, { id: 'verify', kind: 'manual' },

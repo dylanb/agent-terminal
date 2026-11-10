@@ -1,3 +1,5 @@
+import { seedExampleReviewers } from '../helpers/e2eExampleConfig';
+import { writeExampleFlow } from './fakeTools';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -74,13 +76,13 @@ function seedAdoptingConfig(gate: unknown[] = QUIET_GATE): string {
   def.pickup = { adopt: 'pr' };
   def.gate = gate;
   writeFileSync(defFile, dump(def));
-  cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
+  seedExampleReviewers(root, 'adopt-pr-fixture', ['plan-loop']);
   return root;
 }
 
 function seedAdoptingFlow(repo: string): void {
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     dump({
       name: 'adopt-pr-fixture',

@@ -1,3 +1,4 @@
+import { writeExampleFlow } from './fakeTools';
 import { reviewerAgentFor } from '../../src/main/reviewTurn';
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
@@ -2992,7 +2993,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     `name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
   );
@@ -3011,7 +3012,7 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     `name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
   );
@@ -3139,7 +3140,7 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
   cpSync(exampleConfigDir, cfg, { recursive: true });
-  const missingAgent = `plan-loop--${PLAN_V2_ROSTER[1]}`;
+  const missingAgent = reviewerAgentFor('claude-code', { flow: 'v2-work', loop: 'plan-loop', persona: PLAN_V2_ROSTER[1] });
   rmSync(join(cfg, 'agents', `${missingAgent}.md`), { force: true });
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noagent-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
@@ -3275,7 +3276,7 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
   expect(injectedLog).toContain(`no record for ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
   expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
   // §27.4 — each reviewer is spawned as the sub-agent installed for it, never told to go and read a charter.
-  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: plan-loop--${persona}`);
+  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: ${reviewerAgentFor('claude-code', { flow: 'v2-work', loop: 'plan-loop', persona })}`);
   expect(injectedLog).not.toMatch(/charter\/[\w-]+\.md/);
 
   // The agent ran the checker the prompt handed it: it passed the repaired report.
@@ -3297,7 +3298,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
   );
@@ -3518,7 +3519,7 @@ test('a run rebound after a relaunch, onto a flow that names no PR, is held unti
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n  - id: done\n    kind: manual\n',
   );
@@ -3622,7 +3623,7 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-chain\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n' +
@@ -3640,7 +3641,7 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-bootstrap\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -3940,7 +3941,7 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   const beforeRestartProbes = (readGhLog(logFile).match(/^git status --porcelain$/gm) ?? []).length;
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: v2-bootstrap-restart\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
@@ -3969,7 +3970,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const other = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-refs-other-'));
   mkdirSync(join(other, '.git'), { recursive: true });
   mkdirSync(join(other, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(other, '.agent-terminal', 'flow.yaml'),
     'name: other\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n',
   );
@@ -3983,12 +3984,13 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   );
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n',
+    config,
   );
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-resume-refs-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
@@ -4054,7 +4056,7 @@ test('a pickup still in flight when its held run is resumed onto another flow is
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-pickup-home-'));
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4182,7 +4184,7 @@ test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branc
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-a\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4243,7 +4245,7 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-f\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4343,14 +4345,14 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
 test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (AC 4)', { tag: '@ownapp' }, async () => {
   const legacyRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-legacy-'));
   mkdirSync(join(legacyRepo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(legacyRepo, '.agent-terminal', 'flow.yaml'),
     'name: legacy-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: legacy\n',
   );
   writeFileSync(join(legacyRepo, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: not_started\n');
   const badRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-bad-'));
   mkdirSync(join(badRepo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(badRepo, '.agent-terminal', 'flow.yaml'),
     'name: bad-ns-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: aap\n',
   );
@@ -5013,7 +5015,7 @@ test('a pickup recorded by an earlier run does not hold a newly started run to t
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: v2-stale-pickup\nsteps:\n' +
       '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n',
@@ -5863,7 +5865,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
@@ -6983,7 +6985,7 @@ function seedFlowRepoBase(
     mkdirSync(join(dir, dirname(opts.seedTestFile)), { recursive: true });
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
-  if (opts.flowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  if (opts.flowYaml !== undefined) writeExampleFlow(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
@@ -7920,7 +7922,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   mkdirSync(join(dir, '.git'), { recursive: true });
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(at, 'flow.yaml'),
     'name: epic-no-ticket\nsteps:\n  - id: plan-approve\n    kind: loop\n    loop: plan-approve-loop\n    loop_namespace: app\n  - id: done\n    kind: manual\n',
   );
@@ -8185,7 +8187,7 @@ for (const integration of ['1', '0']) test(`§27.4 — under Codex, detected fro
   await flowControl().click();
   await passAutoGate(home, repo, 'groom-intent');
 
-  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toMatch(/agent: [a-z0-9_]+__[a-z0-9_]+/);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toMatch(/agent: [a-z0-9_]+/);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).not.toContain('subagent_type');
 
   await app.close();
