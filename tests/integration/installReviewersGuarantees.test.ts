@@ -270,3 +270,18 @@ it.each(['accept', 'decline', 'cancel'] as const)('a partial-write failure suppo
     expect.soft(completion).toMatch(unavailableEntry);
   }
 });
+
+it('cancelled retry identifies the absent platform as unavailable without provisioning it', async () => {
+  const absent = deps.codexHome!;
+  rmSync(absent, { recursive: true });
+  expect(await runInstallReviewers([folder], deps)).toBe(0);
+  for (const file of files()) writeFileSync(file, 'Operator edit');
+  const before = tree(root);
+  deps.confirm = async () => false;
+  output = '';
+  expect.soft(await runInstallReviewers([folder], deps)).toBe(3);
+  expect.soft(tree(root)).toEqual(before);
+  expect.soft(existsSync(absent)).toBe(false);
+  expect.soft(output).toMatch(/unavailable: agents\//i);
+  expect(output).toMatch(/skipped.*unavailable.*codex/i);
+});

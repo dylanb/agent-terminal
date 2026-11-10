@@ -40,6 +40,9 @@ import {
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 import { FLOW_DEF_FILE, TODO_TEMPLATES_SUBDIR } from './flowHome';
 import { isOneOf } from '../shared/oneOf';
+import { readBoundedBytesNoFollow } from './boundedRead';
+
+const MAX_INSTALL_TARGET_BYTES = 16 * 1024 * 1024;
 
 /** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
  *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
@@ -353,11 +356,13 @@ const alwaysReplaces = (overwrite: InstallDestination['overwrite']): boolean => 
 /** `null` only when absent. An existing-but-unreadable target (EACCES, EISDIR, …) must not be silently
  *  overwritten, so it throws — naming the file, which Node's own message for these does not. */
 function readTarget(file: { rel: DestRelativePath; real: string }): Buffer | null {
-  try {
-    return readFileSync(file.real);
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return null;
-    throw new Error(`cannot read the existing ${file.rel}: ${errMsg(e)}`);
+  const read = readBoundedBytesNoFollow(file.real, MAX_INSTALL_TARGET_BYTES);
+  if (read.ok) return read.bytes;
+  switch (read.cause) {
+    case 'absent': return null;
+    case 'over-cap': throw new Error(`cannot read the existing ${file.rel}: larger than ${MAX_INSTALL_TARGET_BYTES} bytes`);
+    case 'unreadable': throw new Error(`cannot read the existing ${file.rel}: ${read.error === undefined ? 'not a readable regular file' : errMsg(read.error)}`);
+    default: throw new Error(`Unexpected read failure: ${read.cause satisfies never}`);
   }
 }
 
@@ -575,6 +580,7 @@ function verifyAuthorization(
 
 interface PreparedInstallExamples {
   destinations: InstallDestinationPreview[];
+  notInstalled: InstallDestinationNotInstalled[];
   alwaysReplaced: InstallDestinationFiles[];
   retired: RetiredExample[];
   retiredFallback: string | null;
@@ -629,6 +635,7 @@ export function prepareInstallExamples(
       ok: true,
       prepared: {
         destinations: previews,
+        notInstalled: resolution.notInstalled,
         alwaysReplaced: resolution.destinations
           .filter((d) => alwaysReplaces(d.overwrite) && d.files.length > 0)
           .map((d) => ({ destination: d.id, files: d.files.map((f) => f.rel) })),

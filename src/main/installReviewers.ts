@@ -8,7 +8,7 @@ import { codexAgentsDir } from './codexConfig';
 import { CLI_COMMAND_NAME, INSTALL_REVIEWERS_FLAG } from './cliShim';
 import { errMsg } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
-import type { InstallDestinationId } from '../shared/ipc';
+import type { InstallDestinationId, InstallDestinationNotInstalled } from '../shared/ipc';
 
 export interface InstallReviewersDeps extends ValidateFlowDeps {
   configDir?: string;
@@ -52,6 +52,9 @@ function destinations(folder: string, deps: InstallReviewersDeps): InstallDestin
 
 export async function runInstallReviewers(operands: readonly string[], deps: InstallReviewersDeps): Promise<number> {
   const say = (text: string): void => deps.write(`${stripDisplayControlChars(text)}\n`);
+  const reportNotInstalled = (destinations: InstallDestinationNotInstalled[]): void => {
+    for (const skipped of destinations) say(`skipped (unavailable): ${skipped.destination}, ${skipped.root} is absent`);
+  };
   if (operands.length !== 1) {
     say(`usage: ${CLI_COMMAND_NAME} ${INSTALL_REVIEWERS_FLAG} <flow-folder>`);
     return 2;
@@ -72,6 +75,10 @@ export async function runInstallReviewers(operands: readonly string[], deps: Ins
       }
       if (!await deps.confirm('Install the selected changes? [y/N] ')) {
         say('Cancelled. No reviewer files were changed; outstanding reviewers remain unavailable.');
+        for (const file of authorization.files) {
+          if (installFileVerdict(file) !== 'identical') say(`unavailable: ${file.destination}/${file.rel}`);
+        }
+        reportNotInstalled(prepared.prepared.notInstalled);
         return 3;
       }
     }
@@ -83,7 +90,7 @@ export async function runInstallReviewers(operands: readonly string[], deps: Ins
       const file = authorization.files.find((f) => f.destination === group.destination && f.rel === rel);
       say(`${file !== undefined && installFileVerdict(file) === 'identical' ? 'unchanged' : 'declined (unavailable)'}: ${group.destination}/${rel}`);
     }
-    for (const skipped of result.notInstalled) say(`skipped (unavailable): ${skipped.destination}, ${skipped.root} is absent`);
+    reportNotInstalled(result.notInstalled);
     if (!result.ok) { say(result.error); say('Installation incomplete; completed writes above remain. Correct the cause and retry.'); return 1; }
     if (result.created.length + result.overwritten.length > 0) say('Start a fresh agent session to load the installed reviewers.');
     if (authorization.files.length === 0) say('Nothing needs installation.');
