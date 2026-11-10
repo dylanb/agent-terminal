@@ -2,7 +2,6 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -115,7 +114,7 @@ import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { createAgentQuestion } from './agentQuestion';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
-import { sliceCountToSource } from '../shared/slicePlan';
+import { createRepeatSourcer } from './repeatSourcing';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -155,12 +154,13 @@ import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun, type ReachedPickupStep } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
-import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import { isAdoptPickup, type LoopDefV2Context, type PickupV2 } from './loopDefV2';
+import { APP_LOOP_DIR_SEGMENTS, readLoopArtifact } from './appLoopPaths';
+import { MAX_LOOP_RECIPE_BYTES, isAdoptPickup, type LoopDefV2Context, type PickupV2 } from './loopDefV2';
 import { compensateAdoption, runAdoptionStart, type AdoptionStartDeps } from './adoptionStart';
 import { adoptedRunRefs } from '../shared/currentTicket';
 import { createRealAdoptionGit, createRealAdoptionGitHub } from './adoptionPorts';
 import { isAdoptedPickup } from '../shared/appBootstrap';
+import { readBoundedNoFollow } from './boundedRead';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
@@ -183,6 +183,8 @@ import {
   composeRecordFlowTransition,
   composeRunInProgressAt,
   composeStartTransition,
+  composeCountSourceRefusal,
+  loopLookupContext,
 } from './autoGateComposition';
 import type { CliInstallResult, HostedAgentState, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
 import {
@@ -233,10 +235,12 @@ async function createWindow(): Promise<void> {
     if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
     return startupReady;
   });
+  const checkerScript = resolveArtifactCheckScript(__dirname);
   ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
     handleCliInstall(m, () =>
       cliRuntime({
         env: process.env,
+        checkerScript,
         home: os.homedir(),
         user: os.userInfo(),
         execPath: process.execPath,
@@ -510,11 +514,7 @@ async function createWindow(): Promise<void> {
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => {
     const load = resolveActiveDefinition(repoDir);
-    return {
-      tiers: resolveAppLoopDefTiers(iconLoc),
-      repoDir,
-      ...(load.ok ? { flow: load.definition.name } : {}),
-    };
+    return loopLookupContext(resolveAppLoopDefTiers(iconLoc), repoDir, load.ok ? load.definition.name : undefined);
   };
   // Report reconstruction can run while the loop view is being restored; resolve only its definition.
   const assembleFlowReport = (repoDir: string, report: SectionedReport): void => {
@@ -563,7 +563,7 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
     artifactCheckCommand: (check) =>
-      artifactCheckCommand({ execPath: process.execPath, script: resolveArtifactCheckScript(__dirname) }, check),
+      artifactCheckCommand({ execPath: process.execPath, script: checkerScript }, check),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
     // §28.5.3/§28.8.3 — the GREEN engine ports: record the changed-test flag (the disjoint changed-tests.yaml
@@ -607,6 +607,7 @@ async function createWindow(): Promise<void> {
       return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
     },
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
+    repeatEntry: (repoDir, stepId) => flow.entryFor(repoDir, stepId),
     reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
       const trusted = trustedAppBootstraps.get(repoDir) ?? null;
@@ -641,19 +642,10 @@ async function createWindow(): Promise<void> {
     noteSettle: () => shadow.noteSettle(),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
     readRecipe: (absPath) => {
-      try {
-        return readFileSync(absPath, 'utf8');
-      } catch {
-        return null;
-      }
+      const read = readBoundedNoFollow(absPath, MAX_LOOP_RECIPE_BYTES);
+      return read.ok ? read.text : null;
     },
-    readArtifact: (absPath) => {
-      try {
-        return readFileSync(absPath, 'utf8');
-      } catch {
-        return null;
-      }
-    },
+    readArtifact: readLoopArtifact,
     inputState: probeChainedInput,
     assembleReport: assembleFlowReport,
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
@@ -1299,21 +1291,10 @@ async function createWindow(): Promise<void> {
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
-    // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, the last
-    // one winning: the polished plan, then any RED that split its own slice. resolveInputs sets the input WITHOUT
-    // re-entering the step (re-entering a planning step here would restart its loop).
-    sourceSliceCount: (repoDir, def) => {
-      const planBinding = def.outputs.find((o) => o.id === 'plan');
-      if (planBinding === undefined) return;
-      let planText = '';
-      try {
-        planText = readFileSync(planBinding.path, 'utf8');
-      } catch {
-        planText = '';
-      }
-      const count = sliceCountToSource(planText, flow.currentSlice(repoDir));
-      if (count !== null) flow.resolveInputs(repoDir, { slices: String(count) });
-    },
+    sourceSliceCount: createRepeatSourcer({
+      flow,
+      readArtifact: readLoopArtifact,
+    }),
     // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
     reopenSlice: (repoDir, reopened) => reopenSliceFlow(repoDir, reopened),
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
@@ -1393,6 +1374,8 @@ async function createWindow(): Promise<void> {
       return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
     start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
+    countSourceRefusal: composeCountSourceRefusal(resolveAppLoopDefTiers(iconLoc)),
+    state: (repoKey) => flow.state(repoKey),
     now: () => Date.now(),
     record: recordFlowTransition,
   });

@@ -171,21 +171,31 @@ export function runIdentity(repo: string): AuditRunIdentity {
  *  `step`'s last entry window. A missing file, identity or step throws, so an empty read never satisfies a
  *  "none" assertion. */
 export function auditGateEntries(home: string, repo: string, opts: { run?: AuditRunIdentity; step?: string } = {}): GateEntry[] {
-  const run = opts.run ?? runIdentity(repo);
-  const file = auditFilePath(auditRootDir(home), repo, run.flow, new Date(run.startedAt));
-  if (!existsSync(file)) throw new Error(`auditGateEntries: no audit file at ${file}`);
-  const text = readFileSync(file, 'utf8');
-  const { header, events } = parseAuditStream(text);
-  const documents = text.split('\n').filter((line) => line === '---').length;
-  if (header === null || events.length !== documents - 1) {
-    throw new Error(`auditGateEntries: ${file} has ${documents} documents but only ${events.length} events parse after its header`);
-  }
+  const { file, events } = runEvents(home, repo, opts.run ?? runIdentity(repo));
   if (opts.step !== undefined) {
     const lastStart = events.map((e) => e.type).lastIndexOf('flow.started');
     return gateEntries(stepWindowEvents(events.slice(Math.max(lastStart, 0)), opts.step));
   }
   if (events.filter((e) => e.type === 'flow.started').length > 1) throw new Error(`auditGateEntries: ${file} holds more than one run (two Starts in one second)`);
   return gateEntries(events);
+}
+
+function runEvents(home: string, repo: string, run: AuditRunIdentity): { file: string; events: AuditEvent[] } {
+  const file = auditFilePath(auditRootDir(home), repo, run.flow, new Date(run.startedAt));
+  if (!existsSync(file)) throw new Error(`audit record: no audit file at ${file}`);
+  const text = readFileSync(file, 'utf8');
+  const { header, events } = parseAuditStream(text);
+  const documents = text.split('\n').filter((line) => line === '---').length;
+  if (header === null || events.length !== documents - 1) {
+    throw new Error(`audit record: ${file} has ${documents} documents but only ${events.length} events parse after its header`);
+  }
+  return { file, events };
+}
+
+export function auditStepSequence(home: string, repo: string, run: AuditRunIdentity = runIdentity(repo)): string[] {
+  const { file, events } = runEvents(home, repo, run);
+  if (events.filter((e) => e.type === 'flow.started').length > 1) throw new Error(`auditStepSequence: ${file} holds more than one run (two Starts in one second)`);
+  return events.flatMap((e) => (e.type === 'flow.started' || e.type === 'step.entered' ? [e.step] : []));
 }
 
 function gateEntries(events: AuditEvent[]): GateEntry[] {

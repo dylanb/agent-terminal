@@ -1,3 +1,4 @@
+import { isOneOf } from '../shared/oneOf';
 import { runAppCommand } from './appCommand';
 import { matchesGitHubRepositoryUrl, repositoryHost, type GitHubRepositoryIdentity } from './githubRepository';
 import { isRecord } from './yamlRecord';
@@ -6,7 +7,7 @@ import type { TicketRef } from '../shared/appBootstrap';
 const PULL_REQUEST_STATES = ['OPEN', 'CLOSED', 'MERGED'] as const;
 export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
 
-const isPullRequestState = (value: unknown): value is PullRequestState => (PULL_REQUEST_STATES as readonly unknown[]).includes(value);
+const isPullRequestState = (value: unknown): value is PullRequestState => isOneOf(PULL_REQUEST_STATES, value);
 
 /** Why the pull request called `name` cannot be worked on in `state`, or null when it is open. */
 export function notOpenReason(name: string, state: PullRequestState): string | null {

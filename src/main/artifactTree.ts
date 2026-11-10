@@ -1,11 +1,12 @@
 // Artifact discovery (§20.1 / D8): the session's cwd as the viewer's file tree.
 
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { displayGitHubRepository, originFetchGitHubRepository, originPushForkRepository } from './githubRepository';
+import { readBoundedNoFollow } from './boundedRead';
 import { isUnderAppStateDir } from './appStateDirs';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import type {
@@ -30,7 +31,7 @@ export interface DiscoverDeps {
   baseRef?: (root: string) => string | null;
 }
 
-const MAX_FILE_BYTES = 512 * 1024;
+export const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WALK_ENTRIES = 5000;
 // Shared with the live-reload watcher (viewerWatch.ts): discovery skips these dirs, so the watcher
 // MUST ignore events under them too — else `git status`'s own `.git/index` write feeds a reload loop.
@@ -423,15 +424,15 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
   const abs = path.resolve(root, relPath);
   if (!pathWithin(root, abs)) return null; // §20.2 escape guard
   try {
-    // §20.2: re-check the realpath (an in-root symlink can point out), then stat/read the validated
+    // §20.2: re-check the realpath (an in-root symlink can point out), then read the validated
     // real path — not abs — so a post-check target swap can't bypass the guard (TOCTOU). ext/name
     // stay on relPath/abs (pure string ops, no fs) to match the tree label the user clicked.
     const real = realpathSync(abs);
     const realRoot = realpathSync(root);
     if (!pathWithin(realRoot, real)) return null;
-    const st = statSync(real);
-    if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
-    const body = readFileSync(real, 'utf8');
+    const read = readBoundedNoFollow(real, MAX_FILE_BYTES);
+    if (!read.ok) return null;
+    const body = read.text;
     if (body.includes(NUL)) return null;
     const ext = path.extname(abs).toLowerCase();
     const kind: ViewerFileKind = ext === '.md' || ext === '.markdown' ? 'markdown' : 'code';

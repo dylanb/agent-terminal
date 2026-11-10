@@ -21,6 +21,7 @@ describe('install consent molecule', () => {
     ],
     retired,
     retiredFallback: null,
+  alwaysReplaced: [],
   });
   const RETIRED: RetiredExample[] = [{ destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath }];
 

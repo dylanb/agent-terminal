@@ -1,11 +1,13 @@
 // Repo-scoped todo store (§16.3 / §16.4). A missing/corrupt file degrades to an empty list (never
 // a throw) so a bad file can't wedge the pane. Done is capped (APP_MAX_DONE_TODOS).
 
-import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync } from './atomicFile';
+import { readBoundedResolved } from './boundedRead';
 import type { TodoItem, TodoSource, TodoStatus } from '../shared/ipc';
+
+export const MAX_TODOS_FILE_BYTES = 1024 * 1024;
 
 export interface TodoStoreDeps {
   maxDoneTodos: number;
@@ -50,11 +52,14 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
     const cached = cache.get(repoKey);
     if (cached) return cached;
     let items: TodoItem[] = [];
-    try {
-      const raw = JSON.parse(readFileSync(fileFor(repoKey), 'utf8'));
-      if (Array.isArray(raw)) items = raw as TodoItem[];
-    } catch {
-      items = [];
+    const read = readBoundedResolved(fileFor(repoKey), MAX_TODOS_FILE_BYTES);
+    if (read.ok) {
+      try {
+        const raw = JSON.parse(read.text);
+        if (Array.isArray(raw)) items = raw as TodoItem[];
+      } catch {
+        items = [];
+      }
     }
     // The file IS the bucket (§16.3): an item belongs to the repo whose file it lives in. A
     // stale stamp (dir copied between checkouts / worktree seeded from another) would misroute

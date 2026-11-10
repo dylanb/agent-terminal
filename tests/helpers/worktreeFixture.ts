@@ -14,10 +14,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
-import { flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowHomeDir } from '../../src/main/flow';
 import { recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { activeFlowPointerFile } from '../../src/main/activeFlowPointer';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 const FLOW_STATE_FILE = 'flow-state.yaml';
 

@@ -20,6 +20,8 @@ import { stripStatusControlChars } from '../shared/loopStatus';
 import { errMsg } from './errno';
 import { approveEndsSliceBrief } from './sliceBriefReader';
 import type { SectionedReport } from './reportSections';
+import { ACTED_SIDE_EFFECT_KINDS, APPROVE_OPTION } from '../shared/engineCapabilities/loop';
+import { isOneOf } from '../shared/oneOf';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -47,9 +49,6 @@ export interface AppGateDecisionDeps {
   /** §27.10 — rebuild a report from the section files its steps wrote; throws when it cannot. */
   assembleReport(repoDir: string, report: SectionedReport): void;
   advanceFlow(repoDir: string, step: string): void;
-  /** §28.4.1 — on an approve whose `def` declares the `plan` output, re-source the `slices` flow input from that
-   *  plan WITHOUT re-entering the step; a later planning approve overwrites an earlier one (§28.8.1). Best-effort
-   *  — the caller wraps it, never aborting the advance. */
   sourceSliceCount(repoDir: string, def: LoopDefV2): void;
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
@@ -148,103 +147,107 @@ export async function runAppGateDecision(
   deps: AppGateDecisionDeps,
   note?: string,
 ): Promise<boolean> {
-  if (option === 'approve') {
+  if (option === APPROVE_OPTION) {
     const outcome = await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
     return outcome.kind === 'advanced';
   }
   const humanAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void =>
     deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit);
   const run = deps.readRunState(repoDir);
-  // §6/AC7
   if (!run || run.step !== step || run.turnKey !== turnKey) return false;
   if (run.status !== 'complete' || run.verdict === undefined) return false;
 
   const r = deps.resolveDef(repoDir, run.loop);
   if (!r.ok) return false;
-  // AC9
-  const gateOpt = r.def.gate.find((g) => g.option === option);
-  if (!gateOpt) return false;
+  if (!r.def.gate.some((g) => g.option === option)) return false;
 
-  // §27.9/§19.4 (AC4) — request-changes is not approve: a blank note fires no round, and the delivered/dropped
-  // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
-  // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
-  if (option === 'request-changes') {
-    const feedback = validFeedback(note);
-    if (feedback === undefined) return false;
-    if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
-      humanAudit('decision', 0);
-      return true;
-    }
-    humanAudit('decision-dropped', 1, 'the loop was busy');
-    return false;
-  }
-  // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
-  // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
-  // instruction on a drop, and a blank note fires nothing.
-  if (option === 'redo') {
-    const instruction = validInstruction(note);
-    if (instruction === undefined) return false;
-    if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
-      humanAudit('decision', 0);
-      return true;
-    }
-    humanAudit('decision-dropped', 1, 'the loop was busy');
-    return false;
-  }
-  // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
-  // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
-  // and the operator can retry (§27.9.1 N9b.5(d)).
-  if (option === 'polish') {
-    let entered = false;
-    try {
-      deps.enterPolish(repoDir, step);
-      humanAudit('decision', 0);
-      entered = true;
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      deps.emitError(`could not enter polish: ${reason}`);
-    }
-    deps.onViewChanged();
-    return entered;
-  }
-  // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
-  // slice's RED step (reopenSlice) so the operator can redo missed work. Like polish it carries no note to lose:
-  // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
-  // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
-  // never rejecting the decision path.
-  if (option === 'back-to-red') {
-    const brief = validInstruction(note?.trim());
-    if (brief !== undefined) {
-      try {
-        deps.recordSliceBrief(repoDir, step, brief);
-      } catch (e) {
-        deps.emitError(`could not save the back-to-RED brief: ${e instanceof Error ? e.message : String(e)}`);
-        deps.onViewChanged();
-        return false;
+  switch (option) {
+    // §27.9/§19.4 — request-changes is not approve: a blank note fires no round, and the delivered/dropped
+    // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
+    // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
+    case 'request-changes': {
+      const feedback = validFeedback(note);
+      if (feedback === undefined) return false;
+      if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
+        humanAudit('decision', 0);
+        return true;
       }
+      humanAudit('decision-dropped', 1, 'the loop was busy');
+      return false;
     }
-    let reopened = false;
-    let failure = 'the flow is not at a step that can return to RED';
-    try {
-      reopened = deps.reopenSlice(repoDir, () => humanAudit('decision', 0));
-    } catch (e) {
-      failure = e instanceof Error ? e.message : String(e);
+    // §27.9 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
+    // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
+    // instruction on a drop, and a blank note fires nothing.
+    case 'redo': {
+      const instruction = validInstruction(note);
+      if (instruction === undefined) return false;
+      if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
+        humanAudit('decision', 0);
+        return true;
+      }
+      humanAudit('decision-dropped', 1, 'the loop was busy');
+      return false;
     }
-    if (!reopened) {
-      if (brief !== undefined) deps.clearSliceBrief(repoDir);
-      deps.emitError(`could not reopen the slice: ${failure}`);
+    // §27.9 — polish stands the orchestrator down: write app-owned loop state only.
+    // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
+    // and the operator can retry (§27.9.1 N9b.5(d)).
+    case 'polish': {
+      let entered = false;
+      try {
+        deps.enterPolish(repoDir, step);
+        humanAudit('decision', 0);
+        entered = true;
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        deps.emitError(`could not enter polish: ${reason}`);
+      }
+      deps.onViewChanged();
+      return entered;
     }
-    deps.onViewChanged();
-    return reopened;
+    // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
+    // slice's RED step (reopenSlice) so the operator can redo missed work. Like polish it carries no note to lose:
+    // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
+    // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
+    // never rejecting the decision path.
+    case 'back-to-red': {
+      const brief = validInstruction(note?.trim());
+      if (brief !== undefined) {
+        try {
+          deps.recordSliceBrief(repoDir, step, brief);
+        } catch (e) {
+          deps.emitError(`could not save the back-to-RED brief: ${e instanceof Error ? e.message : String(e)}`);
+          deps.onViewChanged();
+          return false;
+        }
+      }
+      let reopened = false;
+      let failure = 'the flow is not at a step that can return to RED';
+      try {
+        reopened = deps.reopenSlice(repoDir, () => humanAudit('decision', 0));
+      } catch (e) {
+        failure = e instanceof Error ? e.message : String(e);
+      }
+      if (!reopened) {
+        if (brief !== undefined) deps.clearSliceBrief(repoDir);
+        deps.emitError(`could not reopen the slice: ${failure}`);
+      }
+      deps.onViewChanged();
+      return reopened;
+    }
+    // impasse is never executed here.
+    case 'impasse':
+      return false;
+    default: {
+      const unhandled: never = option;
+      return unhandled;
+    }
   }
-  // impasse is never executed here.
-  return false;
 }
 
 /** The approve operation both deciders invoke (§27.9.1 N9b.5(c)): the same identity check, accept, effects,
  *  audit and advance, returning the outcome the engine branches on. Every entry carries its decider (N9b.9). */
 export async function runAppApprove(repoDir: string, step: string, turnKey: string, deps: AppGateDecisionDeps, decider: ApproveDecider): Promise<GateApproveOutcome> {
-  const option: GateDecisionOption = 'approve';
+  const option: GateDecisionOption = APPROVE_OPTION;
   const by: GateDecider = decider.kind;
   let accepted = false;
   const effectFailures: string[] = [];
@@ -299,78 +302,90 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   const refs = deps.refs(repoDir);
   /** False when the side-effect failed; an unknown kind is skipped. */
   const runEffect = async (se: GateSideEffect, notify: (notice: string) => void): Promise<boolean> => {
-    if (se.kind === 'gh') {
-      const action = typeof se.args.action === 'string' ? se.args.action : '';
-      const ctx: AppGateSideEffectCtx = {
-        pr: refs.pr,
-        ticket: refs.ticket,
-        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-        pickup: refs.pickup,
-      };
-      try {
-        const result = await deps.runSideEffect(action, ctx);
-        if (result.outcome === 'no-target') {
-          gateAudit('side-effect-skipped', 0, `${action}: ${result.reason}`);
-          notify(`${action} skipped: ${result.reason}`);
-        } else {
-          gateAudit('side-effect', 0, action);
-        }
-        return true;
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
-        deps.emitError(`approve side-effect failed: ${reason}`);
-        return false;
-      }
-    }
-    if (se.kind !== 'commit') return true;
-    // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
-    // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
-    const label = typeof se.args.label === 'string' ? se.args.label : '';
-    try {
-      const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
-      if (result.outcome === 'committed') {
-        // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
-        gateAudit('side-effect', 0, `commit: ${label}`);
-        // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
-        // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
-        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
-        // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
-        // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
-        // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-        // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
-        // an automatic block.
+    const kind = se.kind;
+    if (!isOneOf(ACTED_SIDE_EFFECT_KINDS, kind)) return true;
+    switch (kind) {
+      case 'gh': {
+        const action = typeof se.args.action === 'string' ? se.args.action : '';
+        const ctx: AppGateSideEffectCtx = {
+          pr: refs.pr,
+          ticket: refs.ticket,
+          bodyFile: resolveGateSideEffectBodyFile(r.def, se),
+          pickup: refs.pickup,
+        };
         try {
-          deps.recordBaseline(repoDir, result.branch, result.sha);
+          const result = await deps.runSideEffect(action, ctx);
+          if (result.outcome === 'no-target') {
+            gateAudit('side-effect-skipped', 0, `${action}: ${result.reason}`);
+            notify(`${action} skipped: ${result.reason}`);
+          } else {
+            gateAudit('side-effect', 0, action);
+          }
+          return true;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
-          gateAudit('baseline-record-failed', 1, reason);
-          deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
+          gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
+          deps.emitError(`approve side-effect failed: ${reason}`);
+          return false;
         }
-      } else {
-        // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
-        // wording must never read as a failure.
-        gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
-        notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
       }
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      gateAudit('side-effect-failed', 1, `commit: ${reason}`);
-      deps.emitError(`approve side-effect failed: ${reason}`);
-      return false;
-    }
-    // §28.3
-    if (refs.pickup === null || isAdoptedPickup(refs.pickup)) return true;
-    const branch = refs.pickup.branch;
-    try {
-      await deps.runPushSideEffect(branch);
-      gateAudit('side-effect', 0, `push: ${branch}`);
-      return true;
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      gateAudit('side-effect-failed', 1, `push: ${branch}: ${reason}`);
-      deps.emitError(`could not push ${branch} to the pull request: ${reason}`);
-      return false;
+      case 'commit': {
+        // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
+        // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
+        const label = typeof se.args.label === 'string' ? se.args.label : '';
+        try {
+          const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
+          if (result.outcome === 'committed') {
+            // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
+            gateAudit('side-effect', 0, `commit: ${label}`);
+            // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
+            // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
+            // try — the disjoint store's fail-loud contract must never abort the accept (§27.13) NOR be caught by
+            // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
+            // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
+            // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
+            // same-branch baseline from a prior phase is NOT yet refused, so recovery there is a phase re-run, not
+            // an automatic block.
+            try {
+              deps.recordBaseline(repoDir, result.branch, result.sha);
+            } catch (e) {
+              const reason = e instanceof Error ? e.message : String(e);
+              gateAudit('baseline-record-failed', 1, reason);
+              deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
+            }
+          } else {
+            // §28.3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
+            // wording must never read as a failure.
+            gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
+            notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
+          }
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          gateAudit('side-effect-failed', 1, `commit: ${reason}`);
+          deps.emitError(`approve side-effect failed: ${reason}`);
+          return false;
+        }
+        // §28.3
+        if (refs.pickup === null || isAdoptedPickup(refs.pickup)) return true;
+        const branch = refs.pickup.branch;
+        try {
+          await deps.runPushSideEffect(branch);
+          gateAudit('side-effect', 0, `push: ${branch}`);
+          return true;
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          gateAudit('side-effect-failed', 1, `push: ${branch}: ${reason}`);
+          deps.emitError(`could not push ${branch} to the pull request: ${reason}`);
+          return false;
+        }
+      }
+      // Promotion is consumed at the gate, never run here.
+      case 'promote':
+        return true;
+      default: {
+        const unhandled: never = kind;
+        return unhandled;
+      }
     }
   };
   /** §27.10 — false when a report could not be rebuilt. */
@@ -439,9 +454,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     for (const se of gateOpt.sideEffects) await runEffect(se, deps.emitNotice);
   }
 
-  // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
-  // loop-back reads the plan-decided count. Best-effort: on a failure the previously sourced count (or the
-  // count-1 default) stands, and the advance is never aborted.
   try {
     deps.sourceSliceCount(repoDir, r.def);
   } catch (e) {

@@ -2,12 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { createFlowManager } from '../../src/main/flow';
 import { repoOnlyDefTiers } from '../helpers/defTiers';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A2 (#133) §18.7.3 AC9 — a begun run resolves its RECORDED source, never the live pointer: it never silently
 // switches which tier/entry supplies its definition, a lost bound source surfaces the §18.1 error rather than a

@@ -1,0 +1,13 @@
+version: v2
+work:
+  recipe: prompts/work.md
+  artifact: result
+reviewers: []
+boundaries: []
+report:
+  sections: []
+gate:
+  - option: approve
+outputs:
+  - id: result
+    path: work-result.md

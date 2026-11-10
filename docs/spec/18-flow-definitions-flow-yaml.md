@@ -13,6 +13,7 @@
   - **A destination root the user symlinked is followed.** The roots are app-derived, never read from untrusted content, and the tools that read them follow the link, so refusing would seed nothing and protect nothing. A link *inside* the root that escapes it is still refused (CWE-22/59).
   - **Codex reviewers are read-only by instruction only.** A Codex sub-agent inherits its parent's permissions and an agent file cannot narrow them, so a reviewer whose def lists a tool beyond Read/Grep/Glob/Bash is refused as mispackaged. Codex destinations are skipped, and reported as skipped, when the Codex home does not exist.
   - The action never deletes outside the leftovers it previewed and the user ticked, and never edits a `.gitignore` (§19.1): it is the explicit, user-invoked exemption to the no-silent-rewrite rule.
+  - **The engine-capabilities guide is always replaced.** The build generates `engine-capabilities.md`, a Markdown guide for agents that author flows: every key and value the flow loader and the loop-definition loader accept, with what it does and when to choose it, where flows and loops live in each tier, the §27.8 lookup order, and the turn contract a loop's turns follow (the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected) with how briefs, recipes and charters become turns. The accepted flow and loop values have one shared definition: both loaders validate against it and the guide is generated from it, so the guide cannot describe a value the engine does not accept. The guide is never committed. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md`, beside the global fallback flow, so `APP_HOME_DIR` relocates it the same way. It is the one exception to per-destination consent: every install that runs replaces it whole, a stale or hand-edited copy included, and the preview lists it as always replaced with no choice to make. It never opens the confirmation dialog on its own; cancelling the dialog, or a refused pre-write check, leaves it untouched like every other target.
 
 The setup popup's **Install/update examples** runs this same install, with the same replace question, from inside the popup (§29.3).
 
@@ -20,11 +21,10 @@ The shipped flows are in `example/flows/`. One of them, `repo-setup`, is the flo
 
 ### 18.2 Steps & kinds (D3/D7/D30)
 
-- Every step is **typed**: `loop` (runs a loop), `manual` (a human produces an artifact), `action` (a declared side-effect). **All kinds end in a gate.**
-- **`loop`** binds a `loop:` definition and may declare `bootstrap:` (§18.3), `loop_namespace:` and `gate_authority:` (`human` default / `auto`, §27.9.1). An absent `loop_namespace` binds `app`, the §27 engine; `legacy` names no surviving engine, so a step declaring it fails to load with a reason while the rest of the flow still advances, reverts, undoes and terminates around it. **Only loop steps** can be **sent back for more work** (§19.4/D7); manual/action steps are done/not-done.
+- Every step is **typed**: `loop` (runs a loop) or `manual` (a human produces an artifact). Any other kind fails to load. **All kinds end in a gate.**
+- **`loop`** binds a `loop:` definition and may declare `bootstrap:` (§18.3), `loop_namespace:` and `gate_authority:` (`human` default / `auto`, §27.9.1). An absent `loop_namespace` binds `app`, the §27 engine; `legacy` names no surviving engine, so a step declaring it fails to load with a reason while the rest of the flow still advances, reverts, undoes and terminates around it. **Only loop steps** can be **sent back for more work** (§19.4/D7); manual steps are done/not-done.
 - **`manual`** may bind `skill:`; the human decides when done.
 - **`todo_template:`** (§18.6) may be bound by any step kind.
-- **`action`** declares a `command:` run in the hosted terminal via the §9.3 path (subject to the running-process refusal of §19.3), e.g. `gh pr ready "$PR"`.
 
 ### 18.3 Bootstrap is a per-step entry action (D15)
 
@@ -42,9 +42,9 @@ The shipped flows are in `example/flows/`. One of them, `repo-setup`, is the flo
 
 ### 18.6 Skill & template references — reference, never inline (D37)
 
-- `skill:` and `todo_template:` are **always references** (a registered name **or** a file path, repo-relative against the worktree), never inline bodies: they can be large and shared, and inlining would bloat the YAML.
-- `skill:` names a **Claude Code skill**; on step entry the app injects the skill invocation so the agent loads its playbook.
-- `todo_template:` names a **markdown-list** template (§21.2). It is not an auto-run entry action: it is the **default selection** of the on-demand template picker, which lists every template under the flow's `todo-templates/`, so the human chooses and instantiates rather than the app auto-filling the list.
+- `skill:` and `todo_template:` are **always references**, never inline bodies: they can be large and shared, and inlining would bloat the YAML.
+- `skill:` names a **Claude Code skill** (a registered name **or** a file path, repo-relative against the worktree); on step entry the app injects the skill invocation so the agent loads its playbook.
+- `todo_template:` names a **markdown-list** template (§21.2) by its file name, with or without `.md`, in the flow's own `todo-templates/`. A reference that leaves that folder, names a named pipe or a device rather than a regular file, or names a file larger than 256 KiB, does not resolve; there is no repository-relative path form and no global template folder. It is not an auto-run entry action: it is the **default selection** of the on-demand template picker, which lists every template under the flow's `todo-templates/`, so the human chooses and instantiates rather than the app auto-filling the list.
 
 ### 18.7 Flow catalog & per-worktree flow selection
 

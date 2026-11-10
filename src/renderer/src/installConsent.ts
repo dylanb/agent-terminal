@@ -29,6 +29,7 @@ export const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   codexLoops: 'Codex loop definitions',
   codexAgents: 'Codex reviewer agents',
   codexSkills: 'Codex skills',
+  engineGuide: 'Engine capabilities guide',
 };
 
 function retiredList(retired: RetiredExample[]): string {
@@ -52,7 +53,7 @@ export interface InstallConsent {
 
 export function createInstallConsent(doc: Document, titleId: string, preview: InstallPreview): InstallConsent {
   const conflicts = conflictsOf(preview);
-  const { retired, retiredFallback } = preview;
+  const { retired, retiredFallback, alwaysReplaced } = preview;
 
   const p = doc.createElement('p');
   p.className = 'ph';
@@ -142,6 +143,21 @@ export function createInstallConsent(doc: Document, titleId: string, preview: In
     retiredBox.setAttribute('data-retired', '');
   }
 
+  if (alwaysReplaced.length > 0) {
+    const rows = consentGroup('always', 'Always replaced');
+    for (const entry of alwaysReplaced) {
+      const row = doc.createElement('div');
+      row.className = 'install-consent-opt ic-fixed';
+      const name = doc.createElement('span');
+      name.className = 'ic-name';
+      name.textContent = DESTINATION_LABEL[entry.destination];
+      const files = doc.createElement('span');
+      files.className = 'ic-files';
+      files.textContent = entry.files.join(', ');
+      row.append(name, files);
+      rows.append(row);
+    }
+  }
   const title = doc.createElement('h3');
   title.className = 'serif';
   title.id = titleId;

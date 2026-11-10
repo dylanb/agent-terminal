@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   resolveLoopDefV2,
-  WORK_COMPLETIONS,
   isWorkCompletion,
   requiresResultBinding,
   type LoopDefV2Result,
 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, bundledFlowOf, bundledLoopDir } from '../helpers/bundledLoops';
 import { defResolutionOf } from '../../src/main/autoGate';
+import { WORK_COMPLETIONS } from '../../src/shared/engineCapabilities/loop';
 
 // §28.4/§28.5.5 — the work.completion discriminator: an additive, closed-set field naming which machine
 // completion predicate a work turn uses (`red` in S3; extends to green/refactor in S4/S5). Parsed by resolving

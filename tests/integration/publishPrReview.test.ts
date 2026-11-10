@@ -100,7 +100,7 @@ async function approve(run: Adopted, options: ApproveOptions = {}): Promise<Outc
   const def = { gate: PUBLISH, inputs: [], outputs: [{ id: 'report', path: options.reportPath ?? run.report }], work: { recipe: '/r', artifact: 'report' } } as unknown as LoopDefV2;
   const deps: AppGateDecisionDeps = {
     readRunState: () => AT_GATE,
-    resolveDef: () => ({ ok: true, def, tierRoot: run.w.repo, defDir: run.w.repo }),
+    resolveDef: () => ({ ok: true, def, tierRoot: run.w.repo, defFile: "/tier/loop/loop.yaml", defDir: run.w.repo }),
     refs: () => resolveAppGateRefs({ pr: run.w.prNumber }, pickup),
     runSideEffect: createRealAppGateGitHub(run.w.repo),
     runCommitSideEffect: createRealAppGateCommit(run.w.repo),

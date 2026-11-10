@@ -65,6 +65,7 @@ import {
   type SetupDismissMsg,
   type SetupStatusMsg,
 } from '../shared/ipc';
+import { isOneOf } from '../shared/oneOf';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
   'manual',
@@ -251,7 +252,7 @@ function isValidRebindChoice(c: unknown): c is RebindChoice {
   if (!isRecord(c)) return false;
   if (c.origin === 'local' || c.origin === 'fallback') return hasExactKeys(c, ['origin']);
   return (
-    (CATALOG_ORIGINS as readonly unknown[]).includes(c.origin) &&
+    isOneOf(CATALOG_ORIGINS, c.origin) &&
     hasExactKeys(c, ['origin', 'id']) &&
     typeof c.id === 'string' &&
     isSafeCatalogId(c.id)
@@ -309,7 +310,7 @@ export function isValidFlowAppRouteOut(m: unknown): m is FlowAppRouteOutMsg {
     m.step.length > 0 &&
     typeof m.turnKey === 'string' &&
     m.turnKey.length > 0 &&
-    (APP_ROUTE_OUT_ACTIONS as readonly unknown[]).includes(m.action)
+    isOneOf(APP_ROUTE_OUT_ACTIONS, m.action)
   );
 }
 
@@ -326,7 +327,7 @@ export function isValidFlowAppGateDecision(m: unknown): m is FlowAppGateDecision
     m.step.length > 0 &&
     typeof m.turnKey === 'string' &&
     m.turnKey.length > 0 &&
-    (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option)
+    isOneOf(GATE_DECISION_OPTIONS, m.option)
   );
 }
 
@@ -478,7 +479,7 @@ function isTodoBase(m: unknown): m is Record<string, unknown> {
 function isValidSource(s: unknown): boolean {
   if (s === undefined) return true;
   if (!isRecord(s)) return false;
-  if (!TODO_SOURCE_TYPES.includes(s.type as TodoSourceType)) return false;
+  if (!isOneOf(TODO_SOURCE_TYPES, s.type)) return false;
   if ('eventId' in s && typeof s.eventId !== 'string') return false;
   return true;
 }

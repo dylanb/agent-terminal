@@ -10,16 +10,17 @@ import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import { join } from 'node:path';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import type { RebindChoice } from '../../src/shared/ipc';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream } from '../../src/shared/audit';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
 let h: FlowPickerHarness | undefined;
-test.afterEach(async () => {
-  await h?.dispose();
+test.afterEach(async ({}, testInfo) => {
+  await h?.dispose(testInfo);
   h = undefined;
 });
 

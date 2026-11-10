@@ -1,0 +1,30 @@
+name: repeat-list
+steps:
+  - id: design
+    kind: loop
+    loop: repeat-list-design
+    loop_namespace: app
+    gate_authority: auto
+  - id: build
+    kind: loop
+    loop: repeat-list-work
+    loop_namespace: app
+    gate_authority: auto
+  - id: check
+    kind: loop
+    loop: repeat-list-work
+    loop_namespace: app
+    gate_authority: auto
+    repeat:
+      back_to: build
+      count_from:
+        artifact: steps
+        format: json-list
+        list: steps
+  - id: finish
+    kind: loop
+    loop: repeat-list-work
+    loop_namespace: app
+    gate_authority: auto
+  - id: done
+    kind: manual

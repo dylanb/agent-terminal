@@ -3,27 +3,33 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, ScreenWaiting, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
-import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { createFlowStateStore, type FlowStateStore, type RepeatListRecord } from './flowState';
+import { repeatEntryTitle, type RepeatEntry, type RepeatListSpec } from '../shared/repeatList';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
-import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
-import { errMsg, isErrno } from './errno';
-import { readBoundedNoFollow } from './boundedRead';
+import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowHomeDir } from './flowHome';
+import { errMsg } from './errno';
+import { layoutRoot } from './layoutRoot';
+import { readBoundedNoFollow, readBoundedResolved, type BoundedRead } from './boundedRead';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import { isOneOf } from '../shared/oneOf';
+import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, REPEAT_LIST_FORMATS, type ActedInputType, type FlowBootstrap, type FlowStepKind, type RepeatListFormat } from '../shared/engineCapabilities/flow';
+
+const INPUT_TYPE_REFS: Readonly<Record<ActedInputType, keyof FlowRefs>> = { 'github-ticket': 'ticket', pr: 'pr' };
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -45,11 +51,9 @@ export interface FlowInputDef {
   required: boolean;
 }
 
-/** A §18.1 step. `manual`: a human produces an artifact. `loop` (§24.2.3 T2): runs an agent-loop,
- *  binding its LoopDef by name (`loop`). The `action` kind (§18.2) is a later phase. */
 export interface FlowStepDef {
   id: string;
-  kind: 'manual' | 'loop';
+  kind: FlowStepKind;
   skill?: string;
   todoTemplate?: string;
   /** The bound agent-loop LoopDef name; `loop` steps only. */
@@ -60,20 +64,21 @@ export interface FlowStepDef {
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
   gateAuthority?: GateAuthority;
-  /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
-   *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
-  bootstrap?: 'pickup';
+  bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
-   *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
-   *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
-   *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
-  repeat?: { backTo: string; countInput: string };
+   *  EARLIER step) instead of the next step, until it has looped back as many times as `source` gives —
+   *  resolved at runtime, clamped to [1, MAX_SLICES]. */
+  repeat?: { backTo: string; source: RepeatCountSource };
 }
 
-/** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
- *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
-export const MAX_SLICES = 50;
+export type RepeatCountSource =
+  | { kind: 'input'; countInput: string }
+  | ({ kind: 'list'; artifact: string } & RepeatListSpec);
+
+export function stepTemplateRef(step: FlowStepDef): string | null {
+  return step.todoTemplate ? step.todoTemplate : null;
+}
 
 export interface FlowDefinition {
   name: string;
@@ -88,9 +93,6 @@ export type FlowLoad =
 
 export { FLOW_HOME_SUBDIR, flowHomeDir };
 
-/** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
- *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is in flowHome.ts). */
-export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
 /** Whether `root` holds a flow definition at its flow home — the single presence gate the local-first loader
@@ -111,13 +113,15 @@ export function resumesAt(definition: FlowDefinition, step: string): boolean {
   return definition.steps.some((s) => s.id === step);
 }
 
-export const FLOWS_CATALOG_SUBDIR = 'flows';
-
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
  *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
  *  enumerated location cannot drift (CLAUDE.md writer↔reader rule). */
 export function flowCatalogDir(root: string): string {
   return path.join(flowHomeDir(root), FLOWS_CATALOG_SUBDIR);
+}
+
+export function flowCatalogRoot(dir: string): string | null {
+  return layoutRoot(flowCatalogDir, dir);
 }
 
 /** A catalog entry's definition file `<root>/.agent-terminal/flows/<id>/flow.yaml` — the one location the
@@ -150,17 +154,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
  *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
  *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
 export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
-  let raw: string;
-  try {
-    raw = readFileSync(file, 'utf8');
-  } catch (e) {
-    // AC 4 reason-accuracy: ENOENT is genuinely "no flow.yaml"; any other errno (EISDIR from a directory
-    // planted at the path, EACCES on a shared machine, ENOTDIR/ELOOP from a bad symlink) names what actually
-    // failed rather than reporting the flow absent while it sits on disk. Both questions answered through errno.ts.
-    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
-    return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
-  }
-  return parseFlowDefinition(raw, file);
+  return flowLoadOf(readBoundedResolved(file, MAX_FLOW_DEFINITION_BYTES), file, relLabel);
 }
 
 export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
@@ -168,22 +162,58 @@ export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
 export function loadUntrustedFlowDefinition(file: string): FlowLoad {
-  const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
+  return flowLoadOf(readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES), file, file);
+}
+
+function flowLoadOf(read: BoundedRead, file: string, label: string): FlowLoad {
   if (read.ok) return parseFlowDefinition(read.text, file);
   switch (read.cause) {
     case 'absent':
-      return { ok: false, error: `no flow.yaml found at ${file}` };
+      return { ok: false, error: `no flow.yaml found at ${label}` };
     case 'over-cap':
       return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
     case 'unreadable':
       return {
         ok: false,
-        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+        error: `cannot read ${label}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
       };
     default:
       return read.cause satisfies never;
   }
 }
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+
+const MALFORMED_REPEAT = 'has a malformed repeat (needs back_to + count_input or count_from)';
+
+function parseRepeat(raw: unknown, earlier: readonly FlowStepDef[]): NonNullable<FlowStepDef['repeat']> | string {
+  if (!isRecord(raw) || !isNonEmptyString(raw.back_to)) return MALFORMED_REPEAT;
+  const backTo = raw.back_to;
+  const source = parseCountSource(raw.count_input, raw.count_from);
+  if (typeof source === 'string') return source;
+  if (!earlier.some((s) => s.id === backTo)) return `repeat.back_to "${backTo}" is not an earlier step`;
+  return { backTo, source };
+}
+
+function parseCountSource(countInput: unknown, countFrom: unknown): RepeatCountSource | string {
+  if (countInput !== undefined && countFrom !== undefined) return 'has a repeat declaring both count_input and count_from (declare exactly one)';
+  if (countFrom === undefined) {
+    return isNonEmptyString(countInput) ? { kind: 'input', countInput } : MALFORMED_REPEAT;
+  }
+  if (!isRecord(countFrom)) return 'has a repeat.count_from that is not a mapping of artifact + format';
+  const { artifact, format, list } = countFrom;
+  if (!isNonEmptyString(artifact)) return 'has a repeat.count_from without a non-empty artifact';
+  if (!isOneOf(REPEAT_LIST_FORMATS, format))
+    return `has a repeat.count_from with unsupported format "${String(format)}" (supports: ${REPEAT_LIST_FORMATS.join(', ')})`;
+  return LIST_SOURCE_FOR[format](artifact, list);
+}
+
+const LIST_SOURCE_FOR: Readonly<Record<RepeatListFormat, (artifact: string, list: unknown) => RepeatCountSource | string>> = {
+  'json-list': (artifact, list) =>
+    isNonEmptyString(list) ? { kind: 'list', artifact, format: 'json-list', list } : 'has a json-list repeat.count_from without a non-empty list key',
+  'impl-slices': (artifact, list) =>
+    list === undefined ? { kind: 'list', artifact, format: 'impl-slices' } : 'has an impl-slices repeat.count_from with a list key, which only json-list takes',
+};
 
 function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
@@ -199,13 +229,12 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
 
-  // Only `manual` and `loop` kinds are in scope (§24.2.3 T1/T2); the `action` kind (§18.2) is rejected.
   const steps: FlowStepDef[] = [];
   for (const raw of doc.steps) {
     if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
       return { ok: false, error: 'flow.yaml step is missing an id' };
-    if (raw.kind !== 'manual' && raw.kind !== 'loop')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+    if (!isOneOf(FLOW_STEP_KINDS, raw.kind))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: ${FLOW_STEP_KINDS.join(', ')})` };
     if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
       return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
     // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
@@ -236,25 +265,16 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
     if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
-    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+    if (raw.bootstrap !== undefined && !isOneOf(FLOW_BOOTSTRAPS, raw.bootstrap))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: ${FLOW_BOOTSTRAPS.join(', ')})` };
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
-    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
-    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
-    let repeat: { backTo: string; countInput: string } | undefined;
+    let repeat: FlowStepDef['repeat'];
     if (raw.repeat !== undefined) {
-      if (
-        !isRecord(raw.repeat) ||
-        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
-        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
-      )
-        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
-      const backTo = raw.repeat.back_to;
-      if (!steps.some((s) => s.id === backTo))
-        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
-      repeat = { backTo, countInput: raw.repeat.count_input };
+      const parsed = parseRepeat(raw.repeat, steps);
+      if (typeof parsed === 'string') return { ok: false, error: `flow.yaml step "${raw.id}" ${parsed}` };
+      repeat = parsed;
     }
     steps.push({
       id: raw.id,
@@ -263,7 +283,7 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
       ...(gateAuthority !== undefined ? { gateAuthority } : {}),
-      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+      ...(raw.bootstrap !== undefined ? { bootstrap: raw.bootstrap } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
       ...(repeat ? { repeat } : {}),
     });
@@ -290,6 +310,13 @@ export interface RunIdentity {
   startedAt: number;
   flow: string;
 }
+
+export interface SourcedLists {
+  plan: RepeatListRecord | null;
+  countFrom: RepeatListRecord | null;
+}
+
+const PLAN_SLICES_INPUT = 'slices';
 
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
@@ -332,11 +359,9 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): MachineView;
-  /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
-   *  (unlike provideInput, which answers a step-entry prompt and re-enters). A planning approve gate uses it
-   *  to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering the planning step would
-   *  restart its loop. Legal only while a step is in_progress. */
-  resolveInputs(values: Record<string, string>): MachineView;
+  recordSourcedLists(lists: SourcedLists): MachineView;
+  repeatSource(): RepeatCountSource | null;
+  entryFor(stepId: string): RepeatEntry | null;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
@@ -391,7 +416,9 @@ export function createFlowMachine(
       reopenSlice: view,
       terminate: view,
       provideInput: view,
-      resolveInputs: view,
+      recordSourcedLists: view,
+      repeatSource: () => null,
+      entryFor: () => null,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
         return view();
@@ -402,18 +429,22 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
+  const repeatIndex = steps.findIndex((s) => s.repeat);
+  const repeatStep: FlowStepDef | undefined = steps[repeatIndex];
+  const returnStep = repeatStep?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
-  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
+  const typedInput = (type: ActedInputType): { step: FlowStepDef; name: string } | undefined => {
     for (const step of steps) {
       const input = (step.inputs ?? []).find((i) => i.type === type);
       if (input) return { step, name: input.name };
     }
     return undefined;
   };
-  const ticketInput = typedInput('github-ticket');
-  const prInput = typedInput('pr');
+  const refInputs = ACTED_INPUT_TYPES.flatMap((type) => {
+    const input = typedInput(type);
+    return input ? [{ field: INPUT_TYPE_REFS[type], ...input }] : [];
+  });
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -423,6 +454,7 @@ export function createFlowMachine(
   // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
   // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
   let repeatCounts: Record<string, number> = Object.create(null);
+  let repeatList: RepeatListRecord | null = null;
   // §22.3.1.
   let userTitle: string | null = null;
   let identity: RunIdentity | null = null;
@@ -437,6 +469,7 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     repeatCounts = Object.create(null);
+    repeatList = null;
     identity = null;
     const persisted = store.read();
     if (persisted) {
@@ -447,6 +480,7 @@ export function createFlowMachine(
       if (persisted.startedAt !== undefined && persisted.flow !== undefined) identity = { startedAt: persisted.startedAt, flow: persisted.flow };
       if (persisted.inputs) inputs = { ...persisted.inputs };
       if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
+      repeatList = persisted.repeatList ?? null;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -464,38 +498,38 @@ export function createFlowMachine(
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
   // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
-  const slicesFor = (countInput: string): number => {
-    const n = numericInput(countInput);
+  const slicesFor = (source: RepeatCountSource): number => {
+    if (source.kind === 'list') return repeatList === null ? 1 : Math.min(repeatList.count, MAX_SLICES);
+    const n = numericInput(source.countInput);
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
   };
-  const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
+  const computeRefs = (entered: readonly FlowStepDef[]): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
     // linkedIssues/pr went with the bridge.
-    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
-    const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
-    if (typeof ticket === 'number') refs.ticket = ticket;
-    if (typeof pr === 'number') refs.pr = pr;
+    for (const { field, step, name } of refInputs) {
+      const value = entered.includes(step) ? numericInput(name) : undefined;
+      if (typeof value === 'number') refs[field] = value;
+    }
     return hasFlowRefs(refs) ? refs : undefined;
   };
 
   const view = (): MachineView => {
     const step = current();
+    const templateRef = stepTemplateRef(step);
     const base: MachineView = {
       stepName: step.id,
       steps: names,
       position: index + 1,
       total: steps.length,
       status,
-      ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+      ...(templateRef !== null ? { templateRef } : {}),
       ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
-    const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
-    const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
-    const refs = computeRefs({ ticketStepEntered, prStepEntered });
+    const refs = computeRefs(entered);
     const withRefs = refs ? { ...base, refs } : base;
     // §27.15 — the loop-view provider is selected on the most-recent loop step's namespace binding. Every
     // binding names the surviving (§27) engine except an explicitly-`legacy` one, which names no surviving
@@ -541,6 +575,7 @@ export function createFlowMachine(
       ...(identity !== null ? { startedAt: identity.startedAt, flow: identity.flow } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
+      ...(repeatList !== null ? { repeatList } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
   };
@@ -570,7 +605,6 @@ export function createFlowMachine(
     },
     currentSlice: () => {
       hydrate(); // §19.1: reflect the on-disk progression, as state() does
-      const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
     sliceStartStep: () => returnStep,
@@ -588,7 +622,7 @@ export function createFlowMachine(
       if (step.repeat) {
         const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
         const backIndex = names.indexOf(step.repeat.backTo);
-        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+        if (completed < slicesFor(step.repeat.source) && backIndex >= 0) {
           repeatCounts[step.id] = completed + 1;
           index = backIndex;
           persist();
@@ -610,6 +644,7 @@ export function createFlowMachine(
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
       repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
+      repeatList = null;
       persist();
       return enter(view());
     },
@@ -629,6 +664,7 @@ export function createFlowMachine(
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
+        repeatList = null;
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -653,20 +689,42 @@ export function createFlowMachine(
       status = 'not_started';
       inputs = {};
       repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
+      repeatList = null;
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
     provideInput: (values) => {
       requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };
+      const source = repeatStep?.repeat?.source;
+      if (source?.kind === 'input' && Object.prototype.hasOwnProperty.call(values, source.countInput)) repeatList = null;
       persist();
       return enter(view());
     },
-    resolveInputs: (values) => {
-      requireStatus('in_progress', 'resolveInputs');
-      inputs = { ...inputs, ...values };
+    recordSourcedLists: ({ plan, countFrom }) => {
+      const source = repeatStep?.repeat?.source;
+      const countsFromPlan = source?.kind === 'input' && source.countInput === PLAN_SLICES_INPUT;
+      const list = source?.kind === 'list' ? countFrom : countsFromPlan ? plan : null;
+      if (plan === null && list === null) return view();
+      requireStatus('in_progress', 'recordSourcedLists');
+      if (plan !== null) inputs = { ...inputs, [PLAN_SLICES_INPUT]: String(plan.count) };
+      if (list !== null) repeatList = { count: list.count, titles: list.titles.slice(0, MAX_SLICES).map(repeatEntryTitle) };
       persist();
-      return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
+      return view();
+    },
+    repeatSource: () => repeatStep?.repeat?.source ?? null,
+    entryFor: (stepId) => {
+      hydrate();
+      const repeat = repeatStep?.repeat;
+      if (!repeat || repeatList === null) return null;
+      const at = names.indexOf(stepId);
+      if (at < names.indexOf(repeat.backTo) || at > repeatIndex) return null;
+      const { source } = repeat;
+      const listSetsCount = source.kind === 'list' || (Object.prototype.hasOwnProperty.call(inputs, source.countInput) && inputs[source.countInput] === String(repeatList.count));
+      if (!listSetsCount) return null;
+      const position = repeatCounts[repeatStep.id] ?? 1;
+      const title = repeatList.titles[position - 1];
+      return title === undefined ? null : { position, count: slicesFor(source), title };
     },
     setTitle: (text) => {
       hydrate(); // §19.1
@@ -707,9 +765,9 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
-  /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
-   *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
-  resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
+  recordSourcedLists(repoKey: string, lists: SourcedLists): FlowStateView;
+  repeatSource(repoKey: string): RepeatCountSource | null;
+  entryFor(repoKey: string, stepId: string): RepeatEntry | null;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -888,7 +946,9 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };
     },
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
-    resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
+    recordSourcedLists: (k, lists) => viewOf(k, (m) => m.recordSourcedLists(lists)),
+    repeatSource: (k) => machineFor(k).machine.repeatSource(),
+    entryFor: (k, stepId) => machineFor(k).machine.entryFor(stepId),
     setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }

@@ -82,6 +82,33 @@ agent's scratch builds (about 4,900 directories) hung the app on macOS: each wat
 one shared FSEvents stream, so a cwd change blocked the main thread. The watch now covers
 `.agent-terminal/` itself and its `loop/` tree only, and on macOS it is one recursive watch filtered to the same
 directories the Linux per-directory watch covers. No IPC or payload changes.
+## #278 — a repeat takes its count from a named list in any artifact
+
+§28.4.1: a step's `repeat` now declares exactly one count source, `count_input` as before or `count_from: { artifact, format, list }`, which takes the count from a list in the artifact some step's loop outputs under the id `artifact`. `format` is one of a closed set: `impl-slices`, the `## Impl-slices` block read by the plan rules, or `json-list`, a JSON object whose `list` key holds entries that each carry a `title`. A declaration the flow file alone can tell is wrong fails the flow to load naming the step; one whose `artifact` no step's loop outputs is refused at Start, with a notice naming the step and the artifact, and by `--validate-flow`. The count is re-sourced at every approve, human or auto, of a step whose loop outputs the artifact, under the same bounds as before: absent, malformed or empty sources nothing, over `MAX_SLICES` clamps, and a shorter list than the iteration the run is on leaves the count standing. Every work turn of the repeated group, including `feature-dev-v3`'s, now carries one line `entry <k> of <N>: <title>`, with each title cleaned and cut to 100 characters and kept in `flow-state.yaml` so a relaunch names the same entry. A run persisted before this change still resumes. §23.5: the launcher gains `--check-repeat-list <file> <list>`, recognised only as the exact first argument, which checks one `json-list` file with the engine's own predicate and read in the foreground and prints one `OK: ` line (exit 0), one `<absolute path>: <problem>` line (exit 1), or usage on standard error (exit 2). It never writes. No IPC change.
+
+## #277 impl-approve — a run refuses a named pipe or an oversized file where it reads a loop definition, the override registry or a todo template
+
+§27.8, §18.6 (operator decisions 2026-11-04): a run's own reads now refuse a loop definition or a repository `.agent-loop.yaml` that is a named pipe or a device, or larger than its size limit (256 KiB for a definition, 64 KiB for the registry), with a reason, and treat such a todo template (limit 256 KiB) as not resolving. Each is read through one descriptor opened without blocking, so a file swapped for a pipe after it is checked cannot block either. Before, a pipe planted in repository content blocked the main process until something wrote to it, and these files were read whole whatever their size. A `.agent-loop.yaml` that is a link is still followed. `--validate-flow` uses the same reads. §19.1 (operator decision 2026-11-04): the same rule now covers every file the app reads from a working tree: its `.agent-terminal/` state, loop artifacts, `flow.yaml`, recipes, charters, report sections, `todos.json` and the monitor's events file. §19.1 lists each limit. A refused file takes the path an unreadable one already took. A file that is not valid UTF-8 is now refused too, where it used to be read with replacement characters. No IPC change.
+
+## #277 slice 2 — `agent-terminal --validate-flow` checks loops, references, templates and bindings
+
+§23.5: the command now resolves each loop step's loop the way a run of the flow resolves it, per tier (a repository flow through that repository's overrides, the operator tier and the app's bundled tree; a global flow without any repository's overrides; a bundled flow in its own `example/loops-v2/` only). It also fails a step bound to the retired engine, a todo template that does not resolve, and a loop definition whose brief, recipe, consolidator recipe or charter is not a readable regular file. A problem in a loop definition is printed under that definition's real path; a loop that does not resolve, under `flow.yaml`. A named pipe in any file it reads is reported, never read. No IPC change.
+
+## #277 slice 1 — `agent-terminal --validate-flow <dir>` checks a flow folder
+
+§23.5: the launcher gains `--validate-flow <dir>`, recognised only as the exact first argument, like `--controller`. It runs this build's checker runtime in the foreground, in plain-Node mode, opening no instance. It locates the folder in its tier from its location and loads it with the app's own catalog resolver and flow loader. It prints one `OK: ` line and exits 0, or one `<file>: <problem>` line for the first problem and exits 1, or a usage message on standard error and exits 2. It never writes. The trust-boundary and `APP_LAUNCH_DIR` wording is scoped to the directory launch. §18.6 and §21.2 now state where a run resolves a todo template: a file name, with or without `.md`, in the flow's own `todo-templates/`; the repository-relative path form and the global template folder they described do not exist. No IPC change.
+
+## #276 slice 5 — the engine-capabilities guide covers the turn contract
+
+§18.1: the guide now states the turn contract — the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected — and how briefs, recipes and charters become turns.
+
+## #276 slice 3 — the engine-capabilities guide covers loop definitions
+
+§18.1: the guide now lists every loop-definition key and accepted value, including the gate options, side-effect kinds and `gh` actions the engine acts on and the args each side-effect kind reads. The accepted flow and loop values have one shared definition that both loaders validate against and the guide is generated from.
+
+## #276 slice 1 — an installed engine-capabilities guide for flow authors
+
+§18.1: the build generates `engine-capabilities.md`, a guide for agents that author flows, from the definitions the flow loader validates against: every flow-definition key and accepted value, with what it does and when to choose it, where flows and loops live in each tier, and the §27.8 lookup order. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md` and replaces it whole on every install, the one exception to per-destination consent; the preview lists it as always replaced. §18.2: the `action` step kind is removed, because the loader accepts only `manual` and `loop`. IPC: the `examples:preview` result gains `alwaysReplaced`, and the destination list gains `engineGuide` (definitions in `src/shared/ipc.ts`).
 
 ## simple-dev-v1 — a lighter flow, and the back-to-red control names where it returns
 

@@ -2,6 +2,7 @@
 // the engine that reads it at the done-signal both take the vocabulary from here, so the two cannot drift.
 
 import { readJsonObject } from './jsonArtifact';
+import { isOneOf } from './oneOf';
 
 export const GOAL_PROGRESS_STATUSES = ['working', 'checkpoint', 'done', 'blocked'] as const;
 export type GoalProgressStatus = (typeof GOAL_PROGRESS_STATUSES)[number];
@@ -26,7 +27,7 @@ export type GoalProgressRead = { ok: true; progress: GoalProgress } | { ok: fals
 const MAX_LEG = 1_000_000_000;
 
 function isStatus(v: unknown): v is GoalProgressStatus {
-  return (GOAL_PROGRESS_STATUSES as readonly unknown[]).includes(v);
+  return isOneOf(GOAL_PROGRESS_STATUSES, v);
 }
 
 /** The progress file read, or what is wrong with it. The problem is fixed text, never the file's own. */

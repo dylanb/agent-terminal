@@ -14,7 +14,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from '../../src/main/autoGateComposition';
-import { catalogEntryDefFile, createFlowManager, flowHomeDir, FLOW_DEF_FILE, type FlowManager } from '../../src/main/flow';
+import { catalogEntryDefFile, createFlowManager, flowHomeDir, type FlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
@@ -39,6 +39,7 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { createVirtualClock } from '../helpers/virtualClock';
 import { repoOnlyDefTiers } from '../helpers/defTiers';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // §27.9.1 N9b.2, N9b.5(b), N9b.8 — #137 plan rows "Terminate ends the engine-held run", "Restart and Undo
 // keep authority", "Bind before entry", authority read from the run's bound flow, and a relaunch keeping it, driven through the production Start composition over the real flow manager, run resolver, flow
@@ -280,6 +281,8 @@ function makeRig(opts: RigOpts = {}): Rig {
       return run;
     },
     start: (repoKey, o) => start(repoKey, o),
+    countSourceRefusal: () => null,
+    state: (k) => flow.state(k),
     now: opts.startClock ?? (() => T0),
     record: composeRecordFlowTransition(recorder, gate),
   });

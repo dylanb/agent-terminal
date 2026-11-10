@@ -7,9 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
-import { flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 const worktrees = createWorktreeFixture();
 const catalogs = createCatalogFixture();

@@ -1,23 +1,35 @@
-import { lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
-import { join } from 'node:path';
+// What a tree holds, for a before/after comparison that proves a run wrote nothing: every path under a root,
+// its type, a file's bytes and a link's target. Links are recorded, never followed.
 
-/** Every entry under `root` except `.git/`, keyed by its relative path: a file's bytes, a symlink's target, or
- *  `<dir>` for a directory. Two equal snapshots are the same working tree, byte for byte. */
-export function snapshotTree(root: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const walk = (rel: string): void => {
-    for (const name of readdirSync(join(root, rel)).sort()) {
-      const path = rel === '' ? name : `${rel}/${name}`;
-      if (path === '.git') continue;
-      const abs = join(root, path);
-      const stat = lstatSync(abs);
-      if (stat.isSymbolicLink()) out[path] = `-> ${readlinkSync(abs)}`;
-      else if (stat.isDirectory()) {
-        out[path] = '<dir>';
-        walk(path);
-      } else out[path] = readFileSync(abs).toString('base64');
+import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { isErrno } from '../../src/main/errno';
+
+export type TreeEntry =
+  | { type: 'dir' }
+  | { type: 'file'; bytes: string }
+  | { type: 'link'; target: string }
+  | { type: 'other' };
+
+/** Keyed by the path relative to `root` (`''` is the root itself); an absent root is an empty snapshot. */
+export function snapshotTree(root: string): Record<string, TreeEntry> {
+  const out: Record<string, TreeEntry> = {};
+  const visit = (rel: string): void => {
+    const abs = rel === '' ? root : join(root, rel);
+    let stat;
+    try {
+      stat = lstatSync(abs);
+    } catch (e) {
+      if (rel === '' && isErrno(e, 'ENOENT')) return;
+      throw e;
     }
+    if (stat.isSymbolicLink()) out[rel] = { type: 'link', target: readlinkSync(abs) };
+    else if (stat.isFile()) out[rel] = { type: 'file', bytes: readFileSync(abs).toString('base64') };
+    else if (stat.isDirectory()) {
+      out[rel] = { type: 'dir' };
+      for (const name of readdirSync(abs).sort().filter((name) => rel !== '' || name !== '.git')) visit(rel === '' ? name : join(rel, name));
+    } else out[rel] = { type: 'other' };
   };
-  walk('');
+  visit('');
   return out;
 }

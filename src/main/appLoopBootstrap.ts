@@ -14,6 +14,7 @@ import {
 import { isAdoptPickup, type AdoptPickupV2, type PickupContractV2, type PickupV2 } from './loopDefV2';
 import type { AdoptionOwnership, AdoptionStartResult } from './adoptionStart';
 import { errMsg } from './errno';
+import { ISSUE_SLOT } from '../shared/engineCapabilities/loop';
 import type { AppBootstrapAuditKind } from '../shared/audit';
 import { BUSY_NOTICE } from './flowEntryActions';
 import {
@@ -220,7 +221,7 @@ export async function runAppLoopBootstrap(
       : { ok: false, kind: 'error', error, requiresAttention: true, recovery };
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
   if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
-  const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
+  const branch = req.spec.branchTemplate.replaceAll(ISSUE_SLOT, String(req.issue));
   if (!isPickupBranchName(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
   const confirmedWipe = req.confirmedWipe;
   // The policy that authorizes the deletion is re-read here, at the destructive operation, rather than

@@ -39,6 +39,10 @@ import {
   type InstallExamplesPreview,
   type InstallExamplesResult,
 } from '../../src/shared/ipc';
+import { useBuiltBundle } from '../helpers/builtBundle';
+import { ENGINE_GUIDE_FILE } from '../../src/main/exampleAssets';
+
+const builtBundle = useBuiltBundle();
 
 // Drive the real installer with real fs against the ACTUAL bundled example trees (§18.1).
 // Assertions are on the observable outcomes the ACs name — per-destination created/overwritten/skipped
@@ -80,14 +84,14 @@ const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
 const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';
 
-// The real bundle resolves from cwd (path.resolve('example', …)), so appPath: process.cwd() yields the
-// actual bundled trees; home/configRoot give the temp install targets. Tests that need a broken bundle
-// swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
+// The built bundle holds the actual bundled trees as the build lays them out; home/configRoot give the temp
+// install targets. Tests that need a broken bundle swap one destination's bundleDir with withBundle — the
+// opaque plan strategy travels untouched.
 /** Codex's home under the temp HOME, absent unless a test creates it — so no fixture can ever reach the
  *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1). */
 const codexHomeOf = (): string => path.join(home, '.codex');
 const seam = (over: Partial<InstallRoots> = {}): InstallDestination[] =>
-  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf(), ...over });
+  exampleInstallDirs(builtBundle(), { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf(), ...over });
 const destOf = (id: InstallDestinationId): InstallDestination => dirs.find((d) => d.id === id) as InstallDestination;
 /** The destination's target. `targetDir` is nullable because a relative CLAUDE_CONFIG_DIR is refused; these
  *  fixtures always supply an absolute one, so a null here is a broken fixture, not a case under test. */
@@ -226,10 +230,11 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1);
-    // exclude that subtree so this still pins that the FLOW destination itself seeds only flow.yaml + templates.
+    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1) and the
+    // engine guide (its own destination); exclude both so this still pins that the FLOW destination itself seeds
+    // only flow.yaml + templates.
     const catalogRel = path.relative(targetDirOf('flow'), flowCatalogDir(home));
-    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep));
+    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep) && r !== ENGINE_GUIDE_FILE);
     expect(flowOnly.sort()).toEqual([...FLOW_SET].sort());
   });
 

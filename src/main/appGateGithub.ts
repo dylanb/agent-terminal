@@ -9,6 +9,8 @@ import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
 import { createRealPublishPrReviewPorts, publishPrReview, type PublishPrReviewRequest } from './publishPrReview';
+import { ACTED_GH_ACTIONS } from '../shared/engineCapabilities/loop';
+import { isOneOf } from '../shared/oneOf';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
@@ -68,6 +70,7 @@ export function createAppGateGitHub(
       );
     }
     const bootstrap = ctx.pickup === null || isAdoptedPickup(ctx.pickup) ? null : ctx.pickup;
+    if (!isOneOf(ACTED_GH_ACTIONS, action)) throw new Error(`unknown approve side-effect action: ${action}`);
     switch (action) {
       case GH_ACTION.markReady:
         if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
@@ -100,8 +103,10 @@ export function createAppGateGitHub(
       case GH_ACTION.publishPrReview:
         await github.publishPullRequestReview({ pickup: ctx.pickup, pr: ctx.pr, report: ctx.bodyFile });
         return { outcome: 'done' };
-      default:
-        throw new Error(`unknown approve side-effect action: ${action}`);
+      default: {
+        const unhandled: never = action;
+        return unhandled;
+      }
     }
   };
 }

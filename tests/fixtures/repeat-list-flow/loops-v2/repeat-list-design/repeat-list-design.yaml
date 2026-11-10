@@ -1,0 +1,13 @@
+version: v2
+work:
+  recipe: prompts/work.md
+  artifact: steps
+reviewers: []
+boundaries: []
+report:
+  sections: []
+gate:
+  - option: approve
+outputs:
+  - id: steps
+    path: steps.json

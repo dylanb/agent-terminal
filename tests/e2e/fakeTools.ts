@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { load } from 'js-yaml';
-import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
-import { completionMarker } from '../../src/main/appWorkTurn';
+import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { shellQuote } from '../../src/shared/shellQuote';
@@ -18,6 +17,7 @@ import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import type { ReviewerSession } from './reviewerSession';
 import { FAKE_SPAWN_ARM, fakeSpawnShell } from './fakeProcesses';
 
 export const exampleConfigDir = seedSharedExampleConfig();
@@ -208,6 +208,7 @@ export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit
 //           none — write nothing on the review turn → review stall/retry→error.
 export interface HoldSpec {
   sentinel: string;
+  turn?: number;
   // Prints a line to the terminal on every poll so the terminal stays active (QUIET_MS). Such a hold has no time
   // cap, so within a test only the sentinel or `.abandon` ends it; it also ends once its terminal is gone.
   keepActive?: boolean;
@@ -216,7 +217,9 @@ export interface HoldSpec {
 export interface StepScript {
   artifactRel: string;
   work: FakeWorkMode;
-  // Holds every work turn of this step while the `sentinel` file exists. The held turn runs in the background
+  artifactSource?: string;
+  promptedArtifact?: boolean;
+  // Holds this step's work turns (only the `turn`-th, when `hold.turn` is set) while the `sentinel` file exists. The held turn runs in the background
   // (the agent keeps reading its input) and first appends its pid to `<sentinel>.pids`; then, polled every
   // 50 ms: `<sentinel>.abandon` present → exits with no action; the sentinel gone → does the `work` action;
   // 30 s elapsed → exits with no action, so an unreleased hold fails its test on that test's own assertion.
@@ -273,8 +276,8 @@ const doneSignal = (key: string): string => `mkdir -p .agent-terminal/loop; prin
 const byTurn = (counter: string, entries: string[] | undefined): string =>
   entries && entries.length > 0 ? `case "$${counter}" in ${entries.map((e, i) => `${i + 1}) ${e} ;;`).join(' ')} esac` : ':';
 
-/** Runs `action` in the background once `sentinel` is deleted (see `StepScript.hold`), so the agent keeps reading. */
 function heldAction(hold: HoldSpec, action: string): string {
+  if (hold.turn !== undefined) return `if [ "$n" = ${hold.turn} ]; then ${heldAction({ ...hold, turn: undefined }, action)} else ${action}; fi`;
   // `|| exit 0`: once the terminal's PTY is gone the write fails, so a leaked hold ends with its app.
   const print = hold.keepActive ? `printf 'HELD_ACTIVITY %s\\n' "$i" || exit 0; i=$((i + 1)); ` : '';
   const capped = hold.keepActive ? '' : `if [ "$SECONDS" -ge "$end" ]; then exit 0; fi; `;
@@ -299,11 +302,14 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const sections = opts.sections ?? PLAN_V2_SECTIONS;
   const count = (key: string, v: string): string => `${v}=$(turn_count ${shellQuote(key)})`;
   const marker = completionMarker(stepId);
+  const art = opts.promptedArtifact === true ? '"$ART"' : opts.artifactRel;
   const writeArtifact = (withMarker: boolean): string =>
-    `mkdir -p "$(dirname ${opts.artifactRel})"; ` +
+    `mkdir -p "$(dirname ${art})"; ` +
     (withMarker
-      ? `printf '%s\\n' '# plan' '${marker}' > ${opts.artifactRel}`
-      : `printf '%s\\n' '# plan' 'no marker here' > ${opts.artifactRel}`);
+      ? opts.artifactSource === undefined
+        ? `printf '%s\\n' '# plan' '${marker}' > ${art}`
+        : `cp ${shellQuote(opts.artifactSource)} ${art}`
+      : `printf '%s\\n' '# plan' 'no marker here' > ${art}`);
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
   // §28.5.5 — the RED work turn: (optionally) author a test-glob file, then write the phase-result file the
   // completion:red gate classifies, from the ONE canonical examplePhaseResult. The test file sits OUTSIDE
@@ -418,7 +424,7 @@ const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
 // REVIEW-AND-FIX prompt it writes the round report + the review done-file. It records the boundary commands and
 // bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
-export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>): void {
+export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>, reviewers?: ReviewerSession): void {
   const scripts = Object.entries(steps);
   // A step id that prefixes another (`red`, `red-2`) must not capture its turns, so longer ids match first.
   const ordered = [...scripts].sort(([a], [b]) => b.length - a.length);
@@ -427,18 +433,24 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; r=$(rnd); mkdir -p .agent-terminal/loop/reports; ` +
       `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.json ;;\n`
     : '';
+  const promptedArt = scripts.some(([, s]) => s.promptedArtifact === true)
+    ? '  case "$line" in *"As the final line of your "*) t=${line#*As the final line of your }; ART=${t%% artifact*} ;; esac\n'
+    : '';
   const logInjected = scripts.some(([, s]) => s.logInjected === true)
     ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n'
     : '';
   const script =
     '#!/usr/bin/env bash\n' +
+    (reviewers ? `${reviewers.startupShell}\n` : '') +
     READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
     fakeSpawnShell(binDir) +
     'while IFS= read -r line; do\n' +
     logInjected +
+    (reviewers ? `${reviewers.observeLineShell}\n` : '') +
     '  [ -z "$line" ] && continue\n' +
+    promptedArt +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     repairArm +

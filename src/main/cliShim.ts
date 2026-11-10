@@ -18,6 +18,8 @@ export interface BinaryInvocation {
 export const CLI_COMMAND_NAME = 'agent-terminal';
 
 export const CONTROLLER_FLAG = '--controller';
+export const VALIDATE_FLOW_FLAG = '--validate-flow';
+export const CHECK_REPEAT_LIST_FLAG = '--check-repeat-list';
 export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
@@ -98,6 +100,20 @@ export function resolveLaunchInvocation(
   return binary(execPath, appArgs);
 }
 
+// A dev build's main script is deliberately left out: in plain-Node mode the checker script is the program.
+function checkerBranch(flag: string, invocation: LaunchInvocation, checkerScript: string): string[] {
+  const command = invocation.kind === 'binary'
+    ? [invocation.execPath, checkerScript]
+    : [invocation.appImage, '-e', "require(process.env.APPDIR + '/resources/app.asar/out/main/artifactCheck.js')", 'artifactCheck'];
+  return [
+    `if [ "$#" -ge 1 ] && [ "$1" = ${shellQuote(flag)} ]; then`,
+    '  ELECTRON_RUN_AS_NODE=1',
+    '  export ELECTRON_RUN_AS_NODE',
+    `  exec ${command.map(shellQuote).join(' ')} "$@"`,
+    'fi',
+  ];
+}
+
 function shimParts(invocation: LaunchInvocation): { cmd: string; before: string[]; afterController: string[] } {
   switch (invocation.kind) {
     case 'binary':
@@ -124,12 +140,14 @@ function shimParts(invocation: LaunchInvocation): { cmd: string; before: string[
 }
 
 /** CWE-78: the caller's directory reaches the app as one environment value, never as shell text. */
-export function generateShim(invocation: LaunchInvocation): string {
+export function generateShim(invocation: LaunchInvocation, checkerScript: string): string {
   const { cmd, before, afterController } = shimParts(invocation);
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
     ...before,
+    ...checkerBranch(VALIDATE_FLOW_FLAG, invocation, checkerScript),
+    ...checkerBranch(CHECK_REPEAT_LIST_FLAG, invocation, checkerScript),
     ...controllerBranch(invocation),
     ...afterController,
     'CWD=$(pwd)',

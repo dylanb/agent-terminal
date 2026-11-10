@@ -18,10 +18,10 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy, SelfCheck } from './loopDefV2';
+import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, SelfCheck } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, outputLocation, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -33,26 +33,24 @@ import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
-import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import type { AdoptedRunRefs } from '../shared/currentTicket';
 import type { TicketRef } from '../shared/appBootstrap';
+import { completionMarker, composeTurnKey, CONSOLIDATE_TURN_PREFIX, REVIEW_TURN_PREFIX } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { sliceBriefReader, type SliceBriefDelivery } from './sliceBriefReader';
+import type { RepeatEntry } from '../shared/repeatList';
 import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
-import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import { APP_DONE_REL_PATH, APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
 import type { AgentKind } from './agentKind';
+import type { PolishPolicy } from '../shared/engineCapabilities/loop';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
-const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILENAME;
 
-const WORK_TURN_PREFIX = 'work-';
-const REVIEW_TURN_PREFIX = 'review-';
-const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
 
@@ -218,6 +216,7 @@ export interface AppLoopEngineDeps {
   reopenStep(repoDir: string): string | null;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
+  repeatEntry(repoDir: string, stepId: string): RepeatEntry | null;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
   gateReaching?: AutoGate['gateReaching'];
@@ -523,14 +522,13 @@ function activeTurnFor(
   opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number; goal?: GoalPlace },
 ): ActiveAppTurn {
   // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.json`; slice 1 is unsliced.
-  const base = completionArtifact(def);
-  const artifact = base ? sliceArtifact(base, opts?.slice ?? 1) : base;
+  const artifact = outputLocation(def, def.work.artifact, opts?.slice ?? 1);
   return {
     phase: 'work',
     repoDir,
     loopName,
     stepId,
-    turnKey: `${WORK_TURN_PREFIX}${stepId}`,
+    turnKey: composeTurnKey('work', stepId),
     recipePath: def.work.recipe,
     ...(def.brief !== undefined ? { briefPath: def.brief } : {}),
     boundaryCmd: entryBoundaryCommand(def),
@@ -1248,11 +1246,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
       const workRefs = deps.workRefs(active.repoDir);
+      const entry = deps.repeatEntry(active.repoDir, active.stepId);
       const prompt = composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         ...promptIntent(workRefs),
+        ...(entry !== null ? { entry } : {}),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
@@ -1433,9 +1433,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!res) return null;
       completion = { kind: 'refactor-report', resultPath: res.abs, resultRel: res.rel };
     } else if (r.def.work.completion === 'red') {
-      const base = completionArtifact(r.def);
-      if (!base) return null;
-      const res = sliceArtifact(base, deps.currentSlice(ctx.repoDir));
+      const res = outputLocation(r.def, r.def.work.artifact, deps.currentSlice(ctx.repoDir));
+      if (!res) return null;
       completion = { kind: 'red-report', resultPath: res.path, resultRel: res.rel };
     } else if (r.def.work.completion === 'green') {
       completion = { kind: 'green-report' };
@@ -1444,14 +1443,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
     const full = reviewRoster(r.def);
     const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
-    const subject = r.def.work.completion === undefined ? completionArtifact(r.def) : null;
+    const subject = r.def.work.completion === undefined ? outputLocation(r.def, r.def.work.artifact, deps.currentSlice(ctx.repoDir)) : null;
     const inputs = chainFor(ctx.repoDir, ctx.stepId, r.def, { kind: carry, ids: recordedCarry(ctx.repoDir, ctx.stepId, readAppLoopState(ctx.repoDir)) });
     return {
       phase: 'review',
       repoDir: ctx.repoDir,
       loopName: ctx.loopName,
       stepId: ctx.stepId,
-      turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`,
+      turnKey: composeTurnKey('review', ctx.stepId),
       boundaryCmd: preReviewBoundaryCommand(r.def),
       round,
       reviewers,
@@ -1481,7 +1480,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
-    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}), ...(feedback !== undefined ? { feedback } : {}) };
+    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: composeTurnKey('review', ctx.stepId), round }), ...(chosenRoster ? { chosenRoster } : {}), ...(feedback !== undefined ? { feedback } : {}) };
     setLiveError('turn-error', reason, round);
     persist('error', reason);
     deps.audit(ctx.repoDir, reviewRoundAuditCmd('error', round, reason), 1);
@@ -1502,7 +1501,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       repoDir: ctx.repoDir,
       loopName: ctx.loopName,
       stepId: ctx.stepId,
-      turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`,
+      turnKey: composeTurnKey('consolidate', ctx.stepId),
       boundaryCmd: preConsolidateBoundaryCommand(r.def),
       round,
       catalog: catalogPersonas(r.def),
@@ -1528,7 +1527,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the consolidator turn (def, report, or output location unresolvable)';
-    active = unresolvedConsolidateTurn({ ...ctx, turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`, round: review.round });
+    active = unresolvedConsolidateTurn({ ...ctx, turnKey: composeTurnKey('consolidate', ctx.stepId), round: review.round });
     setLiveError('turn-error', reason, review.round);
     persist('error', reason);
     deps.audit(ctx.repoDir, consolidateAuditCmd('error', review.round, reason), 1);
@@ -2090,6 +2089,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         }
         const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
         active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
+          slice: deps.currentSlice(repoDir),
           ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
           ...(goalReached(active) !== undefined ? { goal: goalReached(active) } : {}),
           inputs,
@@ -2150,7 +2150,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!r.ok) return false;
       const { ids, inputs } = reEnter(repoDir, stepId, r.def, state);
       setCarry(repoDir, stepId, ids);
-      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs }));
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs, slice: deps.currentSlice(repoDir) }));
       return true;
     },
     resume(repoDir) {
@@ -2195,6 +2195,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const goal: GoalPlace | undefined = state.goalSession !== undefined ? { leg: state.leg ?? 1, session: state.goalSession } : undefined;
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
+            slice: deps.currentSlice(repoDir),
             instruction: state.instruction,
             ...(goal !== undefined ? { goal } : {}),
             inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),

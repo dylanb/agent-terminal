@@ -1,8 +1,11 @@
 import { expect } from 'vitest';
 
-type Role = 'button' | 'checkbox' | 'textbox' | 'dialog' | 'alertdialog' | 'alert' | 'listitem';
+type Role = 'button' | 'checkbox' | 'textbox' | 'dialog' | 'alertdialog' | 'alert' | 'listitem' | 'heading' | 'status' | 'group';
 
 const SELECTOR: Record<Role, string> = {
+  heading: 'h1:not([role]), h2:not([role]), h3:not([role]), h4:not([role]), h5:not([role]), h6:not([role]), [role="heading"]',
+  status: '[role="status"]',
+  group: '[role="group"], fieldset:not([role])',
   button: 'button:not([role]), [role="button"]',
   checkbox: 'input[type="checkbox"]:not([role]), [role="checkbox"]',
   textbox: 'textarea:not([role]), input:not([type]):not([role]), input[type="text"]:not([role]), [role="textbox"]',
@@ -28,6 +31,9 @@ export function accessibleName(el: Element): string {
       .map((id) => el.ownerDocument.getElementById(id)?.textContent ?? '')
       .join(' ')
       .trim();
+  }
+  if (el instanceof HTMLInputElement && el.labels?.length) {
+    return [...el.labels].map(visibleText).join(' ').replace(/\s+/g, ' ').trim();
   }
   return visibleText(el).replace(/\s+/g, ' ').trim();
 }

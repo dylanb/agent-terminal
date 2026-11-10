@@ -1,4 +1,5 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -12,8 +13,8 @@ let app: ElectronApplication | undefined;
 let page: Page;
 const cleanup: string[] = [];
 
-test.afterEach(async () => {
-  await app?.close();
+test.afterEach(async ({}, testInfo) => {
+  await stopApp(app, testInfo);
   app = undefined;
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
 });

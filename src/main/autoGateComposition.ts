@@ -6,13 +6,14 @@ import type { TransitionKind } from '../shared/audit';
 import { runAppApprove, type AppGateDecisionDeps, type ApproveDecider, type GateApproveOutcome } from './appGateDecision';
 import type { AuditRecorder } from './auditRecorder';
 import { type AutoGate, type AutoGateDeps, type StartRun } from './autoGate';
-import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from './loopDefV2';
+import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result, type LoopDefV2Tiers } from './loopDefV2';
 import type { LoopBinding } from '../shared/loopNamespace';
 import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
 import { createBoundSourceLoader } from './runResolver';
-import type { LoopDefV2Tiers } from './loopDefV2';
 import { createFlowStateStore } from './flowState';
 import { readRunBinding } from './runDisposition';
+import { countSourceRefusal } from './repeatSourceCheck';
+import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 
 export type ObservedResolveDef = (repoDir: string, name: string) => LoopDefV2Result;
 export type RecordFlowTransition = AuditRecorder['recordTransition'];
@@ -22,6 +23,8 @@ export interface StartTransitionDeps {
   /** The one resolution the Start acts on; null when the flow does not load (the Start then binds nothing). */
   resolveForStart: (repoKey: string) => StartRun | null;
   start: (repoKey: string, opts: { startedAt: number; run?: StartRun }) => FlowStateView;
+  countSourceRefusal: (repoKey: string, run: StartRun) => string | null;
+  state: (repoKey: string) => FlowStateView;
   now: () => number;
   record: RecordFlowTransition;
 }
@@ -32,6 +35,8 @@ export function composeStartTransition(deps: StartTransitionDeps): (repoKey: str
     const startedAt = deps.now();
     const run = deps.resolveForStart(repoKey);
     if (run === null) return deps.start(repoKey, { startedAt });
+    const refusal = deps.countSourceRefusal(repoKey, run);
+    if (refusal !== null) return { ...deps.state(repoKey), notice: displaySafeEcho(refusal, MAX_ECHOED_REASON_LENGTH) };
     deps.autoGate.bindAtStart(repoKey, run, startedAt);
     let view: FlowStateView;
     try {
@@ -48,6 +53,19 @@ export function composeStartTransition(deps: StartTransitionDeps): (repoKey: str
     deps.record(repoKey, 'start', { status: 'not_started', stepName: '' }, view, { startedAt, flow: run.definition.name });
     return view;
   };
+}
+
+export function composeCountSourceRefusal(tiers: LoopDefV2Tiers): StartTransitionDeps['countSourceRefusal'] {
+  return (repoKey, run) =>
+    countSourceRefusal(run.definition, (step) => {
+      if (step.loop === undefined) return null;
+      const resolved = resolveLoopDefV2(step.loop, loopLookupContext(tiers, repoKey, run.definition.name));
+      return resolved.ok ? resolved.def.outputs.map((o) => o.id) : null;
+    });
+}
+
+export function loopLookupContext(tiers: LoopDefV2Tiers, repoDir: string, flow: string | undefined): LoopDefV2Context {
+  return { tiers, repoDir, ...(flow === undefined ? {} : { flow }) };
 }
 
 /** The one def resolver every production resolution goes through. */

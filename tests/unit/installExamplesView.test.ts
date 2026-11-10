@@ -39,6 +39,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     destinations: cleanDestinations,
     retired: [],
     retiredFallback: null,
+    alwaysReplaced: [],
   };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
@@ -48,6 +49,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     ),
     retired: [],
     retiredFallback: null,
+    alwaysReplaced: [],
   });
   const RETIRED: RetiredExample[] = [
     { destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath },
@@ -498,6 +500,40 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
     const order = [...reportList().children].map((li) => li.getAttribute('data-destination'));
     expect(order).toEqual(['flow', 'appLoops', 'commands']);
+  });
+
+  describe('the always-replaced engine guide (#276 I4)', () => {
+    const GUIDE_FILE = 'engine-capabilities.md';
+    const withGuide = (preview: InstallExamplesPreview): InstallExamplesPreview =>
+      preview.ok ? { ...preview, alwaysReplaced: [{ destination: 'engineGuide', files: rels(GUIDE_FILE) }] } : preview;
+    /** The dialog's groups by accessible name, each with its text and how many controls it holds. */
+    const dialogGroups = (): Record<string, { text: string; controls: number }> =>
+      Object.fromEntries(
+        [...host.querySelectorAll<HTMLElement>('.flow-modal [role="group"]')].map((group) => {
+          const name = host.ownerDocument.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent?.trim() ?? '';
+          return [name, { text: group.textContent ?? '', controls: group.querySelectorAll('input, button, select, textarea').length }];
+        }),
+      );
+
+    it('lists the guide in a named group of its own with no control, beside the consent group, when the dialog opens', async () => {
+      createInstallExamples(host, deps({ preview: vi.fn(async () => withGuide(conflicting('appLoops'))) }));
+      button().click();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      const groups = dialogGroups();
+      const guideGroups = Object.entries(groups).filter(([, g]) => g.text.includes(GUIDE_FILE));
+      expect({
+        guideGroups: guideGroups.map(([name, g]) => ({ named: name !== '', controls: g.controls })),
+        consentControls: groups['Replace files in']?.controls,
+      }).toEqual({ guideGroups: [{ named: true, controls: 0 }], consentControls: 1 });
+    });
+
+    it('installs without opening the dialog when the guide is the only file the preview lists', async () => {
+      const apply = vi.fn(async () => okResult());
+      createInstallExamples(host, deps({ preview: vi.fn(async () => withGuide(clean)), apply }));
+      button().click();
+      await vi.waitFor(() => expect(apply.mock.calls.length > 0 || prompt() !== null).toBe(true));
+      expect({ dialog: prompt(), replace: apply.mock.calls[0] }).toEqual({ dialog: null, replace: [PREVIEW_ID, [], false] });
+    });
   });
 
   it('exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)', async () => {

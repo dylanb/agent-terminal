@@ -63,6 +63,7 @@ export const cleanPreview = (id: string): InstallExamplesPreview => ({
   destinations: [{ destination: 'flow', conflict: false }],
   retired: [],
   retiredFallback: null,
+  alwaysReplaced: [],
 });
 
 export const differingPreview = (id: string, differing: InstallDestinationId[]): InstallExamplesPreview => ({
@@ -75,6 +76,7 @@ export const differingPreview = (id: string, differing: InstallDestinationId[]):
   })),
   retired: [],
   retiredFallback: null,
+  alwaysReplaced: [],
 });
 
 export const retiredPreview = (id: string): InstallExamplesPreview => ({
@@ -83,6 +85,7 @@ export const retiredPreview = (id: string): InstallExamplesPreview => ({
   destinations: [{ destination: 'flow', conflict: false }],
   retired: [{ destination: 'flow', rel: 'old-flow' as DestRelativePath } satisfies RetiredExample],
   retiredFallback: null,
+  alwaysReplaced: [],
 });
 
 export const installSucceeded = (): InstallExamplesResult => ({ ok: true, ...EMPTY_REPORT });

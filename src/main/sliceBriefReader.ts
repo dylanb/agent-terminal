@@ -1,5 +1,5 @@
 import type { SliceBrief } from './appLoopState';
-import type { WorkCompletion } from './loopDefV2';
+import type { WorkCompletion } from '../shared/engineCapabilities/loop';
 
 /** §28.4.2 — how a loop turn reads the back-to-red brief: as one TDD phase of the reopened slice, or as the loop
  *  at the step the flow returns to, which redoes the whole of the work itself. */

@@ -1,11 +1,12 @@
 import { shellQuote } from '../../src/shared/shellQuote';
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config';
 import { effectiveLinuxExecutableName } from '../helpers/linuxExecutableName';
 import { resolveWindowIconPath } from '../../src/main/appIcon';
+import { resolveEngineGuideFile } from '../../src/main/exampleAssets';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 import { bringForwardLocator, cardLocator } from '../helpers/controllerCards';
@@ -36,6 +37,10 @@ test('packaged controller identifies and activates independent packaged terminal
     const committedIcon = readFileSync(resolveWindowIconPath({ packaged: false, appPath: process.cwd() }, 'controller'));
     expect(readFileSync(resolveWindowIconPath({ packaged: true, resourcesPath: resources(controllerExecutable) }, 'controller')))
       .toEqual(committedIcon);
+    const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+    const builtGuide = guideAt(resolveEngineGuideFile({ packaged: false, appPath: resolve('out', 'main') }));
+    expect.soft({ packaged: guideAt(resolveEngineGuideFile({ packaged: true, resourcesPath: resources(terminalExecutable) })), built: builtGuide })
+      .toEqual({ packaged: builtGuide, built: expect.any(String) });
     if (process.platform === 'darwin') {
       const bundleIcon = (executable: string) => readFileSync(join(resources(executable), 'icon.icns'));
       expect(bundleIcon(controllerExecutable).equals(bundleIcon(terminalExecutable))).toBe(false);

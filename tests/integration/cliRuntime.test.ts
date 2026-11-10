@@ -24,6 +24,7 @@ const host = (over: Partial<CliHost> = {}): CliHost => ({
   execPath: '/app/x',
   isDevBuild: false,
   mainScript: undefined,
+  checkerScript: '/build/artifactCheck.js',
   cwd: '/',
   ...over,
 });

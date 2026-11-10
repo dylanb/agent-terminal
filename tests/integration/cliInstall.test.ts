@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { installCliShim, handleCliInstall, type RuntimeInfo } from '../../src/ma
 import { resolveShellPath } from '../../src/main/pty';
 import { CLI_COMMAND_NAME, resolveLaunchInvocation, type LaunchInvocation } from '../../src/main/cliShim';
 import { SESSION_ID, type CliInstallResult } from '../../src/shared/ipc';
+import { writeForegroundRecorder } from '../helpers/shimRecorder';
 
 // Installer behavior (§23.4 / #25): drive the real installer through its only public seam — RuntimeInfo,
 // the running build's launch facts — with real fs. Assert the OBSERVABLE outcomes the ACs name:
@@ -26,6 +27,7 @@ const runtime = (over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   currentPath: '/usr/bin',
   invocation: inv('/app/x'),
   uid: process.getuid?.() ?? -1,
+  checkerScript: '/app/out/main/artifactCheck.js',
   ...over,
 });
 
@@ -655,5 +657,19 @@ describe('installCliShim from an AppImage (#306)', () => {
     const res = installCliShim(runtime({ shell: '/bin/sh', invocation: appImageInvocation(join(apps, 'agent-terminal.AppImage')) }));
     expect.soft(res).toMatchObject({ ok: false, error: expect.stringContaining(apps) });
     expect(readFileSync(cmdOf(root)).equals(before)).toBe(true);
+});
+
+});
+
+describe('installCliShim hands the installed command the build\'s checker runtime (§23.5)', () => {
+  it('runs the given checker script for --validate-flow', () => {
+    const recorder = writeForegroundRecorder(join(root, 'app'), { stdout: '', stderr: '', exitCode: 0 });
+    const checkerScript = join(root, 'build one', 'artifactCheck.js');
+    const result = installCliShim(runtime({ invocation: inv(recorder.binary), checkerScript }));
+    if (!result.ok) throw new Error(`fixture: the install failed: ${result.error}`);
+
+    spawnSync(result.path, ['--validate-flow', 'flows'], { cwd: root, encoding: 'utf8' });
+
+    expect(recorder.read()?.argv).toEqual([checkerScript, '--validate-flow', 'flows']);
   });
 });

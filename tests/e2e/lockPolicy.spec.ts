@@ -12,8 +12,8 @@ import { unidentifiedHolderRemedy } from '../helpers/lockRemedy';
 // Terminate takes the lock (T6b).
 
 let h: FlowPickerHarness | undefined;
-test.afterEach(async () => {
-  await h?.dispose();
+test.afterEach(async ({}, testInfo) => {
+  await h?.dispose(testInfo);
   h = undefined;
 });
 

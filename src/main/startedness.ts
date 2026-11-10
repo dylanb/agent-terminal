@@ -6,7 +6,7 @@
 // PRESENCE (runDisposition) so a begun run reads 'started' and keeps a new selection locked for as long as its marker
 // exists, whatever its display status (AC7/CWE-841).
 
-import { type StartednessSignal } from '../shared/flowStarted';
+import type { StartednessSignal } from '../shared/flowStarted';
 import { isBegunStatus, type BegunStatus, type ProgressionBegunness } from '../shared/runHold';
 import { isPersistableStatus, isPersistedStep, loadFlowStateDoc } from './flowState';
 import { readDisposition } from './runDisposition';

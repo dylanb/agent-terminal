@@ -3,12 +3,13 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { APP_ICONS } from './src/main/appIcon';
 import { copyDevIcon } from './src/main/appIconBuild';
-import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2 } from './src/main/exampleAssetsBuild';
+import { placeBuildOutputs } from './src/main/exampleAssetsBuild';
 import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
 
-// After the main bundle is written, copy the app icons and the example trees next to it so the
-// unpackaged runtime resolvers (app.getAppPath()/build/*.png and .../example/{flows,loops-v2,commands})
-// find them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
+// After the main bundle is written, copy the app icons and the example trees next to it, and write the
+// generated engine guide there and under the repository root, so the unpackaged runtime resolvers
+// (app.getAppPath()/build/*.png and .../example/{flows,loops-v2,commands,engine-capabilities.md}) find
+// them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
 // bundle to seed from.
 function copyDevAssetsPlugin(): Plugin {
   let outDir = '';
@@ -21,10 +22,7 @@ function copyDevAssetsPlugin(): Plugin {
       if (!outDir) return;
       const rootDir = path.resolve(outDir, '..', '..');
       APP_ICONS.forEach(icon => copyDevIcon(rootDir, outDir, icon));
-      copyExampleFlows(rootDir, outDir);
-      copyExampleLoopsV2(rootDir, outDir);
-      copyExampleCommands(rootDir, outDir);
-      copyExampleCodexSkills(rootDir, outDir);
+      placeBuildOutputs(rootDir, outDir);
     },
   };
 }

@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
 import { MAX_ECHOED_LOAD_ERROR_LENGTH } from '../../src/shared/controlChars';
+import { MAX_SLICES } from '../../src/shared/engineCapabilities/flow';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.
@@ -936,22 +937,21 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
     expect(() => flow.provideInput({ ticket: '176' })).toThrow();
   });
 
-  it('resolveInputs persists the value WITHOUT re-entering the step (§28.4.1 programmatic sourcing, not a prompt answer)', () => {
+  const SOURCED_PLAN = { plan: { count: 3, titles: ['One', 'Two', 'Three'] }, countFrom: null };
+
+  it('recordSourcedLists persists the plan count as the slices input WITHOUT re-entering the step (§28.4.1 programmatic sourcing, not a prompt answer)', () => {
     const store = createFlowStateStore(dir);
     const flow = createFlowMachine(LOAD, store, bootEnter);
     flow.start();
     bootEnter.mockClear();
-    flow.resolveInputs({ slices: '3' });
-    // Unlike provideInput (which answers a step-entry prompt and re-enters), resolveInputs sets the input quietly:
-    // the plan-bundle gate resolves `slices` for the DOWNSTREAM refactor step, so re-entering plan-bundle here
-    // would wrongly restart its loop.
+    flow.recordSourcedLists(SOURCED_PLAN);
     expect(bootEnter).not.toHaveBeenCalled();
     expect(store.read()?.inputs).toEqual({ slices: '3' });
   });
 
-  it('resolveInputs is illegal unless a step is being worked (in_progress)', () => {
+  it('recordSourcedLists is illegal unless a step is being worked (in_progress)', () => {
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
-    expect(() => flow.resolveInputs({ slices: '3' })).toThrow();
+    expect(() => flow.recordSourcedLists(SOURCED_PLAN)).toThrow();
   });
 });
 
@@ -1025,7 +1025,7 @@ describe('flow machine loop-back (repeat) primitive (§28.4 — impl-slice×N)',
         { id: 'plan', kind: 'manual' },
         { id: 'red', kind: 'manual' },
         { id: 'green', kind: 'manual' },
-        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', source: { kind: 'input', countInput: 'slices' } } },
         { id: 'finalize', kind: 'manual' },
       ],
     },
@@ -1183,7 +1183,7 @@ describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
         { id: 'plan', kind: 'manual' },
         { id: 'red', kind: 'manual' },
         { id: 'green', kind: 'manual' },
-        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', source: { kind: 'input', countInput: 'slices' } } },
         { id: 'finalize', kind: 'manual' },
       ],
     },

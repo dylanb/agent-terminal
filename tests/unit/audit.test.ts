@@ -257,6 +257,12 @@ describe('inputEvents — resolved flow inputs and ticket association (§25.5)',
       { ts: T, type: 'input.resolved', name: 'ticket', value: 'oops' },
     ]);
   });
+
+  it('records a pr input but associates no ticket', () => {
+    expect(inputEvents({ pr: '512' }, { pr: 'pr' }, T)).toEqual([
+      { ts: T, type: 'input.resolved', name: 'pr', value: '512' },
+    ]);
+  });
 });
 
 describe('reconstructTimeline — replay a full run into its ordered timeline + final state (§25.6)', () => {

@@ -223,7 +223,55 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
+const INSTALLED_RUNTIME_MESSAGE =
+  'Run the installed runtime through tests/e2e/installedRuntime.ts (--validate-flow: tests/e2e/validateFlowHarness.ts; installed launcher: tests/e2e/installedLauncher.ts), which gives every run a fully specified environment and owns every process it starts; wait for an observed state, never a fixed time.';
+const INSTALLED_RUNTIME_SPEC_RULES = {
+  'no-restricted-imports': ['error', {
+    paths: [
+      ...['child_process', 'node:child_process'].map((name) => ({ name, message: INSTALLED_RUNTIME_MESSAGE })),
+      ...['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: INSTALLED_RUNTIME_MESSAGE })),
+      ...['process', 'node:process'].map((name) => ({ name, importNames: ['env'], message: INSTALLED_RUNTIME_MESSAGE })),
+      { name: './registeredElectron', message: INSTALLED_RUNTIME_MESSAGE },
+      { name: '@playwright/test', importNames: ['_electron'], message: INSTALLED_RUNTIME_MESSAGE },
+    ],
+  }],
+  'no-restricted-properties': ['error', { object: 'process', property: 'env', message: INSTALLED_RUNTIME_MESSAGE }],
+  'no-restricted-syntax': ['error', ...[NO_SLEEP, NO_PROMISE_SLEEP].map(({ selector }) => ({ selector, message: INSTALLED_RUNTIME_MESSAGE }))],
+};
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts', 'tests/helpers/jsonListCases.ts', 'tests/helpers/reviewerContracts.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
+
+const ONE_OF_MESSAGE =
+  'Check a value against a closed list with isOneOf from src/shared/oneOf.ts, never a hand-written includes (CODE-STANDARDS.md § Closed lists).';
+const ONE_OF = [
+  "CallExpression[callee.property.name='includes'][callee.object.type='TSAsExpression']",
+  "CallExpression[callee.property.name='includes'][callee.object.name=/^[A-Z][A-Z0-9_]*$/]",
+].map((selector) => ({ selector, message: ONE_OF_MESSAGE }));
+
+const ENGINE_GUIDE_PURE_MESSAGE =
+  'The engine guide is generated pure and deterministic: it renders only its descriptor and the constants it is handed, so every build writes the same bytes. No file system, environment, clock, randomness or engine module.';
+const ENGINE_GUIDE_PURE_RULES = {
+  'no-restricted-globals': ['error', ...['process', '__dirname', '__filename'].map((name) => ({ name, message: ENGINE_GUIDE_PURE_MESSAGE }))],
+  'no-restricted-properties': ['error',
+    { object: 'Date', property: 'now', message: ENGINE_GUIDE_PURE_MESSAGE },
+    { object: 'Math', property: 'random', message: ENGINE_GUIDE_PURE_MESSAGE },
+  ],
+  'no-restricted-syntax': ['error',
+    { selector: ":matches(NewExpression, CallExpression)[callee.name='Date']", message: ENGINE_GUIDE_PURE_MESSAGE },
+    { selector: "MemberExpression[property.name=/^(resolve|relative)$/]", message: ENGINE_GUIDE_PURE_MESSAGE },
+    { selector: "MetaProperty[meta.name='import']", message: ENGINE_GUIDE_PURE_MESSAGE },
+  ],
+};
+const ENGINE_GUIDE_LEAVES = {
+  appLoopPaths: ['APP_DONE_REL_PATH', 'APP_LOOP_DIR_SEGMENTS', 'ARTIFACTS_SUBDIR', 'LOOP_OVERRIDE_FILE', 'LOOP_OVERRIDE_MAP_KEY', 'loopDefRelPath'],
+  flowHome: ['FLOW_HOME_SUBDIR', 'FLOW_DEF_FILE', 'FLOWS_CATALOG_SUBDIR', 'TODO_TEMPLATES_SUBDIR'],
+  launchRoot: ['APP_HOME_DIR_ENV'],
+  userConfig: ['LOOPS_V2_SUBDIR', 'CLAUDE_CONFIG_DIR_ENV', 'CLAUDE_CONFIG_DEFAULT_SUBDIR'],
+  exampleAssets: ['EXAMPLE_SUBDIR', 'ENGINE_GUIDE_FILE'],
+};
+const ENGINE_GUIDE_LEAF_IMPORTS = Object.entries(ENGINE_GUIDE_LEAVES)
+  .map(([leaf, allowImportNames]) => ({ name: `./${leaf}`, allowImportNames, message: ENGINE_GUIDE_PURE_MESSAGE }));
+const ENGINE_GUIDE_PATH_IMPORTS = ['path', 'node:path']
+  .map((name) => ({ name, importNames: ['resolve', 'relative'], message: ENGINE_GUIDE_PURE_MESSAGE }));
 
 const IO_BUILTINS = ['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]);
 /** A decision core in src/main: no I/O built-in, no `process`/`fetch`/`WebSocket` global, no `require` or dynamic
@@ -286,6 +334,7 @@ const RAW_CLICK = [
 const CONTROLLER_WAIT_TESTS = ['tests/e2e/controllerWindow*.ts', ...CARD_ORDER_TESTS];
 
 Object.assign(localPlugin.rules, {
+  'one-of': selectorRule('Use the shared closed-list predicate.', ONE_OF),
   'card-helper': selectorRule('Find controller cards through the card helper.', CARD_DOM),
   'switch-helper': selectorRule('Find the controller header switch through the card helper.', SWITCH_DOM),
   'sort-control-helper': selectorRule('Find the controller sort control through the card helper.', SORT_CONTROL_DOM),
@@ -315,6 +364,11 @@ export default [
     rules: { 'local/git-hardening': 'error' },
   },
   {
+    files: ['src/**/*.{ts,tsx,mts,cts}'],
+    ignores: ['src/shared/oneOf.ts'],
+    rules: { 'local/one-of': 'error' },
+  },
+  {
     files: CONTROLLER_TESTS,
     ignores: CARD_HELPER,
     rules: { 'local/card-helper': 'error', 'local/sort-control-helper': 'error' },
@@ -340,6 +394,10 @@ export default [
   {
     files: [...CARD_ORDER_TESTS, ...ZERO_DELAY_FLUSH_CARD_TESTS],
     rules: { 'local/no-test-new-date': 'error', 'no-restricted-properties': ['error', ...TEST_WALL_CLOCK_READS] },
+  },
+  {
+    files: ['tests/e2e/validateFlow*.spec.ts', 'tests/e2e/finalizeInstalledAccess.spec.ts', 'tests/e2e/checkRepeatList.spec.ts'],
+    rules: INSTALLED_RUNTIME_SPEC_RULES,
   },
   {
     files: ['src/main/controller*.ts'],
@@ -399,6 +457,26 @@ export default [
   {
     files: QUIET_CARD_CODE,
     rules: { 'local/no-live-region': 'error' },
+  },
+  {
+    files: ['src/main/engineGuide.ts'],
+    rules: {
+      ...ENGINE_GUIDE_PURE_RULES,
+      'no-restricted-imports': ['error', {
+        paths: [...ENGINE_GUIDE_LEAF_IMPORTS, ...ENGINE_GUIDE_PATH_IMPORTS],
+        patterns: [{
+          regex: `^(?!\\.\\./shared/|\\./(${Object.keys(ENGINE_GUIDE_LEAVES).join('|')})$|(node:)?path$)`,
+          message: ENGINE_GUIDE_PURE_MESSAGE,
+        }],
+      }],
+    },
+  },
+  {
+    files: ['src/shared/engineCapabilities/**/*.ts'],
+    rules: {
+      ...ENGINE_GUIDE_PURE_RULES,
+      'no-restricted-imports': ['error', { patterns: [{ regex: '^(?!\\./|\\.\\./(?!\\.\\./))', message: ENGINE_GUIDE_PURE_MESSAGE }] }],
+    },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,

@@ -1,9 +1,10 @@
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dump } from 'js-yaml';
 import { createBoundSourceLoader } from '../../src/main/runResolver';
-import { flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowHomeDir } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { repoOnlyDefTiers } from '../helpers/defTiers';
 

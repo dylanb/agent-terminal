@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { applyInstallExamples, exampleInstallDirs } from '../../src/main/installExamples';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
-import { FLOW_DEF_FILE, loadFlowDefinitionFromFile } from '../../src/main/flow';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
+import { loadFlowDefinitionFromFile } from '../../src/main/flow';
 import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
 
 // The repo-setup flow the setup popup's Run setup loop starts ships in the bundle: after the app's own install,

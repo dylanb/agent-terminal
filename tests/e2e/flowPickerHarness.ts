@@ -3,7 +3,7 @@ import { electron } from './registeredElectron';
 // The @ownapp launch harness for A3 (#134) flow-picker e2e (§23.4). Home, repos and user-data dir are kept
 // across a relaunch so persisted state is what the relaunched app reads.
 
-import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { expect, type ElectronApplication, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { flowCatalogDir, type FlowInputDef } from '../../src/main/flow';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { stopApp } from './stopApp';
 
 const exampleConfigDir = seedSharedExampleConfig();
 
@@ -39,7 +40,8 @@ export interface FlowPickerHarness {
   cdInto(dir: string): Promise<void>;
   /** The strip's step-name label at station `i` (station 0 is the Not-started bookend). */
   stepName(i: number): Locator;
-  dispose(): Promise<void>;
+  /** Stops the app through `stopApp`, then removes every fixture. */
+  dispose(testInfo: TestInfo): Promise<void>;
 }
 
 export function createFlowPickerHarness(): FlowPickerHarness {
@@ -120,9 +122,12 @@ export function createFlowPickerHarness(): FlowPickerHarness {
     stepName(i) {
       return current().page.locator('#flow-strip .flow.vert .stn').nth(i).locator('.nm');
     },
-    async dispose() {
+    async dispose(testInfo) {
       try {
-        await close();
+        const was = launched;
+        launched = null;
+        running = null;
+        await stopApp(was ?? undefined, testInfo);
       } finally {
         rmSync(userDataDir, { recursive: true, force: true });
         rmSync(shellHome, { recursive: true, force: true });

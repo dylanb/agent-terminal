@@ -7,11 +7,11 @@ export const INSTALL_CHANNELS = {
   },
   installExamplesPreview: {
     name: 'examples:preview',
-    does: 'The renderer asks which bundled example files already exist and differ at each destination, without writing anything.',
+    does: 'The renderer asks which bundled example files already exist and differ at each destination, and which files every install replaces without a consent decision, without writing anything.',
   },
   installExamplesApply: {
     name: 'examples:apply',
-    does: 'The renderer installs the bundled examples, replacing conflicting files only at the destinations the user agreed to.',
+    does: 'The renderer installs the bundled examples, replacing conflicting files only at the destinations the user agreed to, except the always-replaced files, which every install writes.',
   },
 } as const satisfies ChannelSpecs;
 
@@ -41,6 +41,7 @@ export const INSTALL_DESTINATION_IDS = [
   'codexLoops',
   'codexAgents',
   'codexSkills',
+  'engineGuide',
 ] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
@@ -62,7 +63,9 @@ export type InstallDestinationPreview =
   | { destination: InstallDestinationId; conflict: false }
   | { destination: InstallDestinationId; conflict: true; files: DestRelativePath[] };
 
-/** examples:preview result: `ok` with one entry per destination the action would write, or `!ok` with a
+/** examples:preview result: `ok` with one `destinations` entry per consent-bearing destination the action would
+ *  write and, in `alwaysReplaced`, the files of every destination it writes with no consent decision (never
+ *  offered in `destinations`, so never named in `replace`), or `!ok` with a
  *  human-readable `error` when the request itself was refused. The error arm is distinct from a clean
  *  `ok` with no conflicts: an empty destination list would otherwise read as "nothing conflicts", so a
  *  refused request could drive an apply the user never consented to. Observing a preview never writes
@@ -75,6 +78,7 @@ export type InstallExamplesPreview =
       retired: RetiredExample[];
       /** §18.1: the retired flow the installed fallback flow.yaml still is, or null. */
       retiredFallback: string | null;
+      alwaysReplaced: InstallDestinationFiles[];
     }
   | { ok: false; error: string };
 

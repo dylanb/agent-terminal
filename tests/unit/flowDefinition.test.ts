@@ -2,12 +2,24 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import yaml from 'js-yaml';
 import {
   loadFlowDefinition,
   loadFlowDefinitionLocalFirst,
   createFlowMachine,
   type FlowLoad,
 } from '../../src/main/flow';
+import { MAX_SLICES } from '../../src/shared/engineCapabilities/flow';
+
+const entered = (flow: ReturnType<typeof createFlowMachine>): string[] => {
+  if (flow.state().status === 'error') return [`load error: ${flow.state().error ?? ''}`];
+  const seen: string[] = [];
+  for (let i = 0; i < 4 * MAX_SLICES && flow.state().status === 'in_progress'; i++) {
+    seen.push(flow.state().stepName);
+    flow.advance();
+  }
+  return seen;
+};
 
 // §24.2.2 S2 — the step definition is sourced from a real <worktree>/.agent-terminal/flow.yaml
 // (§18.1). The loader runs against real temp dirs (no fs mocks) and surfaces a clear error state —
@@ -229,19 +241,20 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   // §28.4 loop-back (repeat) primitive — a step may declare `repeat: { back_to, count_input }` making
   // advance() loop back to an EARLIER step `count_input`-many times (§28.2 slice-loop×N). The loader
   // captures the binding; the machine drives the back-jump.
-  it('loads a step\'s repeat directive, mapping back_to/count_input to backTo/countInput (§28.4)', () => {
+  it('loads a step\'s repeat directive: the run returns to back_to as many times as the count_input input says (§28.4)', () => {
     writeFlow(
       'name: feature-dev\nsteps:\n' +
         '  - id: red\n    kind: loop\n    loop: red-loop\n' +
         '  - id: refactor\n    kind: loop\n    loop: refactor-loop\n' +
-        '    repeat:\n      back_to: red\n      count_input: slices\n',
+        '    repeat:\n      back_to: red\n      count_input: slices\n' +
+        '  - id: finalize\n    kind: manual\n',
     );
     const load = loadFlowDefinition(dir);
     expect(load.ok).toBe(true);
-    if (load.ok) {
-      expect(load.definition.steps[0].repeat).toBeUndefined();
-      expect(load.definition.steps[1].repeat).toEqual({ backTo: 'red', countInput: 'slices' });
-    }
+    const flow = createFlowMachine(load);
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    expect(entered(flow)).toEqual(['red', 'refactor', 'red', 'refactor', 'finalize']);
   });
 
   it('rejects a repeat whose back_to is not an EARLIER step (a repeat is a loop-back, never a skip) (§28.4)', () => {
@@ -268,6 +281,10 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(loadFlowDefinition(dir).ok).toBe(false); // missing count_input
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
     expect(loadFlowDefinition(dir).ok).toBe(false); // missing back_to
+    writeFlow("name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: ''\n");
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: 42\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 });
 
@@ -357,5 +374,73 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
     if (load.ok) return;
     // the GLOBAL's own reason surfaces — NOT the absent-local "no flow.yaml found" mask
     expect(load.error).not.toContain('no flow.yaml found');
+  });
+});
+
+describe('a count_from repeat', () => {
+  const REPEAT_STEP = 'repeat-here';
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-def-count-from-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const loadWithRepeat = (repeat: unknown): FlowLoad => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const doc = {
+      name: 'count-from',
+      steps: [
+        { id: 'design', kind: 'loop', loop: 'design-loop' },
+        { id: 'build', kind: 'loop', loop: 'work-loop' },
+        { id: REPEAT_STEP, kind: 'loop', loop: 'work-loop', repeat },
+        { id: 'finish', kind: 'manual' },
+      ],
+    };
+    writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), yaml.dump(doc));
+    return loadFlowDefinition(dir);
+  };
+  const outcome = (load: FlowLoad): string => (load.ok ? 'loads' : load.error);
+
+  const JSON_LIST = { artifact: 'steps', format: 'json-list', list: 'steps' };
+  const IMPL_SLICES = { artifact: 'design', format: 'impl-slices' };
+
+  const cases: readonly { rule: string; breaks: unknown; mended: unknown }[] = [
+    { rule: 'a format outside impl-slices and json-list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, format: 'csv-list' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'no format', breaks: { back_to: 'build', count_from: { artifact: 'steps', list: 'steps' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'list missing for json-list', breaks: { back_to: 'build', count_from: { artifact: 'steps', format: 'json-list' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'list present for impl-slices', breaks: { back_to: 'build', count_from: { ...IMPL_SLICES, list: 'steps' } }, mended: { back_to: 'build', count_from: IMPL_SLICES } },
+    { rule: 'both count_input and count_from', breaks: { back_to: 'build', count_input: 'slices', count_from: JSON_LIST }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'neither count_input nor count_from', breaks: { back_to: 'build' }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'count_from that is not a mapping', breaks: { back_to: 'build', count_from: 'steps' }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'no artifact', breaks: { back_to: 'build', count_from: { format: 'json-list', list: 'steps' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'a non-string artifact', breaks: { back_to: 'build', count_from: { ...JSON_LIST, artifact: 42 } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'an empty artifact', breaks: { back_to: 'build', count_from: { ...JSON_LIST, artifact: '' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'a non-string list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, list: ['steps'] } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+    { rule: 'an empty list', breaks: { back_to: 'build', count_from: { ...JSON_LIST, list: '' } }, mended: { back_to: 'build', count_from: JSON_LIST } },
+  ];
+
+  it.each(cases)('fails to load naming the repeat step on $rule, and loads the mended declaration', ({ breaks, mended }) => {
+    expect.soft(outcome(loadWithRepeat(breaks))).toEqual(expect.stringContaining(REPEAT_STEP));
+    expect.soft(outcome(loadWithRepeat(mended))).toBe('loads');
+  });
+
+  it('loads an artifact or a list key of only spaces: a length above 0 is a non-empty string', () => {
+    expect.soft(outcome(loadWithRepeat({ back_to: 'build', count_from: { ...JSON_LIST, list: '   ' } }))).toBe('loads');
+    expect.soft(outcome(loadWithRepeat({ back_to: 'build', count_from: { ...JSON_LIST, artifact: '   ' } }))).toBe('loads');
+  });
+
+  it('keeps today\'s back_to rule: a count_from repeat whose back_to names a later step fails to load naming the repeat step', () => {
+    expect.soft(outcome(loadWithRepeat({ back_to: 'finish', count_from: JSON_LIST }))).toEqual(expect.stringContaining(REPEAT_STEP));
+    expect.soft(outcome(loadWithRepeat({ back_to: 'build', count_from: JSON_LIST }))).toBe('loads');
+  });
+
+  it('runs the group once, then the step after the repeat, while no list has set the count', () => {
+    for (const countFrom of [JSON_LIST, IMPL_SLICES]) {
+      const flow = createFlowMachine(loadWithRepeat({ back_to: 'build', count_from: countFrom }));
+      flow.start();
+      expect.soft({ format: countFrom.format, entered: entered(flow) }).toEqual({ format: countFrom.format, entered: ['design', 'build', REPEAT_STEP, 'finish'] });
+    }
   });
 });

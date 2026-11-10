@@ -105,13 +105,3 @@ export function exampleSlicePlan(n = 2): string {
   }
   return lines.join('\n');
 }
-
-/** The count an approve gate sources into `slices` (§28.4.1), or null to leave the count already sourced — or the
- *  flow's single-slice default — standing: a plan whose block is absent or malformed, or that has fewer slices than
- *  the one the run is on, cannot carry the run. The integration slice runs once AFTER the loop as its own flow step
- *  and is deliberately NOT part of this count. */
-export function sliceCountToSource(planText: string, currentSlice: number): number | null {
-  if (!slicePlanWellFormed(planText)) return null;
-  const count = parseSlicePlan(planText).implSlices.length;
-  return count >= currentSlice ? count : null;
-}
