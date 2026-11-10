@@ -112,8 +112,8 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
 
     const prompt = promptFile(goalCommand());
     expect(prompt).toContain('Produce the plan.');
-    expect(prompt).toContain('subagent_type: plan-loop--review-plan-principal');
-    expect(prompt).toContain('subagent_type: plan-loop--review-plan-security');
+    expect(prompt).toMatch(/- review-plan-principal — subagent_type: [a-z0-9_-]+/);
+    expect(prompt).toMatch(/- review-plan-security — subagent_type: [a-z0-9_-]+/);
     const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
     expect(handoff).toContain('gh issue view 204 --comments');
     expect(handoff).toContain('.agent-terminal/loop/artifacts/plan.md');

@@ -1,3 +1,4 @@
+import { reviewerAgentFor } from '../../src/main/reviewTurn';
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
@@ -2505,18 +2506,21 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
   // §27.4 — each bundled reviewer landed where Claude Code discovers a sub-agent, its charter as its instructions.
-  const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
-  expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
+  const reviewer = { flow: 'feature-dev-v3', loop: 'green-loop', persona: 'impl-review-principal' };
+  const claudeReviewer = reviewerAgentFor('claude-code', reviewer);
+  const codexReviewer = reviewerAgentFor('codex', reviewer);
+  const reviewerAgent = readIf(join(configDir, 'agents', `${claudeReviewer}.md`));
+  expect(reviewerAgent).toContain(`name: ${claudeReviewer}`);
   expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
   // §18.1 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
   const codexLoopRel = join('loops-v2', 'feature-dev-v3', 'integration-slice-loop', 'integration-slice-loop.yaml');
   expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
   await expect(installReportGroup('codexLoops')).toContainText('integration-slice-loop.yaml');
   // Each bundled reviewer landed as a Codex custom agent, its charter as its instructions.
-  const codexAgent = readIf(join(codexHome, 'agents', 'green_loop__impl_review_principal.toml'));
-  expect(codexAgent).toContain('name = "green_loop__impl_review_principal"');
+  const codexAgent = readIf(join(codexHome, 'agents', `${codexReviewer}.toml`));
+  expect(codexAgent).toContain(`name = "${codexReviewer}"`);
   expect(codexAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
-  await expect(installReportGroup('codexAgents')).toContainText('green_loop__impl_review_principal.toml');
+  await expect(installReportGroup('codexAgents')).toContainText(`${codexReviewer}.toml`);
   // The skill telling Codex where the loops are and how to run their reviewers landed too.
   const skillRel = join('agent-terminal-loops', 'SKILL.md');
   expect(readIf(join(codexHome, 'skills', skillRel))).toBe(readFileSync(join('example', 'codex-skills', skillRel), 'utf8'));

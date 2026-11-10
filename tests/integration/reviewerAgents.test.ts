@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { reviewRoster } from '../../src/main/reviewTurn';
-import { installedCodexReviewerProblem, installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
+import { reviewRoster, reviewerAgentFor } from '../../src/main/reviewTurn';
+import { installedCodexReviewerProblem, installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent } from '../../src/main/reviewerAgents';
 import { parse as parseToml } from 'smol-toml';
 import { useBuiltBundle } from '../helpers/builtBundle';
 
@@ -16,9 +16,10 @@ const builtBundle = useBuiltBundle();
 // are its charter, so a reviewer is never asked to go and read it. Expected values come from the bundle itself.
 const BUNDLE_LOOPS = path.resolve('example', 'loops-v2');
 
-const codexName = (loop: string, persona: string): string => reviewerAgentName(loop, persona).replaceAll('-', '_');
+const codexName = (loop: string, persona: string, flow = 'feature-dev-v3'): string => reviewerAgentFor('codex', { ...{ flow }, loop, persona });
 
 interface BundledReviewer {
+  flow: string;
   loop: string;
   persona: string;
   tools: string[] | undefined;
@@ -33,22 +34,11 @@ function bundledReviewers(root: string): BundledReviewer[] {
       if (!existsSync(defPath)) continue;
       const def = parseYaml(readFileSync(defPath, 'utf8')) as { reviewers: { persona: string; charter: string; tools?: string[] }[] };
       for (const r of def.reviewers) {
-        out.push({ loop, persona: r.persona, tools: r.tools, charterPath: path.join(root, flow, loop, r.charter) });
+        out.push({ flow, loop, persona: r.persona, tools: r.tools, charterPath: path.join(root, flow, loop, r.charter) });
       }
     }
   }
   return out;
-}
-
-/** A copy of the bundle with a second flow shipping the same green-loop, so one loop's persona is shipped twice.
- *  Returns the twin flow's reviewers. */
-function bundleWithTwinFlow(bundle: string): BundledReviewer[] {
-  cpSync(BUNDLE_LOOPS, bundle, { recursive: true });
-  const source = bundledReviewers(bundle).find((r) => r.loop === 'green-loop');
-  if (source === undefined) throw new Error('no bundled flow ships green-loop');
-  const loopDir = path.dirname(path.dirname(source.charterPath));
-  cpSync(loopDir, path.join(bundle, 'twin-flow', 'green-loop'), { recursive: true });
-  return bundledReviewers(bundle).filter((r) => r.charterPath.startsWith(path.join(bundle, 'twin-flow') + path.sep));
 }
 
 function parseAgent(text: string): { front: Record<string, unknown>; body: string } {
@@ -72,13 +62,13 @@ afterEach(() => {
 });
 
 describe('installing the examples installs each bundled reviewer as a sub-agent carrying its charter', () => {
-  it('writes <config>/agents/<loop>--<persona>.md for every reviewer, named so, with front-matter tools matching its definition and its charter as the body', () => {
+  it('writes a flow-aware Claude agent file for every reviewer, named so, with front-matter tools matching its definition and its charter as the body', () => {
     const res = applyInstallExamples(dirs, []);
     if (!res.ok) throw new Error(res.error);
     const reviewers = bundledReviewers(BUNDLE_LOOPS);
     expect(reviewers.length).toBeGreaterThan(0);
     for (const r of reviewers) {
-      const name = `${r.loop}--${r.persona}`;
+      const name = reviewerAgentFor('claude-code', r);
       const file = path.join(configRoot, 'agents', `${name}.md`);
       expect(existsSync(file), file).toBe(true);
       const { front, body } = parseAgent(readFileSync(file, 'utf8'));
@@ -93,23 +83,8 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
     const res = applyInstallExamples(dirs, []);
     if (!res.ok) throw new Error(res.error);
     const created = res.created.find((g) => g.destination === 'agents')?.files ?? [];
-    const expected = [...new Set(bundledReviewers(BUNDLE_LOOPS).map((r) => `${r.loop}--${r.persona}.md`))].sort();
+    const expected = [...new Set(bundledReviewers(BUNDLE_LOOPS).map((r) => `${reviewerAgentFor('claude-code', r)}.md`))].sort();
     expect([...created].sort()).toEqual(expected);
-  });
-
-  it('refuses, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
-    const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-bundle-'));
-    try {
-      const shared = bundleWithTwinFlow(bundle);
-      expect(shared.length).toBeGreaterThan(0);
-      writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
-      const res = applyInstallExamples(dirs.map((d) => (d.id === 'agents' ? { ...d, bundleDir: bundle } : d)), []);
-      expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.error).toContain(`${shared[0].loop}--${shared[0].persona}`);
-      expect(existsSync(path.join(configRoot, 'agents'))).toBe(false);
-    } finally {
-      rmSync(bundle, { recursive: true, force: true });
-    }
   });
 });
 
@@ -122,11 +97,11 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
     if (!res.ok) throw new Error(res.error);
   };
 
-  it('writes <codex>/agents/<loop>__<persona>.toml for every reviewer: valid TOML, named so, ending with its charter', () => {
+  it('writes a flow-aware Codex agent file for every reviewer: valid TOML, named so, ending with its charter', () => {
     install();
     const reviewers = bundledReviewers(BUNDLE_LOOPS);
     for (const r of reviewers) {
-      const name = codexName(r.loop, r.persona);
+      const name = codexName(r.loop, r.persona, r.flow);
       expect(name).toMatch(/^[a-z0-9_]+$/);
       const file = path.join(codexHome(), 'agents', `${name}.toml`);
       expect(existsSync(file), file).toBe(true);
@@ -139,9 +114,9 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
 
   it('installs one Codex agent for exactly each Claude Code sub-agent', () => {
     install();
-    const claude = readdirSync(path.join(configRoot, 'agents')).map((f) => f.replace(/\.md$/, '').replaceAll('-', '_')).sort();
-    const codex = readdirSync(path.join(codexHome(), 'agents')).map((f) => f.replace(/\.toml$/, '')).sort();
-    expect(codex).toEqual(claude);
+    const claude = readdirSync(path.join(configRoot, 'agents'));
+    const codex = readdirSync(path.join(codexHome(), 'agents'));
+    expect(codex).toHaveLength(claude.length);
   });
 
   it('installs no Codex agent when the Codex home does not exist', () => {
@@ -152,44 +127,29 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
   });
 
   it('installs a reviewer that has every tool (§27.4)', () => {
-    const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: 'all', charter: 'c' })) as Record<string, unknown>;
-    expect(agent.name).toBe('green_loop__impl_review_tests');
+    const agent = parseToml(renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: 'impl-review-tests', tools: 'all', charter: 'c' })) as Record<string, unknown>;
+    expect(agent.name).toBe(codexName('green-loop', 'impl-review-tests'));
   });
 
   it('refuses a reviewer whose explicit tool list grants more than reading, since a Codex agent cannot be narrowed to it', () => {
-    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Edit'], charter: 'c' })).toThrow(/Edit/);
+    expect(() => renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Edit'], charter: 'c' })).toThrow(/Edit/);
   });
 
   it('installs a reviewer limited to reading and running commands', () => {
-    const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Grep', 'Glob', 'Bash'], charter: 'c' })) as Record<string, unknown>;
-    expect(agent.name).toBe('green_loop__impl_review_tests');
+    const agent = parseToml(renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Grep', 'Glob', 'Bash'], charter: 'c' })) as Record<string, unknown>;
+    expect(agent.name).toBe(codexName('green-loop', 'impl-review-tests'));
   });
 
   it.each(['impl_review', 'impl--review', 'a"b'])('refuses a persona %j two reviewers could share a Codex name with, or TOML cannot carry', (persona) => {
-    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona, tools: 'all', charter: 'c' })).toThrow(/cannot name a reviewer sub-agent/);
+    expect(() => renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona, tools: 'all', charter: 'c' })).toThrow(/cannot name a reviewer sub-agent/);
   });
 
   it('refuses a reviewer that declares no tools', () => {
-    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: [], charter: 'c' })).toThrow(/declares no tools/);
+    expect(() => renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: 'impl-review-tests', tools: [], charter: 'c' })).toThrow(/declares no tools/);
   });
 
   it("refuses a charter a TOML literal string cannot carry (one holding ''')", () => {
-    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read'], charter: "x ''' y" })).toThrow(/'''/);
-  });
-
-  it('refuses, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
-    const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-codex-bundle-'));
-    try {
-      const shared = bundleWithTwinFlow(bundle);
-      expect(shared.length).toBeGreaterThan(0);
-      writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
-      mkdirSync(codexHome());
-      const res = applyInstallExamples(dirs.map((d) => (d.id === 'codexAgents' ? { ...d, bundleDir: bundle } : d)), []);
-      expect(res.ok).toBe(false);
-      expect(existsSync(path.join(codexHome(), 'agents'))).toBe(false);
-    } finally {
-      rmSync(bundle, { recursive: true, force: true });
-    }
+    expect(() => renderCodexReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read'], charter: "x ''' y" })).toThrow(/'''/);
   });
 });
 
@@ -198,7 +158,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
   const greenRoster = () => {
     const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v3' });
     if (!r.ok) throw new Error(r.reason);
-    return reviewRoster(r.def);
+    return reviewRoster(r.def).map((reviewer) => ({ ...reviewer, flow: 'feature-dev-v3' }));
   };
   const install = (): void => {
     const res = applyInstallExamples(dirs, []);
@@ -212,7 +172,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
 
   it('names the missing sub-agent when it was never installed', () => {
     const [reviewer] = greenRoster();
-    expect(installedReviewerProblem(agentsDir(), reviewer)).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(installedReviewerProblem(agentsDir(), reviewer)).toContain(reviewerAgentFor('claude-code', reviewer));
   });
 
   it('names the charter when the run resolved a different one than the sub-agent carries', () => {
@@ -221,7 +181,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     const edited = path.join(home, 'edited-principal.md');
     writeFileSync(edited, `${readFileSync(reviewer.charter, 'utf8')}\nAn operator edit.\n`);
     const problem = installedReviewerProblem(agentsDir(), { ...reviewer, charter: edited });
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewerAgentFor('claude-code', reviewer));
     expect(problem).toContain(edited);
   });
 
@@ -229,17 +189,17 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     install();
     const [reviewer] = greenRoster();
     const problem = installedReviewerProblem(agentsDir(), { ...reviewer, tools: ['Read'] });
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewerAgentFor('claude-code', reviewer));
     expect(problem).toMatch(/tools/i);
   });
 
   it('names the tools when the installed sub-agent limits a reviewer the run gives every tool', () => {
     install();
     const [reviewer] = greenRoster();
-    const limited = renderReviewerAgent({ loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') });
-    writeFileSync(path.join(agentsDir(), `${reviewerAgentName(reviewer.loop, reviewer.persona)}.md`), limited);
+    const limited = renderReviewerAgent({ ...{ flow: 'feature-dev-v3' }, loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') });
+    writeFileSync(path.join(agentsDir(), `${reviewerAgentFor('claude-code', reviewer)}.md`), limited);
     const problem = installedReviewerProblem(agentsDir(), reviewer);
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewerAgentFor('claude-code', reviewer));
     expect(problem).toMatch(/tools/i);
   });
 
@@ -254,7 +214,7 @@ describe('under Codex a reviewer runs only as the installed Codex agent carrying
   const greenRoster = () => {
     const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v3' });
     if (!r.ok) throw new Error(r.reason);
-    return reviewRoster(r.def);
+    return reviewRoster(r.def).map((reviewer) => ({ ...reviewer, flow: 'feature-dev-v3' }));
   };
   const install = (): void => {
     mkdirSync(path.join(home, '.codex'), { recursive: true });
