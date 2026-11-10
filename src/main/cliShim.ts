@@ -20,6 +20,7 @@ export const CLI_COMMAND_NAME = 'agent-terminal';
 export const CONTROLLER_FLAG = '--controller';
 export const VALIDATE_FLOW_FLAG = '--validate-flow';
 export const CHECK_REPEAT_LIST_FLAG = '--check-repeat-list';
+export const INSTALL_REVIEWERS_FLAG = '--install-reviewers';
 export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
@@ -148,6 +149,7 @@ export function generateShim(invocation: LaunchInvocation, checkerScript: string
     ...before,
     ...checkerBranch(VALIDATE_FLOW_FLAG, invocation, checkerScript),
     ...checkerBranch(CHECK_REPEAT_LIST_FLAG, invocation, checkerScript),
+    ...checkerBranch(INSTALL_REVIEWERS_FLAG, invocation, checkerScript),
     ...controllerBranch(invocation),
     ...afterController,
     'CWD=$(pwd)',

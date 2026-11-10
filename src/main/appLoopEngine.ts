@@ -202,7 +202,7 @@ export interface AppLoopEngineDeps {
   /** §27.10 */
   pickupBranch(repoDir: string): PickupBranch;
   /** §27.4 — why this reviewer cannot run as the agent `kind` installed for it carrying its charter, or null when it can. */
-  reviewerAgentProblem(reviewer: RosterEntry, kind: AgentKind): string | null;
+  reviewerAgentProblem(reviewer: RosterEntry, kind: AgentKind, repoDir: string): string | null;
   /** §27.4 */
   hostedAgentKind(): AgentKind;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
@@ -1135,13 +1135,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return kindRead.kind;
   };
 
-  const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
+  const reviewerAgentsRefusal = (reviewers: RosterEntry[], repoDir: string): string | null => {
     if (reviewers.length === 0) return null;
     const kind = hostedKind();
-    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind)).filter((p): p is string => p !== null);
+    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind, repoDir)).filter((p): p is string => p !== null);
     if (problems.length === 0) return null;
     const installed = kind === 'codex' ? 'the Codex agents' : 'the Claude Code sub-agents';
-    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} each carrying its resolved charter: install the selected flow’s reviewers, restart your agent session so it loads them, then Retry.`;
   };
 
   /** §27.10 */
@@ -1321,7 +1321,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!active) return null;
       const reviewers = active.phase === 'review' ? active.reviewers : active.phase === 'work' && active.run.kind === 'goal' ? active.run.reviewers : [];
       // §27.2 — with no agent at the prompt the runner says so; which agent's reviewers to check is unknowable.
-      return offPickupBranch(active.repoDir) ?? (deps.hostedAgent() === 'absent' ? null : reviewerAgentsRefusal(reviewers));
+      return offPickupBranch(active.repoDir) ?? (deps.hostedAgent() === 'absent' ? null : reviewerAgentsRefusal(reviewers, active.repoDir));
     },
     completionShortfall,
     unretryableShortfall: () => {

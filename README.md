@@ -62,7 +62,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 
 ### Review and quality gates
 
-- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as `<loop>--<reviewer>` sub-agents.
+- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed with identities specific to the flow, loop and persona.
   - **Security** reviewers in plan, infra, green and integration-slice.
   - **Taint** reviewers in infra, green and integration-slice.
   - **Accessibility** reviewers in green and integration-slice.
@@ -115,6 +115,7 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 ### Configuration
 
 - **Flow locations.** Flows are discovered at `~/.agent-terminal/flows/<id>/flow.yaml` (global) and `<repo>/.agent-terminal/flows/` (per repo; the repo wins a name clash).
+- **Install a custom flow's reviewers.** After installing or updating the command in **Settings → Command line**, run `agent-terminal --install-reviewers "/path/to/flow-folder"`. Select a global, repository or bundled flow folder. The foreground command previews reviewer files and asks before writing or replacing edited files, without opening another window. It leaves flow sources unchanged. Start a fresh Claude Code or Codex session afterward, then start the flow or choose Retry. Settings' Install examples continues to install bundled assets only.
 - **Install examples.** **Settings → Install examples** copies the example flows, loops, reviewer sub-agents, slash commands and skills into place. It previews first and asks before replacing any file you've changed. See [Getting started](#getting-started) step 2 for where each goes.
 - **`loop-capabilities.yaml`** tells the loops about your project:
   - `test_globs`: which files are tests (also used by the frozen-tests check).

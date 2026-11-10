@@ -114,7 +114,7 @@ export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentForma
   return [...byName.values()].map(({ rel, src, bytes }) => ({ rel, src, bytes }));
 }
 
-function readCharter(file: string): { ok: true; text: string } | { ok: false; problem: string } {
+export function readCharter(file: string): { ok: true; text: string } | { ok: false; problem: string } {
   const read = readBoundedNoFollow(file, MAX_LOOP_RECIPE_BYTES);
   if (read.ok) return read;
   switch (read.cause) {

@@ -102,7 +102,7 @@ for (const kind of ['claude', 'codex'] as const) {
     const status = join(world.root, 'install.status');
     const marker = launcher.mark();
     const invocation = ['env', marker, installed, '--install-reviewers', folder].map(shellQuote).join(' ');
-    await command(page, `script -q -e -c ${shellQuote(invocation)} ${shellQuote(transcript)}; printf '%s' "$?" > ${shellQuote(status)}`);
+    await command(page, `script -q -f -e -c ${shellQuote(invocation)} ${shellQuote(transcript)}; printf '%s' "$?" > ${shellQuote(status)}`);
     await expect.poll(() => existsSync(status) || /\[[^\]]*[yYnN][^\]]*\]|\?\s*$/m.test(output()), { timeout: 0 }).toBe(true);
     const preview = output();
     expect.soft(preview).toContain(folder);

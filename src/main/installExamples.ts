@@ -482,7 +482,7 @@ interface InstallAuthorization {
 }
 
 /** What installing would do to one planned file, the one verdict the consent preview and the setup warning share. */
-function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | 'identical' {
+export function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | 'identical' {
   if (file.targetHash === null) return 'create';
   return file.targetHash === file.sourceHash ? 'identical' : 'replace';
 }
@@ -585,7 +585,7 @@ type InstallExamplesPreparation =
   | { ok: true; prepared: PreparedInstallExamples }
   | { ok: false; error: string };
 
-function prepareInstallExamples(
+export function prepareInstallExamples(
   destinations: InstallDestination[],
 ): InstallExamplesPreparation {
   let resolution: Resolution;
@@ -684,7 +684,7 @@ export interface ApplyOptions {
   removeRetired: boolean;
 }
 
-function applyInstallExamplesWithAuthorization(
+export function applyInstallExamplesWithAuthorization(
   destinations: InstallDestination[],
   replace: InstallDestinationId[],
   options: ApplyOptions,

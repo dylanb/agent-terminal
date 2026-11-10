@@ -1,3 +1,5 @@
+import { shellQuote } from '../shared/shellQuote';
+import { CLI_COMMAND_NAME, INSTALL_REVIEWERS_FLAG } from './cliShim';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
@@ -572,10 +574,14 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    reviewerAgentProblem: (reviewer, kind) => {
-      if (kind !== 'codex') return installedReviewerProblem(userConfigAgentsDir(), reviewer);
+    reviewerAgentProblem: (reviewer, kind, repoDir) => {
       const home = codexHome();
-      return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
+      const problem = kind === 'codex'
+        ? installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer)
+        : installedReviewerProblem(userConfigAgentsDir(), reviewer);
+      if (problem === null) return null;
+      const load = resolveActiveDefinition(repoDir);
+      return load.ok ? `${problem}. Run ${CLI_COMMAND_NAME} ${INSTALL_REVIEWERS_FLAG} ${shellQuote(load.flowDir)}` : problem;
     },
     hostedAgentKind: () => {
       let foreground = foregroundCommand(ptyProcess.pid);
