@@ -16,3 +16,8 @@ export function limitedInstallCommand(command: string, args: readonly string[], 
   if (!Number.isSafeInteger(kibibytes) || kibibytes < 1) throw new Error('the file-size limit must be positive whole KiB');
   return `ulimit -f ${kibibytes} || exit 1; trap '' XFSZ; exec ${[command, ...args].map(shellQuote).join(' ')}`;
 }
+
+export function completedReviewerWrites(output: string): string[] {
+  return output.split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => /^(?:created|replaced):/.test(line)).sort();
+}
