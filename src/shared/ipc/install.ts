@@ -35,6 +35,7 @@ export type CliInstallResult =
 export const INSTALL_DESTINATION_IDS = [
   'flow',
   'flowCatalog',
+  'stepLibrary',
   'appLoops',
   'commands',
   'agents',

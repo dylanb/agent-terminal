@@ -9,7 +9,7 @@ const FLOW = 'simple-dev-v1';
 
 function steps(): FlowStepDef[] {
   const file = path.join(resolveExampleFlowsDir({ packaged: false, appPath: REPO_DIR }), FLOW, 'flow.yaml');
-  const load = loadFlowDefinitionFromFile(file);
+  const load = loadFlowDefinitionFromFile(file, null);
   if (!load.ok) throw new Error(load.error);
   return load.definition.steps;
 }

@@ -28,7 +28,7 @@ afterAll(() => rmSync(root, { recursive: true }));
 
 function finalize() {
   const flowDir = join(flowCatalogDir(flows), 'feature-dev-v3');
-  const flow = loadUntrustedFlowDefinition(join(flowDir, 'flow.yaml'));
+  const flow = loadUntrustedFlowDefinition(join(flowDir, 'flow.yaml'), null);
   if (!flow.ok) throw new Error(flow.error);
   const step = flow.definition.steps.find((s) => s.id === 'finalize');
   if (step?.kind !== 'loop' || !step.loop) throw new Error('finalize must be a loop');

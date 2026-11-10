@@ -19,6 +19,7 @@ import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
+import { createStepLibrary, runtimeStepTiers, type StepLibrary } from './stepLibrary';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
@@ -141,14 +142,14 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 }
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
-export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), FLOW_REL);
+export function loadFlowDefinition(worktreeDir: string, steps: StepLibrary | null): FlowLoad {
+  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), steps, FLOW_REL);
 }
 
 /** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
  *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
  *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
-export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
+export function loadFlowDefinitionFromFile(file: string, steps: StepLibrary | null, relLabel: string = file): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
@@ -159,16 +160,16 @@ export function loadFlowDefinitionFromFile(file: string, relLabel: string = file
     if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
     return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
-  return parseFlowDefinition(raw, file);
+  return parseFlowDefinition(raw, file, steps);
 }
 
 export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
-export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+export function loadUntrustedFlowDefinition(file: string, steps: StepLibrary | null): FlowLoad {
   const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
-  if (read.ok) return parseFlowDefinition(read.text, file);
+  if (read.ok) return parseFlowDefinition(read.text, file, steps);
   switch (read.cause) {
     case 'absent':
       return { ok: false, error: `no flow.yaml found at ${file}` };
@@ -184,7 +185,137 @@ export function loadUntrustedFlowDefinition(file: string): FlowLoad {
   }
 }
 
-function parseFlowDefinition(raw: string, file: string): FlowLoad {
+interface StepLabels {
+  step: string;
+  loopStep: string;
+}
+
+const inlineLabels = (id: string): StepLabels => ({ step: `flow.yaml step "${id}"`, loopStep: `flow.yaml loop step "${id}"` });
+
+/** The §18.2 rules every step obeys, whether written inline or expanded from a step definition. */
+function parseStepBody(raw: Record<string, unknown>, id: string, earlier: FlowStepDef[], at: StepLabels): FlowStepDef | { error: string } {
+  if (raw.kind !== 'manual' && raw.kind !== 'loop')
+    return { error: `${at.step} has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+  if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
+    return { error: `${at.loopStep} is missing its loop: LoopDef name` };
+  // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
+  if (raw.kind !== 'loop' && raw.gate_authority !== undefined)
+    return { error: `${at.step} declares gate_authority, which only a loop step may carry` };
+  let gateAuthority: GateAuthority | undefined;
+  let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
+  if (raw.kind === 'loop') {
+    if (raw.gate_authority !== undefined) {
+      if (!isGateAuthority(raw.gate_authority))
+        return { error: `${at.loopStep} has unsupported gate_authority "${String(raw.gate_authority)}" (supports: ${GATE_AUTHORITIES.join(', ')})` };
+      gateAuthority = raw.gate_authority;
+    }
+    if (raw.loop_namespace !== undefined) {
+      if (!isRecognizedLoopBinding(raw.loop_namespace))
+        return { error: `${at.loopStep} names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
+      loopNamespace = raw.loop_namespace;
+    }
+    // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
+    //: an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
+    // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
+    // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
+    // per-step confinement is unchanged — only the file-level abort narrows.
+    if (raw.loop_namespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
+      return { error: `${at.loopStep} binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
+  }
+  if (raw.skill !== undefined && typeof raw.skill !== 'string') return { error: `${at.step} has a non-string skill` };
+  if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
+    return { error: `${at.step} has a non-string todo_template` };
+  if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
+    return { error: `${at.step} has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+  const inputs = parseInputs(raw.inputs);
+  if (inputs === 'invalid') return { error: `${at.step} has malformed inputs (each needs name + type)` };
+  // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
+  // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
+  let repeat: { backTo: string; countInput: string } | undefined;
+  if (raw.repeat !== undefined) {
+    if (
+      !isRecord(raw.repeat) ||
+      typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
+      typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
+    )
+      return { error: `${at.step} has a malformed repeat (needs back_to + count_input)` };
+    const backTo = raw.repeat.back_to;
+    if (!earlier.some((s) => s.id === backTo)) return { error: `${at.step} repeat.back_to "${backTo}" is not an earlier step` };
+    repeat = { backTo, countInput: raw.repeat.count_input };
+  }
+  return {
+    id,
+    kind: raw.kind,
+    ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
+    ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
+    ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
+    ...(gateAuthority !== undefined ? { gateAuthority } : {}),
+    ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+    ...(inputs.length > 0 ? { inputs } : {}),
+    ...(repeat ? { repeat } : {}),
+  };
+}
+
+const REFERENCE_KEYS: ReadonlySet<string> = new Set(['step', 'id', 'gate_authority', 'repeat']);
+const DEFINITION_KEYS: ReadonlySet<string> = new Set(['kind', 'loop', 'loop_namespace', 'skill', 'todo_template', 'bootstrap', 'inputs']);
+
+type StepDefinitionRead = { def: Record<string, unknown> } | { error: string };
+
+/** §18.2. One read and one parse per name for the whole load, however often a flow references it (CWE-400). */
+function stepDefinitionReader(library: StepLibrary): (name: string) => StepDefinitionRead {
+  const cache = new Map<string, StepDefinitionRead>();
+  return (name) => {
+    const cached = cache.get(name);
+    if (cached !== undefined) return cached;
+    const read = readStepDefinition(library, name);
+    cache.set(name, read);
+    return read;
+  };
+}
+
+function readStepDefinition(library: StepLibrary, name: string): StepDefinitionRead {
+  const found = library(name);
+  if (!found.ok) return { error: found.error };
+  let def: unknown;
+  try {
+    def = yaml.load(found.raw);
+  } catch (e) {
+    return { error: `step definition "${name}" is not valid YAML: ${errMsg(e)}` };
+  }
+  if (!isRecord(def)) return { error: `step definition "${name}" must be a mapping` };
+  for (const key of Object.keys(def)) {
+    if (REFERENCE_KEYS.has(key)) return { error: `step definition "${name}" may not set ${key}` };
+    if (!DEFINITION_KEYS.has(key)) return { error: `step definition "${name}" has unknown field "${key}"` };
+  }
+  return { def };
+}
+
+/** §18.2: a step reference becomes the step its definition describes, under the reference's id, gate and repeat. */
+function expandStepReference(
+  ref: Record<string, unknown>,
+  earlier: FlowStepDef[],
+  definitionOf: ((name: string) => StepDefinitionRead) | null,
+): FlowStepDef | { error: string } {
+  if (typeof ref.step !== 'string' || ref.step.length === 0) return { error: 'flow.yaml step reference has no step name' };
+  const name = ref.step;
+  const id = ref.id === undefined ? name : ref.id;
+  if (typeof id !== 'string' || id.length === 0) return { error: `flow.yaml reference to step definition "${name}" has an invalid id` };
+  for (const key of Object.keys(ref)) {
+    if (!REFERENCE_KEYS.has(key)) return { error: `flow.yaml step "${id}" sets ${key}, which belongs in step definition "${name}"` };
+  }
+  if (definitionOf === null)
+    return { error: `flow.yaml step "${id}" references step definition "${name}", but no step library is available` };
+  const read = definitionOf(name);
+  if ('error' in read) return { error: `flow.yaml step "${id}": ${read.error}` };
+  const label = `flow.yaml step "${id}" (step definition "${name}")`;
+  return parseStepBody({ ...read.def, gate_authority: ref.gate_authority, repeat: ref.repeat }, id, earlier, { step: label, loopStep: label });
+}
+
+/** Bounds the steps one flow.yaml may declare, so references cannot multiply one load's work without limit (CWE-770). */
+export const MAX_FLOW_STEPS = 100;
+
+/** `library` is null for a caller that accepts no step references; a reference then fails to load with a reason. */
+function parseFlowDefinition(raw: string, file: string, library: StepLibrary | null): FlowLoad {
   let doc: unknown;
   try {
     doc = yaml.load(raw);
@@ -197,75 +328,22 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
     return { ok: false, error: 'flow.yaml is missing a name' };
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
+  if (doc.steps.length > MAX_FLOW_STEPS)
+    return { ok: false, error: `flow.yaml has more than ${MAX_FLOW_STEPS} steps` };
+  const definitionOf = library === null ? null : stepDefinitionReader(library);
 
   // Only `manual` and `loop` kinds are in scope (§24.2.3 T1/T2); the `action` kind (§18.2) is rejected.
   const steps: FlowStepDef[] = [];
   for (const raw of doc.steps) {
-    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
+    let parsed: FlowStepDef | { error: string };
+    if (isRecord(raw) && raw.step !== undefined) parsed = expandStepReference(raw, steps, definitionOf);
+    else if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
       return { ok: false, error: 'flow.yaml step is missing an id' };
-    if (raw.kind !== 'manual' && raw.kind !== 'loop')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
-    if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
-      return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
-    // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
-    if (raw.kind !== 'loop' && raw.gate_authority !== undefined)
-      return { ok: false, error: `flow.yaml step "${raw.id}" declares gate_authority, which only a loop step may carry` };
-    let gateAuthority: GateAuthority | undefined;
-    let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
-    if (raw.kind === 'loop') {
-      if (raw.gate_authority !== undefined) {
-        if (!isGateAuthority(raw.gate_authority))
-          return { ok: false, error: `flow.yaml loop step "${raw.id}" has unsupported gate_authority "${String(raw.gate_authority)}" (supports: ${GATE_AUTHORITIES.join(', ')})` };
-        gateAuthority = raw.gate_authority;
-      }
-      if (raw.loop_namespace !== undefined) {
-        if (!isRecognizedLoopBinding(raw.loop_namespace))
-          return { ok: false, error: `flow.yaml loop step "${raw.id}" names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
-        loopNamespace = raw.loop_namespace;
-      }
-      // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
-      //: an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
-      // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
-      // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
-      // per-step confinement is unchanged — only the file-level abort narrows.
-      if (raw.loop_namespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
-        return { ok: false, error: `flow.yaml loop step "${raw.id}" binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
-    }
-    if (raw.skill !== undefined && typeof raw.skill !== 'string')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
-    if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
-    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
-    const inputs = parseInputs(raw.inputs);
-    if (inputs === 'invalid')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
-    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
-    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
-    let repeat: { backTo: string; countInput: string } | undefined;
-    if (raw.repeat !== undefined) {
-      if (
-        !isRecord(raw.repeat) ||
-        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
-        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
-      )
-        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
-      const backTo = raw.repeat.back_to;
-      if (!steps.some((s) => s.id === backTo))
-        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
-      repeat = { backTo, countInput: raw.repeat.count_input };
-    }
-    steps.push({
-      id: raw.id,
-      kind: raw.kind,
-      ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
-      ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
-      ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
-      ...(gateAuthority !== undefined ? { gateAuthority } : {}),
-      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
-      ...(inputs.length > 0 ? { inputs } : {}),
-      ...(repeat ? { repeat } : {}),
-    });
+    else parsed = parseStepBody(raw, raw.id, steps, inlineLabels(raw.id));
+    if ('error' in parsed) return { ok: false, error: parsed.error };
+    const { id } = parsed;
+    if (steps.some((s) => s.id === id)) return { ok: false, error: `flow.yaml has a duplicate step id "${id}"` };
+    steps.push(parsed);
   }
   return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
 }
@@ -276,12 +354,13 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
  * masked by the global. (Flow STATE, by contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
+  const repoSteps = createStepLibrary(runtimeStepTiers(localDir, globalDir, 'repo'));
+  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir, repoSteps);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
   // exists do we report the local (absent) error, so a bad value is never reported as a missing flow.
-  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
-  return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
+  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir, createStepLibrary(runtimeStepTiers(localDir, globalDir, 'global')));
+  return loadFlowDefinition(localDir, repoSteps); // neither exists: report the local (absent) error
 }
 
 /** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */

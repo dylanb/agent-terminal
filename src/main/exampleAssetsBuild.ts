@@ -10,6 +10,7 @@ import {
   resolveExampleCommandsDir,
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
+  resolveExampleStepsDir,
 } from './exampleAssets';
 
 /** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
@@ -41,6 +42,12 @@ export function copyExampleLoopsV2(rootDir: string, mainOutDir: string): string 
 export function copyExampleCommands(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleCommandsDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'commands'), dest);
+  return dest;
+}
+
+export function copyExampleSteps(rootDir: string, mainOutDir: string): string {
+  const dest = resolveExampleStepsDir({ packaged: false, appPath: mainOutDir });
+  copyTree(path.join(rootDir, 'example', 'steps'), dest);
   return dest;
 }
 

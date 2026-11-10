@@ -10,7 +10,9 @@ import {
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
   resolveExampleCodexSkillsDir,
+  resolveExampleStepsDir,
 } from '../../src/main/exampleAssets';
+import { stepLibraryDir } from '../../src/main/stepLibrary';
 
 // The installer's destinations are pinned to the readers' own resolvers (CLAUDE.md writer↔reader rule).
 
@@ -42,6 +44,7 @@ describe('exampleInstallDirs — bundle sources come from the runtime resolvers'
     expect(bundleOf(dirs, 'appLoops')).toBe(resolveExampleLoopsV2Dir(loc));
     expect(bundleOf(dirs, 'codexLoops')).toBe(resolveExampleLoopsV2Dir(loc));
     expect(bundleOf(dirs, 'codexSkills')).toBe(resolveExampleCodexSkillsDir(loc));
+    expect(bundleOf(dirs, 'stepLibrary')).toBe(resolveExampleStepsDir(loc));
   });
 });
 
@@ -51,6 +54,11 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
     // '.agent-terminal' stays green when the installer reintroduces the parallel literal flowHomeDir()
     // exists to remove, and the seeded flow silently stops being the flow the app reads back.
     expect(targetOf(exampleInstallDirs(loc, ROOTS), 'flow')).toBe(flowHomeDir(FLOW_HOME));
+  });
+
+  it('targets the global step library for the stepLibrary destination (§18.2)', () => {
+    expect(targetOf(exampleInstallDirs(loc, ROOTS), 'stepLibrary')).toBe(stepLibraryDir(FLOW_HOME));
+    expect(exampleInstallDirs(loc, { ...ROOTS, flowGlobalDir: 'relative' }).find((d) => d.id === 'stepLibrary')!.targetDir).toBeNull();
   });
 
   it('targets the app-state flow catalog for the flowCatalog destination (§18.7.1)', () => {

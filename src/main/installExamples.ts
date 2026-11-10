@@ -14,7 +14,9 @@ import {
   resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
+  resolveExampleStepsDir,
 } from './exampleAssets';
+import { STEP_DEF_EXT, stepLibraryDir } from './stepLibrary';
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
@@ -182,6 +184,22 @@ function catalogFiles(catalogBundleDir: string): Plan {
   return out;
 }
 
+/** §18.2. Each member is a `<name>.yaml` whose name the step library resolver accepts, so the install never
+ *  seeds a definition no reference can name. `null` when the tree is absent, as for every bundle. */
+function stepFiles(stepsBundleDir: string): Plan {
+  if (absent(stepsBundleDir)) return null;
+  const entries = readDirEntries(stepsBundleDir);
+  if (entries.length === 0) throw new Error(`the bundled examples are damaged: the step library at ${stepsBundleDir} is empty`);
+  return entries.map((entry) => {
+    const abs = path.join(stepsBundleDir, entry.name);
+    if (!entry.isFile) throw bundleAnomaly(abs);
+    const name = entry.name.endsWith(STEP_DEF_EXT) ? entry.name.slice(0, -STEP_DEF_EXT.length) : '';
+    if (!isSafeCatalogId(name))
+      throw new Error(`the bundled examples are damaged: ${abs} is not a step definition with a valid name`);
+    return copyOf(destRelative(entry.name), abs);
+  });
+}
+
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
@@ -250,6 +268,13 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     plan: catalogFiles,
     overwrite: { mode: 'confirm-overwrite' },
     retired: retiredCatalogEntries,
+  },
+  stepLibrary: {
+    bundle: resolveExampleStepsDir,
+    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? stepLibraryDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: stepFiles,
+    overwrite: { mode: 'confirm-overwrite' },
   },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -460,7 +485,7 @@ const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
 function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
   const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
   if (file === undefined) return null;
-  const load = loadFlowDefinitionFromFile(file.real);
+  const load = loadFlowDefinitionFromFile(file.real, null);
   return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
 }
 

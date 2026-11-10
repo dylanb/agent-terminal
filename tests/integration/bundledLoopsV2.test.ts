@@ -3,7 +3,9 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import yaml from 'js-yaml';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveExampleStepsDir } from '../../src/main/exampleAssets';
+import { loadFlowDefinitionFromFile } from '../../src/main/flow';
+import { createStepLibrary } from '../../src/main/stepLibrary';
 import { resolveBundledLoop } from '../helpers/bundledLoops';
 
 const SOURCE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
@@ -33,9 +35,15 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
 describe('bundled loop defs are grouped by the shipped flow that binds them', () => {
   const FLOWS_TREE = resolveExampleFlowsDir({ packaged: false, appPath: repoDir });
   const flowIds = (): string[] => readdirSync(FLOWS_TREE, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  const bundledSteps = createStepLibrary([{ name: 'bundled', dir: resolveExampleStepsDir({ packaged: false, appPath: repoDir }) }]);
   const boundLoops = (flow: string): string[] => {
-    const doc = yaml.load(readFileSync(join(FLOWS_TREE, flow, 'flow.yaml'), 'utf8')) as { steps: { loop?: string }[] };
-    return doc.steps.flatMap((s) => (typeof s.loop === 'string' ? [s.loop] : []));
+    const load = loadFlowDefinitionFromFile(join(FLOWS_TREE, flow, 'flow.yaml'), bundledSteps);
+    if (!load.ok) throw new Error(`${flow}: ${load.error}`);
+    return load.definition.steps.flatMap((s) => (s.loop === undefined ? [] : [s.loop]));
+  };
+  const hasLoopStep = (flow: string): boolean => {
+    const doc = yaml.load(readFileSync(join(FLOWS_TREE, flow, 'flow.yaml'), 'utf8')) as { steps: { kind?: string }[] };
+    return doc.steps.some((s) => s.kind === 'loop');
   };
 
   it('resolves every loop each shipped flow binds from that flow’s folder', () => {
@@ -43,7 +51,7 @@ describe('bundled loop defs are grouped by the shipped flow that binds them', ()
     expect(flows.length).toBeGreaterThan(0);
     for (const flow of flows) {
       const names = new Set(boundLoops(flow));
-      expect(names.size, flow).toBeGreaterThan(0);
+      if (hasLoopStep(flow)) expect(names.size, flow).toBeGreaterThan(0);
       for (const name of names) {
         const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir, flow });
         expect(r.ok, `${flow}/${name}: ${r.ok ? '' : r.reason}`).toBe(true);

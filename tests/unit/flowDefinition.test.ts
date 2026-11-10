@@ -35,7 +35,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '    skill: groom-ticket\n' +
         '    todo_template: ticket-grooming\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.name).toBe('feature-dev');
@@ -48,7 +48,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
 
   it('loads a minimal manual step without optional skill/template', () => {
     writeFlow('name: f\nsteps:\n  - id: do-it\n    kind: manual\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.steps[0].id).toBe('do-it');
@@ -58,32 +58,32 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
 
   it('reports the directory holding the flow.yaml, for resolving co-located templates (§18.6)', () => {
     writeFlow('name: f\nsteps:\n  - id: do-it\n    kind: manual\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.flowDir).toBe(join(dir, '.agent-terminal'));
   });
 
   it('reports a clear error when flow.yaml is absent', () => {
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
     if (!load.ok) expect(load.error.length).toBeGreaterThan(0);
   });
 
   it('reports an error on malformed YAML rather than throwing', () => {
     writeFlow('name: feature-dev\n  steps: : : broken\n\t- id');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
   });
 
   it('rejects schema-invalid definitions (no name / no steps / step missing id / unsupported kind)', () => {
     writeFlow('steps:\n  - id: x\n    kind: manual\n'); // no top-level name
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
     writeFlow('name: f\nsteps: []\n'); // no steps
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
     writeFlow('name: f\nsteps:\n  - kind: manual\n'); // step missing id
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
     writeFlow('name: f\nsteps:\n  - id: x\n    kind: action\n'); // `action` is a later phase (§18.2)
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
   });
 
   // §24.2.3 T1 — the loader loads ALL steps in order, not just the first, validating each.
@@ -100,7 +100,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: implement\n' +
         '    kind: manual\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.steps.map((s) => s.id)).toEqual(['groom', 'plan', 'implement']);
@@ -116,7 +116,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: groom\n    kind: manual\n' +
         '  - id: ship\n    kind: action\n', // action is a later phase (§18.2)
     );
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
   });
 
   // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name. The
@@ -127,7 +127,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: groom\n    kind: manual\n' +
         '  - id: build\n    kind: loop\n    loop: impl-loop\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.steps.map((s) => s.kind)).toEqual(['manual', 'loop']);
@@ -137,7 +137,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
 
   it('rejects a loop step that names no loop: LoopDef binding (§24.2.3 T2)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
   });
 
   // §27.9.1 N9b.1 (#137 AC6)
@@ -147,7 +147,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: red\n    kind: loop\n    loop: red-loop\n    gate_authority: auto\n' +
         '  - id: green\n    kind: loop\n    loop: green-loop\n    gate_authority: human\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.definition.steps.map((s) => s.gateAuthority)).toEqual(['auto', 'human']);
   });
@@ -155,14 +155,14 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   // Pinning test: green before S1. That an absent field reads as `human` is pinned by AC7's undeclared-step leg in autoGate.test.ts.
   it('loads a loop step that declares no gate_authority, never as `auto`', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: loop\n    loop: red-loop\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.definition.steps[0].gateAuthority).not.toBe('auto');
   });
 
   it('fails the load, naming the step and the value, on an unknown gate_authority', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: red-loop\n    gate_authority: sometimes\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
     if (!load.ok) {
       expect(load.error).toContain('build');
@@ -172,7 +172,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
 
   it('fails the load on a gate_authority declared on a manual step, whose gate is never a loop gate', () => {
     writeFlow('name: f\nsteps:\n  - id: done\n    kind: manual\n    gate_authority: auto\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
     if (!load.ok) {
       expect(load.error).toContain('done');
@@ -182,7 +182,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
 
   it('fails the load on a non-string gate_authority', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: loop\n    loop: red-loop\n    gate_authority: true\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
     if (!load.ok) expect(load.error).toContain('gate_authority');
   });
@@ -195,7 +195,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
         '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.steps[0].bootstrap).toBe('pickup');
@@ -208,22 +208,22 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
       'name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n' +
         '    inputs:\n      - name: note\n        type: free-text\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.definition.steps[0].inputs).toEqual([{ name: 'note', type: 'free-text', required: false }]);
 
     writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: teleport\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // only `pickup` is in scope (§18.3)
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // only `pickup` is in scope (§18.3)
   });
 
   it('rejects malformed inputs: a non-array inputs: or an entry missing name/type (§24.2.3 T3)', () => {
     // The loader must surface an error state (never silently accept) when `inputs:` is not a list of
     // {name, type} entries — otherwise a bootstrap could run with an unvalidated input shape.
     writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    inputs: ticket\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // inputs: is not an array
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // inputs: is not an array
 
     writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    inputs:\n      - name: ticket\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // entry missing `type`
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // entry missing `type`
   });
 
   // §28.4 loop-back (repeat) primitive — a step may declare `repeat: { back_to, count_input }` making
@@ -236,7 +236,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: refactor\n    kind: loop\n    loop: refactor-loop\n' +
         '    repeat:\n      back_to: red\n      count_input: slices\n',
     );
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       expect(load.definition.steps[0].repeat).toBeUndefined();
@@ -251,23 +251,23 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
         '  - id: red\n    kind: manual\n    repeat:\n      back_to: finalize\n      count_input: slices\n' +
         '  - id: finalize\n    kind: manual\n',
     );
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
     // unknown target
     writeFlow(
       'name: f\nsteps:\n' +
         '  - id: red\n    kind: manual\n' +
         '  - id: refactor\n    kind: manual\n    repeat:\n      back_to: nope\n      count_input: slices\n',
     );
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
   });
 
   it('rejects a malformed repeat: not a mapping, or missing back_to / count_input (§28.4)', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat: red\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // repeat is not a mapping
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // repeat is not a mapping
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // missing count_input
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // missing count_input
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false); // missing back_to
+    expect(loadFlowDefinition(dir, null).ok).toBe(false); // missing back_to
   });
 });
 

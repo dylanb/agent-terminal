@@ -4,6 +4,8 @@ import { controllerOf, electron } from './registeredElectron';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { STEP_DEF_EXT, stepLibraryDir } from '../../src/main/stepLibrary';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -2378,6 +2380,45 @@ function installEnv(home: string, configDir: string, codexHome: string = join(ho
   };
 }
 
+test('installing the examples installs every bundled step definition where a repository flow can use it', { tag: '@ownapp' }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-home-')));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-cfg-'));
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-repo-')));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const bundled = readdirSync(join('example', 'steps')).filter((f) => f.endsWith(STEP_DEF_EXT)).sort();
+  expect(bundled.length).toBeGreaterThan(0);
+  const names = bundled.map((f) => f.slice(0, -STEP_DEF_EXT.length));
+  const reuse = join(flowCatalogDir(repo), 'reuse');
+  mkdirSync(reuse, { recursive: true });
+  writeFileSync(join(reuse, FLOW_DEF_FILE), `name: reuse\nsteps:\n${names.map((n) => `  - step: ${n}\n`).join('')}`);
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+  for (const file of bundled) {
+    await expect(installReportGroup('stepLibrary')).toContainText(file);
+    expect(existsSync(join(stepLibraryDir(home), file))).toBe(true);
+  }
+
+  await page.locator('[data-viewbtn="1"]').click();
+  await typeCommand(`cd ${shellQuote(repo)} && pwd`);
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  const pickerHost = page.locator('#app .rail:has(#flow-strip) #flow-picker');
+  await expect(pickerHost.getByRole('button', { name: /flow/i })).toBeEnabled({ timeout: 10_000 });
+  await pickerHost.getByRole('button', { name: /flow/i }).click();
+  await pickerHost.getByRole('option', { name: /reuse/ }).click();
+  const stationName = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i).locator('.nm');
+  for (const [i, name] of names.entries()) await expect(stationName(i + 1)).toHaveText(name, { timeout: 10_000 });
+
+  await app.close();
+  for (const dir of [home, configDir, repo]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('installing the bundled examples seeds the flow, app and commands (§18.1/§23.4 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group.
@@ -3368,6 +3409,27 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
     'name: v2-chain\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n' +
       '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n',
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
+  );
+  seedCompletedAppBootstrap(dir);
+  return dir;
+}
+
+function seedAppChainStepRefRepo(prefix: string, pr: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(stepLibraryDir(dir), { recursive: true });
+  writeFileSync(
+    join(stepLibraryDir(dir), 'plan-step.yaml'),
+    'kind: loop\nloop: plan-loop\nloop_namespace: app\ninputs:\n  - name: ticket\n    type: github-ticket\n  - name: pr\n    type: pr\n',
+  );
+  writeFileSync(join(stepLibraryDir(dir), 'implement-step.yaml'), 'kind: loop\nloop: infra-loop\nloop_namespace: app\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-chain-refs\nsteps:\n  - step: plan-step\n    id: plan\n  - step: implement-step\n    id: implement\n',
   );
   writeFileSync(
     join(dir, '.agent-terminal', 'flow-state.yaml'),
@@ -4684,6 +4746,37 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a step reference chains the approved loop\'s output into the next referenced loop\'s work turn (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainStepRefRepo('agent-term-e2e-v2-chain-refs-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-chain-refs-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-chain-refs-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement');
+  await expect
+    .poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 })
+    .toContain(`- plan: ${APP_ARTIFACT_REL}`);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
 test('a branch switched away from the pickup branch stops the next step\'s work turn before it injects, naming both branches (§27.10)', { tag: '@ownapp' }, async () => {

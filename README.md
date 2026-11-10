@@ -12,7 +12,7 @@ A desktop app for running, monitoring and steering terminal coding agents such a
 - **A shadow screen model.** Every output byte is also fed into a headless xterm in the main process. It tracks the live screen, terminal modes, the alternate screen and *quiescence* (when the agent has gone quiet), and everything below is built on it.
 - **Monitor pane and injection.** Capture what the agent shows, turn findings into todos, and send text back into the agent's input, either inserted at the cursor or inserted and submitted. Injection honours bracketed-paste mode and strips paste-breakout sequences.
 - **Flows and loops.** A *flow* is a sequence of steps that takes a ticket from start to finish. Most steps are *loops*: the agent does the work, reviewer sub-agents review it, the agent fixes what they find, the findings are consolidated, and then a gate decides whether the step is done. A gate is either `auto` (the engine decides and falls back to you if it can't) or `human`. Progress, gates and loop rounds appear in the rail and the always-visible status bar, and every run writes an append-only audit log under `~/.agent-terminal/audit/`.
-- **Bundled flows.** Three ready-to-run flows ship with the app (see [below](#bundled-flows)), along with their loop definitions, reviewer charters, Claude Code slash commands and sub-agents, and Codex skills.
+- **Bundled flows.** Four ready-to-run flows ship with the app (see [below](#bundled-flows)), along with their loop definitions, reviewer charters, Claude Code slash commands and sub-agents, and Codex skills.
 - **Artifacts view.** A file tree and viewer for the plans, reports and other artifacts that steps produce.
 - **Controller.** A separate tray app with one status card per terminal. It shows which agents are working or idle and which ones need you, and can bring the right window forward. See [docs/controller.md](docs/controller.md).
 
@@ -66,7 +66,7 @@ This builds the terminal into `dist/` and the controller (`electron-builder.cont
 ## Getting started
 
 1. **Launch Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
-2. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
+2. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows, step definitions and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
 3. **Pick a flow and start it.** Choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), so install it and sign in with `gh auth login` first.
 4. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
 
@@ -77,8 +77,9 @@ This builds the terminal into `dist/` and the controller (`electron-builder.cont
 | `feature-dev-v3` | The full test-driven chain: groom the ticket → human approval → plan → human approval → build test infrastructure → RED / GREEN / refactor for each planned slice → integration slice → human approval → finalize the PR for a human to merge. Epics fan out into sub-tickets. Each phase ends in a `git commit`. Described in [spec §28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md). |
 | `simple-dev-v1` | A lighter chain for a ticket that fits one `feature-dev-v3` slice: plan → human approval (with a too-big warning) → one TDD development loop → integration slice → human approval → finalize. |
 | `plan-only` | Groom a ticket and produce a reviewed implementation plan, then stop. |
+| `two-step-example-v1` | The smallest flow built from reusable step definitions: two manual steps, each advanced by you. |
 
-The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
+The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). A flow can also use a step defined once in `~/.agent-terminal/steps/` or `<repo>/.agent-terminal/steps/` by writing `- step: <name>`. A repo flow can use either folder; a global flow uses only the global one. See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
 
 ## Settings (environment variables)
 

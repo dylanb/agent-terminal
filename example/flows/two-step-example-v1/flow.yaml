@@ -1,0 +1,6 @@
+# The smallest flow built from reusable step definitions: two steps from the step library, each advanced
+# by the operator.
+name: two-step-example-v1
+steps:
+  - step: basic-first
+  - step: basic-second

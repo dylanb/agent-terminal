@@ -30,6 +30,9 @@ extraResources:
   # The Codex skills (§18.1 v2.199), read back by resolveExampleCodexSkillsDir.
   - from: example/codex-skills
     to: example/codex-skills
+  # The step library (§18.2), read back by resolveExampleStepsDir.
+  - from: example/steps
+    to: example/steps
 mac:
   # A release needs a real Developer ID and hardened runtime for notarization. Do not pin an
   # ad-hoc identity here; development bundle signing belongs to scripts/sign-bundle.sh.

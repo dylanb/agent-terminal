@@ -1,3 +1,7 @@
+## #42: reusable step definitions
+
+§18.2: a step can now be defined once, in a step library, and used by name from any flow. A flow step written as `step: <name>` loads the definition `<name>.yaml` and becomes the step it describes. A repository flow looks in `<repo>/.agent-terminal/steps/`, then `~/.agent-terminal/steps/`; a global flow looks only in `~/.agent-terminal/steps/`, so a begun global run never picks up a repository's step file (§18.7.3). The reference may set `id`, `gate_authority` and `repeat`; the definition sets everything else. Order is still the only dependency between steps. §18.1: Install examples gains a **Step library** destination, and the bundle ships `example/steps/` with two basic manual steps and the `two-step-example-v1` flow built from them. IPC: the install destination ids gain `stepLibrary`.
+
 ## The test and e2e workflows can be dispatched by hand
 
 §27.13 N13a: the vitest and e2e workflows also accept `workflow_dispatch`, so either can run on a draft PR's branch on demand. They still run automatically only on the push to `main` a merge creates, and a dispatched run publishes no `test-proof/*` status, so a PR still merges on its test proof.
