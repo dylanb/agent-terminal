@@ -14,7 +14,7 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
-import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
+import { roundReportWithDisposition, roundReportWithIssues, roundReportWithStatuses, type ScriptedIssue } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
@@ -250,8 +250,8 @@ export interface StepScript {
   // Round-2 review report kind, default `full`.
   review2?: 'full' | 'failed';
   // Per-round override of the report kind (index = round-1): `needs-human` records the first persona's issue
-  // with the `needs a human` disposition.
-  reviews?: ('full' | 'needs-human')[];
+  // with the `needs a human` disposition; `{ issues }` has the first persona record exactly those issues.
+  reviews?: ('full' | 'needs-human' | { issues: ScriptedIssue[] })[];
   // The consolidator output per round (index = round-1), each the FULL verdict file content. Absent → every
   // round emits `verdict: clean`.
   verdicts?: string[];
@@ -362,7 +362,9 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const notLoaded = b64(firstMarkedReport(sections, roster, 'not loaded'));
   const r1 = reviewKind === 'failed' ? failed : reviewKind === 'not-loaded' ? notLoaded : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
   const r2 = (opts.review2 ?? 'full') === 'failed' ? failed : full;
-  const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${k === 'needs-human' ? needsHuman : full}' ;;`).join(' ');
+  const roundReport = (k: NonNullable<StepScript['reviews']>[number]): string =>
+    k === 'needs-human' ? needsHuman : k === 'full' ? full : b64(roundReportWithIssues(sections, roster, k.issues));
+  const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${roundReport(k)}' ;;`).join(' ');
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
   // reports/2.json, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =

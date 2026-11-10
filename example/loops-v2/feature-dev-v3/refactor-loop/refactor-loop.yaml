@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: commits
   completion: refactor
-  goal: "the tests still pass, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and this slice's refactor report section file holds its decisions, review history and test evidence"
+  goal: "the tests still pass, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report, its recorded test evidence and documentation (an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation), and this slice's refactor report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:

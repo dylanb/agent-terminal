@@ -34,6 +34,10 @@ pnpm run test:proof # full vitest + Podman e2e on the clean, pushed PR head, the
 
 Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never hand-roll a poll.** Its header documents the traps it removes. If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
 
+## Pushing to a branch that has a PR
+
+On every push to a branch that has a PR, bring the PR description's test evidence and history up to date in the same step — a description that still reports an earlier push's tests misleads every reviewer who reads it.
+
 ## Architecture (orientation only — details in the spec)
 
 - `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer. The flow **audit recorder** (§25, `auditRecorder.ts` + `auditPaths.ts`) is observe-only and best-effort: it writes each run's append-only YAML under `~/.agent-terminal/audit/` and never throws into the flow path.
@@ -67,6 +71,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never han
 - **No mocks for the terminal emulator or the PTY.** Integration tests drive the real `@xterm/headless` shadow module with scripted byte streams (it is pure JS and runs under vitest/node). Full-loop behavior (real node-pty, real bash, real renderer) is covered by Playwright `_electron` e2e — never by mocking node-pty. Fake timers/clocks are fine (the quiescence detector takes injectable timers for exactly this); mocking the VT parser is not.
 - **An e2e test that checks what the screen shows gets there by pressing the control**, never by calling the preload API, which stays fine for setup the assertion does not depend on. → [CODE-STANDARDS.md](CODE-STANDARDS.md#an-e2e-test-that-checks-what-the-screen-shows-gets-there-by-pressing-the-control)
 - **An e2e test never boots an Electron it will not use** — a test that launches its own is tagged `@ownapp` and the harness boots nothing for it; the canary at the top of `app.spec.ts` pins this. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- **A drift or absence test cannot pass vacuously.** A drift test discovers its subjects rather than listing them, and an independent control counts the discovery a second way, so a finder that returns nothing fails instead of running zero cases. A test that asserts a retired or forbidden text is absent self-checks its detector against that text (it fires) and a near-miss (it fires on the right thing), so a detector that matches nothing cannot keep the suite green. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 
 ## Tracer-bullet development (mandatory planning requirement)
 
@@ -93,6 +98,7 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - A prompt that instructs an agent to produce an artifact a predicate gates on shares one descriptor with that predicate, embeds that descriptor's canonical example, and has the agent produce JSON it checks with that same predicate before signalling done — never a hand-written Markdown grammar. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - No production code modifies the user's `.gitignore`, ever (§19.1/§25); persistence tests assert the write creates none and leaves an existing one byte-for-byte unchanged. Only an explicit, user-invoked install action is exempt. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - App-owned state with an independent set/clear lifecycle lives in its **own file**, disjoint from any wholesale-written document (`polish.yaml`/`armed-interrupt.yaml` vs `run-state.yaml`, §27). → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- A shared text a prose surface (recipe, charter, skill, spec) must carry is pointed to wherever the engine composes it into the same prompt — the composed prompt states it exactly once and the prose restates none of it — and only a surface read on its own carries a copy, pinned against the exported constant through `tests/helpers/statesText.ts`, never a hand-copied literal or inline normalisation. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Bracketed-paste mode is read live at injection time (renderer `term.paste()`; main `shadow.modes.bracketedPasteMode`) — never cached, never decided by us (§9.3).
 - **Diagrams in the repository's Markdown are Mermaid, never ASCII art, and every ```` ```mermaid ```` block parses.** `pnpm lint` (run by the pre-commit hook and the pull-request CI) parses each one and fails on any that does not.
 - Renderer UI follows **[`UI-STANDARDS.md`](UI-STANDARDS.md)** — atomic tiers, per-component tests (organisms also get e2e + a relocation test), typed `createX(host, deps)` factories, host-subtree only, services injected, `src/renderer/src/tokens.css` theming.

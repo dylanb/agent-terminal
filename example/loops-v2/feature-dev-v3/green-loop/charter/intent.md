@@ -32,7 +32,5 @@ Completeness gate: every acceptance criterion for THIS slice AND every prior sli
 implemented — and wired into production where the plan requires it — before the change is clean; a
 prior-slice AC that is unfinished or regressed blocks this change too. Trace each to the test that grades it.
 
-Raise a finding only where acting on it changes an observable outcome — a deferred, missing, or unwired AC,
-an AC with no failing-without-the-change test, or scope that rode along. An equal-quality rewording of an
-already-faithful, complete implementation is not a finding; flagging it only manufactures the next round's
-work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.

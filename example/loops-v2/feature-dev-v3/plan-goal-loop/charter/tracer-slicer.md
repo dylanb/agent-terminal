@@ -51,10 +51,8 @@ Check where the plan puts each test edit. An edit to or deletion of an existing 
 in that slice's RED step, so the edited test is seen failing before the code it covers: a later step changes a
 RED test only to correct one it finds wrong (§28.5.1). Any such edit scheduled in a GREEN or refactor step is a finding.
 
-Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
-two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
-more-precise citation that would not change the meaning, or a defensible authoring choice the ticket does
-not require is not a finding; flagging it only drives a rewrite that manufactures the next round's work.
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

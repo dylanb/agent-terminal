@@ -14,10 +14,8 @@ leaves scope is explicit, prior operator permission recorded in the ticket or pl
 into an already-filed sub-ticket of the same epic); the plan may never self-defer an AC to "a later slice"
 without it, and there is no excuse for deferring a valid AC that would ever be accepted after the fact.
 
-Raise a finding only where acting on it changes an observable outcome — an AC left uncovered, deferred, or
-silently narrowed. A citation already correct where a more-precise one would not change the meaning, or an
-equal-quality rewording of an already-faithful clause, is not a finding; flagging it only manufactures the
-next round's work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure is justified only by what the acceptance criteria require or what

@@ -8,7 +8,7 @@
 import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
+import { CLEAN_RULE_LINES, CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
 import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { checkerLines } from './artifactCheck';
 
@@ -128,8 +128,8 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
     `${req.outputRel} as a JSON object with:`,
     ...verdictFormatLines(req.catalog),
     '',
-    '`clean` means the round changed nothing (every issue dismissed, nothing fixed); a round that fixed',
-    'something is `another round`. A terminal verdict (`clean` / `stop for a human`) needs no roster.',
+    ...CLEAN_RULE_LINES,
+    'A terminal verdict (`clean` / `stop for a human`) needs no roster.',
   );
   if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'verdict'));
   lines.push(

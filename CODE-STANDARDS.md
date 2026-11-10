@@ -280,6 +280,54 @@ A **composed prompt that instructs an LLM to produce a serialized artifact a pre
    edge case every round (fences, indented code, emphasis), never a repeat, so the spinning check cannot
    see it; JSON removes the class.
 
+## A shared text in prose — point to it where it is composed, pin it where it must be copied
+
+The shared-semantics rule binds two sides that import one module. A Markdown recipe, a charter, the Codex
+skill and the spec cannot import anything, so a shared text they must carry — the NIT definition, the
+clean rule — reaches them as a copy, and a copy is the drift the rule exists to prevent. Two disciplines,
+in order of preference:
+
+1. **Where the engine composes the shared text into the same prompt, the prose surface points to it and
+   never restates it.** The engine's consolidator instruction appends `CLEAN_RULE_LINES` after the loop's
+   recipe, so each bundled `consolidate.md` says "`clean` — the round meets the clean rule the turn
+   instruction states" and nothing more. The pin is on the *composed* prompt: it states the shared text
+   **exactly once** (`timesStated(...) === 1`), and the prose surface restates **none of its sentences** —
+   a partial paraphrase is the copy that drifts first. The motivating defect: #207 put the clean rule word
+   for word into ten `consolidate.md` files, each pinned by a drift test, and the operator replaced every
+   copy with a pointer (2026-10-19) — ten pinned copies are ten places a later wording change has to land,
+   and a pointer is none.
+2. **Where no composer joins them — a surface read on its own, like the Codex skill or the spec — the copy
+   is pinned against the exported constant through `tests/helpers/statesText.ts`, never hand-rolled.**
+   `statesText` / `sentenceStates` / `timesStated` / `sameText` are the one definition of "states the shared
+   text": the same words in the same order, ignoring line breaks, indentation and Markdown emphasis, matched
+   case-sensitively because the text is quoted, not paraphrased (`{ ignoreCase: true }` is the opt-in for a
+   phrase, never for a quoted definition). A test never compares against a hand-copied literal of the
+   constant, and never normalises inline (`.replace(/\s+/g, ' ')`, `.toLowerCase()`, an ad hoc regex): each
+   inline normalisation is a second, slightly different definition of "the same text", which is how #207's
+   drift tests briefly carried both a case-folding and a case-sensitive comparison of one surface. The one
+   legitimate literal is the check that the constant *is* its external authority (the operator's NIT text
+   copied from the ticket, `reviewJudgement.test.ts`), and it compares through `sameText`.
+
+## A drift or absence test cannot pass vacuously
+
+Two shapes of test assert over a set of things the test itself chooses, and both pass green over nothing
+when that choice is wrong — a pin that cannot fail, one layer out from the assertion.
+
+- **A drift test discovers its subjects; it never lists them, and an independent control counts the
+  discovery.** `tests/helpers/bundledLoops.ts` walks the bundle for every loop, consolidator recipe, goal
+  loop and charter, so a loop added later is covered with no list edit — a hand-kept list is the one the
+  next loop is missing from (the composer form of this is `UI-STANDARDS.md`'s). The discovery is itself a
+  predicate that can be wrong, so `bundledLoopsDiscovery.test.ts` counts the same files a second way (the
+  YAML on disk, the charter paths each def names) and fails when the two disagree — a finder that returns
+  `[]` would otherwise make every `it.each` over it pass by running nothing.
+- **A test that asserts a retired or forbidden text is absent self-checks that its detector finds that
+  text.** `not.toMatch(detector)` passes forever once the detector stops matching anything — a typo, a
+  wording drift, over-tight anchoring. `tests/helpers/materialityFloor.ts` detects the retired §27.6
+  materiality floor, and its self-checks (`reviewTurn.test.ts`, "the materiality-floor check itself")
+  assert it matches the floor's old wording re-wrapped and re-cased, and does *not* match the kept
+  test-support rule whose wording is close to it. Pair every absence detector with a positive case that
+  shows it can fire, and a near-miss that shows it fires on the right thing.
+
 ## Independent-lifecycle state lives in its own file, disjoint from any wholesale-rewritten document
 
 A flag whose set/clear lifecycle is **independent** of a larger persisted document is stored in its own

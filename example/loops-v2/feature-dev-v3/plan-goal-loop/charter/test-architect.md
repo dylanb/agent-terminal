@@ -22,10 +22,8 @@ each sits at the right layer (unit / integration / e2e); that the order is RED-f
 injection seam names the domain concept the unit needs, not the mechanism that happens to satisfy it today.
 Flag any acceptance criterion whose only test restates the implementation instead of pinning its behavior.
 
-Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
-two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
-more-precise citation that would not change the meaning, or a defensible authoring choice the ticket does
-not require is not a finding; flagging it only drives a rewrite that manufactures the next round's work.
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

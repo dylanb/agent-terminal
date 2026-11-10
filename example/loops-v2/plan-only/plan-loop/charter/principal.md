@@ -15,11 +15,8 @@ content needs no RED test, but any behaviour the slice adds is still proven RED-
 A slice that adds tokens or shared components that nothing visible uses is still a horizontal layer. Accept the
 first as the plan's earliest slice; reject the second.
 
-Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
-two surfaces read, or whether the next reader can follow the artifact. A citation already correct where a
-more-precise one would not change the meaning, an equal-quality rewording, or a defensible authoring choice
-the ticket does not require is not a finding; flagging it only drives a rewrite that manufactures the next
-round's work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

@@ -10,12 +10,13 @@ import type { ChainedInput } from './chainedInput';
 import type { SliceBriefDelivery } from './sliceBriefReader';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, FAILED_STATUS, NOT_LOADED_STATUS, RAN_STATUS, REPORT_FIELDS, exampleRoundReport } from '../shared/roundReport';
+import { CHANGE_RECORDING_DISPOSITIONS, DISPOSITIONS, DOCUMENTATION_DISPOSITION, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, NIT_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, FAILED_STATUS, NOT_LOADED_STATUS, RAN_STATUS, REPORT_FIELDS, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
 import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
+import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../shared/reviewJudgement';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
 
@@ -124,7 +125,8 @@ function reportFormatLines(sections: string[], whichReviewers: string, kind: Age
     `  judged clean (§27.5/§27.6) — and \`"${NOT_LOADED_STATUS}"\` for one whose`,
     kind === 'codex' ? '  Codex agent cannot be found: this agent session started' : '  subagent_type the Task tool cannot find: this agent session started',
     '  before it was installed, so record it and spawn nothing in its place.',
-    `- each issue: \`"${f.issue}"\`, \`"${f.disposition}"\`, \`"${f.reason}"\`, and (when fixed) \`"${f.whatChanged}"\`, each as text.`,
+    `- each issue: \`"${f.issue}"\`, \`"${f.disposition}"\`, \`"${f.reason}"\`, and (for ${CHANGE_RECORDING_DISPOSITIONS.map((d) => `\`"${d}"\``).join(' or ')})`,
+    `  \`"${f.whatChanged}"\`, each as text.`,
     `- each \`"${f.disposition}"\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`"${d}"\``).join(' / ')} — spelled`,
     '  verbatim, no other value.',
   ];
@@ -207,33 +209,48 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
     'Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only',
     'the targeted tests that checking a specific finding needs.',
     'Do not change any file: report your findings, and the fixer makes every change.',
+    'Judge each finding against this definition of a NIT, the one the fixer applies too:',
+    '',
+    ...NIT_DEFINITION_LINES,
+    '',
+    'You may label a finding a NIT; the fixer weighs that label and makes the call.',
+    'The PR description is not under review: raise no finding about it.',
     'Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.',
     'If you find nothing, return exactly: no findings',
   );
   return lines;
 }
 
-/** §27.6 */
+/** §27.3/§27.6 */
 export function fixCriterionLines(): string[] {
   return [
     '',
-    // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on
-    // prose: an in-scope finding that changes no observable outcome must be DISMISSED, not fixed, or each
-    // rewrite of already-correct text manufactures the next round's findings and the loop never converges.
-    'Fix an issue only when acting on it changes an OBSERVABLE OUTCOME — correctness, safety, a contract two',
-    'surfaces actually read, or whether the next reader/implementer can follow the artifact. An in-scope finding',
-    'that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct',
-    'where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not',
-    'require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`. Do not rewrite an already-correct',
-    'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
-    'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
-    'only what the loop is not entitled to decide.',
+    'NITs — the reviewers and you judge findings by this one definition of a NIT:',
+    '',
+    ...NIT_DEFINITION_LINES,
+    '',
+    'Judge against the NIT definition each valid finding that is not out of scope for a reason other than polish',
+    'deferral, and weigh any NIT label the reviewer gave it; the call is yours. A NIT is never implemented: record',
+    `it as \`${NIT_DISPOSITION}\` with a reason saying why it passes the Safe-to-Ignore test, never \`${FIXED_DISPOSITION}\`.`,
+    `Any finding about the PR description, whatever its content, is \`${OUT_OF_SCOPE_DISPOSITION}\`.`,
+    '',
+    'What counts as documentation:',
+    '',
+    ...DOCUMENTATION_DEFINITION_LINES,
+    '',
+    `Record a fix whose changes are all documentation as \`${DOCUMENTATION_DISPOSITION}\`, and any other fix as \`${FIXED_DISPOSITION}\`.`,
+    'When every change the fixes made is documentation or in another non-code file, run only those of the',
+    "repository's required tests that check such files, and none if the repository has none. The required tests",
+    'are all the tests the repository requires to run and pass before the flow moves to its next phase; which of',
+    'them check documentation or non-code files is for the repository to define.',
+    '',
+    `Dismiss what is out of scope or invalid; escalate to \`${NEEDS_HUMAN_DISPOSITION}\` only what the loop is not entitled to decide.`,
     '',
     'Test-support code — a fake, stand-in, or double of a real tool, and the fixtures and helpers around it —',
     'exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it',
     'has no test of its own, changes an observable outcome only when a test the ticket needs relies on that',
     'behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is',
-    '`dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never',
+    `\`${INVALID_DISPOSITION}\`, never \`${FIXED_DISPOSITION}\`: a double can always be made more faithful, so fixing such gaps never`,
     'runs out. A test written later that relies on the behaviour is reviewed in its own round.',
   ];
 }
@@ -278,25 +295,28 @@ function polishDeferLines(): string[] {
     'This loop DEFERS POLISH to a later loop in its flow, which re-reviews this work with a catalog that fixes',
     'polish. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
     'contract another surface reads: a rename, comment wording or trimming, de-duplicating logic that already',
-    `behaves identically, style or convention conformance — is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
-    '`polish — deferred to a later loop`, NEVER `fixed` in this loop. A round whose only',
+    'behaves identically, style or convention conformance — takes the NIT test first: a polish finding that is a',
+    `NIT is \`${NIT_DISPOSITION}\`. Only a polish finding that is not a NIT is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
+    `\`polish — deferred to a later loop\`, NEVER \`${FIXED_DISPOSITION}\` in this loop. A round whose only`,
     'findings are polish therefore changes nothing.',
   ];
 }
 
-/** §27.3 */
-export const GOAL_NO_CHANGE_CLAUSE =
-  "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change)";
+const GOAL_UNCHANGED = "changed nothing but this step's report, its recorded test evidence and documentation";
+const GOAL_CHANGE_RULE = 'an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation';
 
-/** §27.3 */
+/** §27.3/§27.6 */
+export const GOAL_NO_CHANGE_CLAUSE = `no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, ${GOAL_UNCHANGED} (${GOAL_CHANGE_RULE})`;
+
+/** §27.3/§27.6 */
 function goalPassLines(): string[] {
   return [
     '',
     'PASSES — run a review pass only over a change.',
-    "- When your work changed nothing but this step's report and its recorded test evidence, run no review at all.",
-    "- After a pass, when its fixes changed nothing but this step's report and its recorded test evidence — every",
-    '  finding was dismissed, or the only edit was to the report or its test evidence — the review is done: do not',
-    '  spawn the reviewers again. An edit to the plan, the ticket, code or tests is a change.',
+    `- When your work ${GOAL_UNCHANGED}, run no review at all.`,
+    `- After a pass, when its fixes ${GOAL_UNCHANGED} — every finding was dismissed, every fix was`,
+    `  \`${DOCUMENTATION_DISPOSITION}\`, or the only edit was to the report or its test evidence — the review is done: do not`,
+    `  spawn the reviewers again. ${GOAL_CHANGE_RULE[0].toUpperCase()}${GOAL_CHANGE_RULE.slice(1)}.`,
     '- Otherwise run another pass. The first pass runs every reviewer. A later pass runs only the reviewers whose',
     '  findings you fixed and any whose area your fixes touched; it runs every reviewer again only when a fix changes',
     '  the acceptance criteria, the scope, the approach or the slices the work answers to.',

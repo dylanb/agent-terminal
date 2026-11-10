@@ -280,6 +280,24 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
     }
   });
 
+  it("builds into an out/ of the container's own, so a host build during a run never empties the bundle a booting Electron loads", () => {
+    const bin = fakeBin(['podman']);
+    try {
+      const r = spawnSync('bash', [join(ROOT, 'scripts', 'e2e-podman.sh')], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: `${bin.dir}:${process.env.PATH}` },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      const runLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('podman [run]')) ?? '';
+      expect(runLine).toContain('[--tmpfs] [/work/out:rw,exec]');
+      const mounts = [...runLine.matchAll(/\[-v\] \[([^\]]*)\]/g)].map((m) => m[1]);
+      expect(mounts.filter((m) => m.split(':')[1] === '/work/out')).toEqual([]);
+    } finally {
+      rmSync(bin.dir, { recursive: true, force: true });
+    }
+  });
+
   it('mounts the node_modules cache volume E2E_NODE_MODULES_VOLUME names', () => {
     expect(podmanVolume(join(ROOT, 'scripts', 'e2e-podman.sh'), { E2E_NODE_MODULES_VOLUME: 'agent-terminal-e2e-node_modules-mine' })).toBe('agent-terminal-e2e-node_modules-mine');
   });
