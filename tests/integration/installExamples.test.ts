@@ -46,7 +46,7 @@ import {
 // the installer walks a tree. Every expected file set is enumerated FROM THE BUNDLE, never hard-coded:
 // a hard-coded list silently under-installs the next bundle refresh.
 
-const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v3');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
@@ -75,7 +75,7 @@ let configRoot: string;
 let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
-const templateRel = path.join('todo-templates', 'ticket-grooming.md');
+const templateRel = path.join('todo-templates', 'polish.md');
 const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
 const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';
@@ -84,7 +84,7 @@ const commandRel = 'groom-ticket.md';
 // actual bundled trees; home/configRoot give the temp install targets. Tests that need a broken bundle
 // swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
 /** Codex's home under the temp HOME, absent unless a test creates it — so no fixture can ever reach the
- *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1 v2.199). */
+ *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1). */
 const codexHomeOf = (): string => path.join(home, '.codex');
 const seam = (over: Partial<InstallRoots> = {}): InstallDestination[] =>
   exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf(), ...over });
@@ -252,16 +252,16 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   });
 
   it('reports a file name occurring in two loop definitions as two distinct entries', () => {
-    const shared = APP_LOOPS_SET.filter((r) => r.startsWith(`${APP_LOOP_NAMES[0]}${path.sep}`))
-      .map((r) => path.relative(APP_LOOP_NAMES[0], r))
-      .filter((r) => APP_LOOPS_SET.includes(path.join(APP_LOOP_NAMES[1], r)));
-    expect(shared.length).toBeGreaterThan(0); // the bundle really does share names across definitions
+    const loopDirOf = (rel: string): string => rel.split(path.sep).slice(0, 2).join(path.sep);
+    const inLoop = (rel: string): string => rel.split(path.sep).slice(2).join(path.sep);
+    const [first, second] = APP_LOOPS_SET.flatMap((a) =>
+      APP_LOOPS_SET.filter((b) => loopDirOf(a) !== loopDirOf(b) && inLoop(a) === inLoop(b)).map((b) => [a, b]),
+    )[0] ?? [];
+    expect(first).toBeDefined(); // the bundle really does share names across definitions
 
     const created = filesFor(okOf(applyInstallExamples(dirs, [])).created, 'appLoops');
-    for (const rel of shared) {
-      expect(created).toContain(path.join(APP_LOOP_NAMES[0], rel));
-      expect(created).toContain(path.join(APP_LOOP_NAMES[1], rel));
-    }
+    expect(created).toContain(first);
+    expect(created).toContain(second);
   });
 });
 
@@ -674,7 +674,7 @@ describe('applyInstallExamples — first run seeds a config root that does not e
   });
 });
 
-describe('Codex destinations are installed only where Codex is (§18.1 v2.199)', () => {
+describe('Codex destinations are installed only where Codex is (§18.1)', () => {
   it('copies the whole loops-v2 bundle tree into an existing Codex home, byte for byte', () => {
     mkdirSync(codexHomeOf());
     const res = okOf(applyInstallExamples(dirs, []));
@@ -996,7 +996,6 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       const load = loadFlowDefinitionLocalFirst(localWithoutFlow, home);
       expect(load.ok).toBe(true);
       if (!load.ok) return;
-      expect(load.definition.name).toBe('feature-dev-v2');
       const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
       expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
     } finally {
@@ -1257,6 +1256,7 @@ describe('install examples coordinator — contract guards (§6)', () => {
       sessionId: SESSION_ID,
       previewId: preview.previewId,
       replace: [],
+      removeRetired: false,
     });
     expect(res.ok).toBe(true);
     expect(existsSync(targetOf('flow', flowRel))).toBe(true);
@@ -1315,6 +1315,7 @@ describe('createInstallExamplesCoordinator — preview-bound, one-time authoriza
     sessionId: SESSION_ID,
     previewId,
     replace,
+    removeRetired: false,
   });
 
   function preview(

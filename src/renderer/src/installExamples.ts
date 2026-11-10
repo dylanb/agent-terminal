@@ -4,7 +4,6 @@ import {
   INSTALL_DESTINATION_IDS,
   type InstallDestinationFiles,
   type InstallDestinationId,
-  type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
   type InstallExamplesReport,
@@ -12,29 +11,23 @@ import {
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
+import { createPressGroup } from './pressable';
+import { DESTINATION_LABEL, asksBeforeInstall, createInstallConsent, type InstallPreview } from './installConsent';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
   apply(
     previewId: InstallPreviewId,
     replace: InstallDestinationId[],
+    removeRetired: boolean,
   ): Promise<InstallExamplesResult>;
 }
 
 export interface InstallExamples {
+  /** Runs what a press of the Install examples button runs. */
+  open(): void;
   dispose(): void;
 }
-
-const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
-  flow: 'Flow home',
-  flowCatalog: 'Flow catalog',
-  appLoops: 'App loop definitions',
-  commands: 'Claude Code commands',
-  agents: 'Claude Code reviewer agents',
-  codexLoops: 'Codex loop definitions',
-  codexAgents: 'Codex reviewer agents',
-  codexSkills: 'Codex skills',
-};
 
 type Report = InstallExamplesReport;
 
@@ -43,7 +36,8 @@ function total(groups: InstallDestinationFiles[]): number {
 }
 
 function counts(report: Report): string {
-  return `created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}.`;
+  const removed = report.removed.length > 0 ? `, removed ${report.removed.length}` : '';
+  return `created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}${removed}.`;
 }
 
 function summarize(report: Report): string {
@@ -67,14 +61,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'sub',
-      'Install the bundled feature-dev-v2 flow, its app loop definitions, and commands so a new instance can render and run them.',
+      'Install the bundled feature-dev-v3 flow, its app loop definitions, and commands so a new instance can render and run them.',
     ),
   );
 
   const card = el('div', 'kprofile');
   const txt = el('div');
   txt.append(
-    el('div', 'kp-label', 'feature-dev-v2 flow'),
+    el('div', 'kp-label', 'feature-dev-v3 flow'),
     el(
       'div',
       'kp-help',
@@ -83,7 +77,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   );
   const btn = el('button', 'pill signal', 'Install examples');
   btn.type = 'button';
-  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev-v2 flow');
+  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev-v3 flow');
   card.append(txt, btn);
 
   const status = el('div', 'cli-status');
@@ -132,6 +126,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         const files = groups.find((g) => g.destination === id)?.files ?? [];
         if (files.length > 0) lines.push(`${label} ${files.length}: ${files.join(', ')}`);
       }
+      const removed = report.removed.filter((r) => r.destination === id).map((r) => r.rel);
+      if (removed.length > 0) lines.push(`removed ${removed.length}: ${removed.join(', ')}`);
       const absent = report.notInstalled.find((n) => n.destination === id);
       if (absent !== undefined) lines.push(`not installed: ${absent.root} does not exist`);
       if (lines.length === 0) continue;
@@ -144,25 +140,18 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     reportList.hidden = reportList.childElementCount === 0;
   }
 
-  let busy = false;
-  // Kept focusable while busy: `disabled` blurs the pressed button to <body> for the whole round-trip,
-  // so the progress announcement would arrive with focus nowhere (WCAG 2.4.3, 4.1.2).
-  function setBusy(v: boolean): void {
-    busy = v;
-    btn.setAttribute('aria-disabled', String(v));
-    btn.setAttribute('aria-busy', String(v));
-  }
-  setBusy(false);
+  const installGroup = createPressGroup();
+  installGroup.bind(btn, () => run());
 
   async function install(
     previewId: InstallPreviewId,
     replace: InstallDestinationId[],
+    removeRetired: boolean,
     returnFocus: () => void,
   ): Promise<void> {
-    setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
-      const res = await deps.apply(previewId, replace);
+      const res = await deps.apply(previewId, replace, removeRetired);
       renderReport(res);
       // The failure arm carries the same report, and this is the branch where the user most needs it: a
       // partial install is not rolled back (§18.1), so the alert has to say what landed, not just what broke
@@ -172,137 +161,65 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
-      setBusy(false);
       returnFocus();
     }
   }
 
-  type Conflict = Extract<InstallDestinationPreview, { conflict: true }>;
-
-  function promptReplace(
-    previewId: InstallPreviewId,
-    conflicts: Conflict[],
-    returnFocus: () => void,
-  ): void {
+  function promptReplace(preview: InstallPreview, returnFocus: () => void): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
-      const describedById = `${titleId}-msg`;
-      const cardEl = d.createElement('div');
-      cardEl.className = 'card';
-      const h3 = d.createElement('h3');
-      h3.className = 'serif';
-      h3.id = titleId;
-      h3.textContent = 'Replace existing files?';
-      const p = d.createElement('p');
-      p.className = 'ph';
-      p.id = describedById;
-      p.textContent =
-        'Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.';
-      cardEl.append(h3, p);
-
-      // Not a <fieldset>: Chromium renders its children in an anonymous content box, so it can be neither a
-      // scroll box nor a shrinkable flex column. WAI-ARIA `group` + aria-labelledby, on a box that can be.
-      const group = d.createElement('div');
-      group.className = 'install-consent';
-      group.setAttribute('role', 'group');
-      const groupLabelId = `${titleId}-consent-group-label`;
-      group.setAttribute('aria-labelledby', groupLabelId);
-      const groupLabel = d.createElement('span');
-      groupLabel.className = 'ic-group-label';
-      groupLabel.id = groupLabelId;
-      groupLabel.textContent = 'Replace files in';
-      const rows = d.createElement('div');
-      rows.className = 'install-consent-rows';
-      group.append(groupLabel, rows);
-
-      const boxes = new Map<InstallDestinationId, HTMLInputElement>();
-      for (const conflict of conflicts) {
-        // accname 1.2 step 2D folds the WHOLE label subtree into the control's name, so the file manifest
-        // has to sit OUTSIDE the label and attach as a description — otherwise the checkbox announces
-        // dozens of paths before the user hears which destination it is (WCAG 4.1.2).
-        const row = d.createElement('div');
-        row.className = 'install-consent-opt';
-        const label = d.createElement('label');
-        label.className = 'ic-label';
-        const box = d.createElement('input');
-        box.type = 'checkbox';
-        box.setAttribute('data-destination', conflict.destination);
-        const filesId = `${titleId}-${conflict.destination}-files`;
-        box.setAttribute('aria-describedby', filesId);
-        const name = d.createElement('span');
-        name.className = 'ic-name';
-        name.textContent = `${DESTINATION_LABEL[conflict.destination]} — ${conflict.files.length} file${conflict.files.length === 1 ? '' : 's'}`;
-        label.append(box, name);
-        const files = d.createElement('span');
-        files.className = 'ic-files';
-        files.id = filesId;
-        files.textContent = conflict.files.join(', ');
-        row.append(label, files);
-        rows.append(row);
-        boxes.set(conflict.destination, box);
-      }
-      cardEl.append(group);
-
+      const consent = createInstallConsent(d, titleId, preview);
       const foot = d.createElement('div');
       foot.className = 'mfoot';
       const cancel = d.createElement('button');
       cancel.type = 'button';
       cancel.className = 'pill cancel';
       cancel.textContent = 'Cancel';
-      cancel.addEventListener('click', () => close());
+      installGroup.bind(cancel, () => close());
       const confirm = d.createElement('button');
       confirm.type = 'button';
       confirm.className = 'pill signal confirm';
       confirm.textContent = 'Install';
-      confirm.addEventListener('click', () => {
-        const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
+      installGroup.bind(confirm, () => {
+        const { replace, removeRetired } = consent.choice();
         accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
-        void install(previewId, replace, returnFocus);
+        installGroup.run(btn, () => install(preview.previewId, replace, removeRetired, returnFocus));
       });
       foot.append(cancel, confirm);
-      cardEl.append(foot);
-
-      // The body slots are declared on the contract (UI §5.7); the shell applies them.
-      return { card: cardEl, initialFocus: boxes.values().next().value ?? confirm, describedById, grow: group, scroll: rows };
+      return consent.card(foot, confirm);
     });
   }
 
   async function run(): Promise<void> {
-    if (busy) return;
     const returnFocus = captureFocusReturn(btn);
-    setBusy(true);
     reportList.replaceChildren();
     reportList.hidden = true;
     showStatus('cli-status', 'Checking…');
-    let preview: Extract<InstallExamplesPreview, { ok: true }>;
+    let preview: InstallPreview;
     try {
       const response = await deps.preview();
       if (!response.ok) {
         showError(response.error);
-        setBusy(false);
         returnFocus();
         return;
       }
       preview = response;
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
-      setBusy(false);
       returnFocus();
       return;
     }
-    const conflicts = preview.destinations.flatMap((d) =>
-      d.conflict ? [d] : [],
-    );
-    if (conflicts.length === 0) {
-      await install(preview.previewId, [], returnFocus);
+    if (!asksBeforeInstall(preview)) {
+      await install(preview.previewId, [], false, returnFocus);
       return;
     }
-    setBusy(false);
-    promptReplace(preview.previewId, conflicts, returnFocus);
+    promptReplace(preview, returnFocus);
   }
 
-  btn.addEventListener('click', () => void run());
-
   return {
+    open: () => {
+      btn.focus();
+      installGroup.run(btn, () => run());
+    },
     dispose: () => {
       modal.dispose();
       host.replaceChildren();

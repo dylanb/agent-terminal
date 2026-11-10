@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { controllerApi } from './controller';
+import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import {
   CH,
   SESSION_ID,
@@ -8,18 +10,26 @@ import {
   type CliApi,
   type CliInstallResult,
   type ExamplesApi,
+  type SetupApi,
+  type HostedAgentState,
+  type SetupAgentStateChangedMsg,
+  type SetupDismissReply,
+  type SetupStatusReply,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallExamplesApplyMsg,
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
-  type FlowLoopErrorMsg,
   type FlowAppBootstrapConflictMsg,
+  type FlowAdoptTicketChoiceMsg,
+  type ResolveAdoptTicketResult,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
   type ActiveFlowWriteResult,
   type FlowCatalogListResult,
   type RebindResult,
+  type ConfirmRunPickupResult,
   type GithubRef,
   type MonitorApi,
   type ViewerApi,
@@ -40,9 +50,19 @@ import {
   type UiSettings,
   type OsPlatform,
   type MenuEditMsg,
+  type StartupIncompatibleMsg,
 } from '../shared/ipc';
 
 export const termApi: TermApi = {
+  startup: {
+    ready: () => ipcRenderer.invoke(CH.startupReady, { sessionId: SESSION_ID }) as Promise<void>,
+    rendered: () => ipcRenderer.send(CH.startupRendered, { sessionId: SESSION_ID }),
+    onIncompatible: (cb) => {
+      const h = (_e: unknown, { sessionId: _sessionId, ...report }: StartupIncompatibleMsg): void => cb(report);
+      ipcRenderer.on(CH.startupIncompatible, h);
+      return () => ipcRenderer.removeListener(CH.startupIncompatible, h);
+    },
+  },
   onData: (cb) => {
     const h = (_e: unknown, m: PtyDataMsg): void => cb(m.data);
     ipcRenderer.on(CH.ptyData, h);
@@ -140,6 +160,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
   rebindHeldRun: (repoKey, choice, ifStepMissing) =>
     ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice, ifStepMissing }) as Promise<RebindResult>,
+  confirmRunPickup: (repoKey, run, pr, ticket) =>
+    ipcRenderer.invoke(CH.flowConfirmRunPickup, { sessionId: SESSION_ID, repoKey, run, pr, ticket }) as Promise<ConfirmRunPickupResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
@@ -154,11 +176,6 @@ const flowApi: FlowApi = {
     const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason, msg.repoKey, msg.step);
     ipcRenderer.on(CH.flowOnBootstrapError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
-  },
-  onLoopError: (cb) => {
-    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason, msg.kind ?? 'error');
-    ipcRenderer.on(CH.flowOnLoopError, handler);
-    return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
@@ -182,6 +199,20 @@ const flowApi: FlowApi = {
       wipe,
       ...target,
     }),
+  onAdoptTicketChoice: (cb) => {
+    const handler = (_e: unknown, msg: FlowAdoptTicketChoiceMsg): void =>
+      cb({
+        repoKey: msg.repoKey,
+        step: msg.step,
+        pr: msg.pr,
+        choiceId: msg.choiceId,
+        tickets: msg.tickets.map((t) => ({ repo: t.repo, number: t.number })),
+      });
+    ipcRenderer.on(CH.flowOnAdoptTicketChoice, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnAdoptTicketChoice, handler);
+  },
+  resolveAdoptTicket: (repoKey, step, choiceId, answer) =>
+    ipcRenderer.invoke(CH.flowResolveAdoptTicket, { sessionId: SESSION_ID, repoKey, step, choiceId, answer }) as Promise<ResolveAdoptTicketResult>,
   onEpicPromotionPreview: (cb) => {
     const handler = (_e: unknown, msg: FlowEpicPromotionPreviewMsg): void =>
       cb({ repoKey: msg.repoKey, step: msg.step, epic: msg.epic, pr: msg.pr, subTickets: msg.subTickets });
@@ -196,7 +227,7 @@ const flowApi: FlowApi = {
   appRouteOut: (repoKey, step, turnKey, action) =>
     ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
   appGateDecision: (repoKey, step, turnKey, option) =>
-    ipcRenderer.send(CH.flowAppGateDecision, { sessionId: SESSION_ID, repoKey, step, turnKey, option }),
+    ipcRenderer.invoke(CH.flowAppGateDecision, { sessionId: SESSION_ID, repoKey, step, turnKey, option }) as Promise<boolean>,
   appRequestChanges: (repoKey, step, turnKey, feedback) =>
     ipcRenderer.invoke(CH.flowAppRequestChanges, { sessionId: SESSION_ID, repoKey, step, turnKey, feedback }) as Promise<boolean>,
   appRedo: (repoKey, step, turnKey, instruction) =>
@@ -213,17 +244,34 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (previewId, replace) =>
+  apply: (previewId, replace, removeRetired) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
       replace,
-    }) as Promise<InstallExamplesResult>,
+      removeRetired,
+    } satisfies InstallExamplesApplyMsg) as Promise<InstallExamplesResult>,
 };
 
-contextBridge.exposeInMainWorld('term', termApi);
-contextBridge.exposeInMainWorld('monitor', monitorApi);
-contextBridge.exposeInMainWorld('viewer', viewerApi);
-contextBridge.exposeInMainWorld('flow', flowApi);
-contextBridge.exposeInMainWorld('cli', cliApi);
-contextBridge.exposeInMainWorld('examples', examplesApi);
+export const setupApi: SetupApi = {
+  status: (repoKey) => ipcRenderer.invoke(CH.setupStatus, { sessionId: SESSION_ID, repoKey }) as Promise<SetupStatusReply>,
+  dismiss: (dismissal) => ipcRenderer.invoke(CH.setupDismiss, { sessionId: SESSION_ID, dismissal }) as Promise<SetupDismissReply>,
+  agentState: () => ipcRenderer.invoke(CH.setupAgentState, { sessionId: SESSION_ID }) as Promise<HostedAgentState>,
+  onAgentStateChanged: (cb) => {
+    const h = (_e: unknown, m: SetupAgentStateChangedMsg): void => cb(m.state);
+    ipcRenderer.on(CH.setupAgentStateChanged, h);
+    return () => ipcRenderer.removeListener(CH.setupAgentStateChanged, h);
+  },
+};
+
+if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
+  contextBridge.exposeInMainWorld('controller', controllerApi);
+} else {
+  contextBridge.exposeInMainWorld('term', termApi);
+  contextBridge.exposeInMainWorld('monitor', monitorApi);
+  contextBridge.exposeInMainWorld('viewer', viewerApi);
+  contextBridge.exposeInMainWorld('flow', flowApi);
+  contextBridge.exposeInMainWorld('cli', cliApi);
+  contextBridge.exposeInMainWorld('examples', examplesApi);
+  contextBridge.exposeInMainWorld('setup', setupApi);
+}

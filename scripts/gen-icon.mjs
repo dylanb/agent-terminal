@@ -1,6 +1,6 @@
 // electron-builder and BrowserWindow reject SVG icons, so build/icon.svg is rasterized to the PNG
 // they consume.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -31,11 +31,14 @@ const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fil
 if (invokedDirectly) {
   const { Resvg } = await import('@resvg/resvg-js');
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const result = generateIcon({
-    svgPath: path.join(root, 'build', 'icon.svg'),
-    pngPath: path.join(root, 'build', 'icon.png'),
-    hashPath: path.join(root, 'build', 'icon.svg.sha256'),
-    render: (svg) => new Resvg(svg, { fitTo: { mode: 'width', value: ICON_SIZE } }).render().asPng(),
-  });
-  console.log(result.regenerated ? 'gen-icon: wrote build/icon.png' : 'gen-icon: build/icon.svg unchanged, skipped');
+  const names = readdirSync(path.join(root, 'build')).filter(file => file.endsWith('.svg')).map(file => file.slice(0, -'.svg'.length));
+  for (const name of names) {
+    const result = generateIcon({
+      svgPath: path.join(root, 'build', `${name}.svg`),
+      pngPath: path.join(root, 'build', `${name}.png`),
+      hashPath: path.join(root, 'build', `${name}.svg.sha256`),
+      render: (svg) => new Resvg(svg, { fitTo: { mode: 'width', value: ICON_SIZE } }).render().asPng(),
+    });
+    console.log(result.regenerated ? `gen-icon: wrote build/${name}.png` : `gen-icon: build/${name}.svg unchanged, skipped`);
+  }
 }

@@ -18,15 +18,15 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
+import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy, SelfCheck } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
-import { GREEN_COMPLETING_BUILD_OUTCOME, type BuildOutcome } from '../shared/buildOutcome';
-import { phaseOutputRel, phaseResultEnd } from '../shared/phaseResult';
+import { GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
+import { RED_COMPLETION, phaseOutputRel, phaseResultEnd, readPhaseResult, type PhaseResultWant } from '../shared/phaseResult';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
@@ -34,9 +34,12 @@ import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRoun
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import type { AdoptedRunRefs } from '../shared/currentTicket';
+import type { TicketRef } from '../shared/appBootstrap';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
+import { sliceBriefReader, type SliceBriefDelivery } from './sliceBriefReader';
 import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
@@ -52,6 +55,10 @@ const REVIEW_TURN_PREFIX = 'review-';
 const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
+
+const SELF_CHECK_ARTIFACT_CHECK: Record<SelfCheck, ArtifactCheck> = {
+  'loop-capabilities': { kind: 'capabilities' },
+};
 /** The route-out reason a relaunch gives a turn the persisted state left mid-flight (`working`): its PTY is
  *  gone and resume never re-drives it, so it is stopped and the human must retry/terminate it (§27.12/CWE-703). */
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
@@ -69,7 +76,11 @@ export type AppLoopEnterResult = 'entered' | 'busy' | 'unresolved';
 export type AppLoopErrorKind = 'turn-error' | 'def-unresolvable';
 
 /** §27.10 */
-export type PickupBranch = { kind: 'none' } | { kind: 'branch'; branch: string } | { kind: 'unreadable'; detail: string };
+export type PickupBranch =
+  | { kind: 'none' }
+  | { kind: 'branch'; branch: string }
+  | { kind: 'fix-branch'; branch: string; pr: number; primary: TicketRef }
+  | { kind: 'unreadable'; detail: string };
 
 /** The live in-memory error of the §27 work turn, surfaced to the view when the persisted error write
  *  failed (ENOSPC/EPERM/a planted symlink) so the route-out is never a dead-end (§27.12c). */
@@ -84,6 +95,19 @@ export interface AppLoopLiveError {
   round?: number;
   /** §27.12 */
   stalled?: true;
+}
+
+/** The refs a turn's prompt binds to; `adoption` is present only for an adopting run, read from its trusted pickup. */
+export interface WorkRefs {
+  ticket: number | null;
+  pr: number | null;
+  adoption?: AdoptedRunRefs;
+}
+
+/** The one selection every prompt site makes: an adopting run presents its PR and tickets, a ticket run its ticket. */
+function promptIntent(refs: WorkRefs): { adoption: AdoptedRunRefs } | { ticket: number } | Record<string, never> {
+  if (refs.adoption !== undefined) return { adoption: refs.adoption };
+  return refs.ticket !== null ? { ticket: refs.ticket } : {};
 }
 
 /** The completion contract of the work turn, as a discriminated union so no mode carries a field another
@@ -117,6 +141,9 @@ export interface AppLoopEngineDeps {
   /** Arm / cancel the stall watchdog (§27.12) — reset on visible activity, no wall-clock deadline. */
   armTimer(): void;
   cancelTimer(): void;
+  /** §27.2 — start / cancel the wait for an agent to reach the prompt; its end calls `onAgentWaitElapsed()`. */
+  armAgentWait(): void;
+  cancelAgentWait(): void;
   /** §27.2 — re-arm the quiescence window so a chained turn waits for a fresh settle before injecting. */
   noteSettle(): void;
   /** Resolve the bound §27 def for a repo (§27.8); its reason surfaces at the view on failure (AC6). The
@@ -184,9 +211,11 @@ export interface AppLoopEngineDeps {
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
    *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
-  workRefs(repoDir: string): { ticket: number | null; pr: number | null };
+  workRefs(repoDir: string): WorkRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
   sliceBrief(repoDir: string): SliceBrief | null;
+  /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
+  reopenStep(repoDir: string): string | null;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
@@ -204,19 +233,19 @@ export interface AppLoopEngine {
    *  refactor round, S3/S4/S5). */
   completionPredicates: LoopCompletionPredicates;
   /** §27.10 — free to accept a new turn: the runner is idle AND no accepted-but-not-yet-requested turn
-   *  occupies it (the §B.20a deferral gap counts as in-flight, so a second entry in the gap is refused). */
+   *  occupies it (the deferral gap counts as in-flight, so a second entry in the gap is refused). */
   canEnter(): boolean;
-  /** §27.10 — enter a work turn. With `opts.deferRequest` (§B.20a / §B.5 item 6) the turn is ACCEPTED
+  /** §27.10 — enter a work turn. With `opts.deferRequest` the turn is ACCEPTED
    *  (answers `'entered'`, occupies the runner, persists `working`) but its `requestTurn` is DEFERRED to a
    *  caller-supplied trigger — the coordinator fires `triggerDeferredTurn` from the skill injection's own
    *  completion so the two injections never share the agent's input line (AC10/CWE-74). Without the flag the
    *  request fires synchronously on the initial arm, exactly as before. */
   enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean; slice?: number }): AppLoopEnterResult;
-  /** §B.20a — fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm (§B.5 item 4b): re-arm
+  /** Fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm: re-arm
    *  quiescence and wait for a fresh settle before injecting the boundary, so the deferred turn cannot race
    *  the skill injection whose completion triggered it. Inert if no turn is awaiting its trigger. */
   triggerDeferredTurn(): void;
-  /** §B.20a / §B.5 item 6(a) — abandon a turn deferred by `enter({ deferRequest })` without requesting it,
+  /** Abandon a turn deferred by `enter({ deferRequest })` without requesting it,
    *  freeing the runner. The coordinator calls this on the deferral's deadline lapse before it reverts the
    *  step, so a turn is never left un-requested with the runner occupied. Inert if no turn is awaiting. */
   cancelDeferredTurn(): void;
@@ -228,6 +257,8 @@ export interface AppLoopEngine {
   noteActivity(): void;
   /** The stall watchdog elapsed — resolve to `error` without retrying or killing (§27.12). */
   onStall(): void;
+  /** The wait for an agent to reach the prompt ended (§27.2). */
+  onAgentWaitElapsed(): void;
   /** The §27-only error route-out, acting on the payload's step+turn identity, never ambient state (§6). */
   routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): void;
   /** §27.9/§19.4 (AC4) — a request-changes gate decision: re-enter the review-and-fix turn at round+1
@@ -287,6 +318,8 @@ type ActiveAppTurn =
       verdictReason?: string;
       /** §27.3 — where an unresolved goal turn had reached, so a later resolvable Retry re-runs it. */
       heldGoal?: GoalPlace;
+      /** §29 */
+      selfCheck?: SelfCheck;
     }
   | {
       phase: 'review';
@@ -524,14 +557,15 @@ function activeTurnFor(
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
     ...(sectionedOf(def.outputs).length > 0 ? { reportSections: sectionedOf(def.outputs) } : {}),
+    ...(def.work.selfCheck !== undefined ? { selfCheck: def.work.selfCheck } : {}),
   };
 }
 
 export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let active: ActiveAppTurn | null = null;
-  // §B.20a — a turn accepted by `enter({ deferRequest })` whose `requestTurn` is deferred to a caller
+  // A turn accepted by `enter({ deferRequest })` whose `requestTurn` is deferred to a caller
   // trigger. Set true from `entered` until `triggerDeferredTurn`/`cancelDeferredTurn`; while true the runner
-  // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle (§B.5 item 6(b)).
+  // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle.
   let awaitingTrigger = false;
   // §28.5.3 — the RED/GREEN turn whose async completion gate is currently in flight. The host done-file watcher
   // (turnDoneFile) is NOT debounced — it leans on the runner being synchronously idempotent — but the async gate
@@ -712,7 +746,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** The phase-result clause (§28.5.3), decided by the same `phaseResultEnd` the agent's own check runs. */
-  const resultShortfall = (rel: string, abs: string, want: { outcome: PhaseOutcome; build?: BuildOutcome }): string | null => {
+  const resultShortfall = (rel: string, abs: string, want: PhaseResultWant): string | null => {
     const content = deps.readArtifact(abs);
     if (content === null) return `the phase result ${rel} is missing`;
     const output = phaseOutputFile(abs);
@@ -799,7 +833,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // engine's redAsyncGate; BOTH completion routes AND it in — the done-signal via the runner's
         // PrecomputedGate (§28 Option C), the human-accept via routeOut computing the same gate — so AC2 holds on
         // both paths (§28.5.6 keeps "a test was added" machine-authoritative, not a human-override target).
-        return resultShortfall(active.completion.resultRel, active.completion.resultPath, { outcome: RED_COMPLETING_OUTCOME });
+        return resultShortfall(active.completion.resultRel, active.completion.resultPath, RED_COMPLETION);
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause. The async clauses (baseline present+branch-matched, the
         // exit-direction, and the NON-blocking frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
@@ -843,14 +877,31 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
       // §28.5.2a — exit 0 ⇒ the agent may not claim RED. DORMANT until N7/#92 wires a source (recoverExitCode
-      // returns null today), but a real, tested bound: injecting an exit code exercises this direction.
-      if (exit !== null && exit === 0) {
+      // returns null today), but a real, tested bound: injecting an exit code exercises this direction. A
+      // verification-only RED claims a passing run, so exit 0 is its expected direction (§28.5.3).
+      if (exit !== null && exit === 0 && !redVerifiesOnly(a)) {
         return { ok: false, reason: 'the test command exited 0 — that is not a RED failure' };
       }
       if (a.completion.kind !== 'red') return { ok: true };
       return await redCheckClause(a, a.completion.resultPath, added.paths);
     } catch (e) {
       return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  };
+
+  /** §28.5.3 — whether the turn's RED result is a well-formed verification-only result. */
+  const redVerifiesOnly = (a: ActiveAppTurn): boolean => {
+    if (a.completion.kind !== 'red' && a.completion.kind !== 'red-report') return false;
+    const text = deps.readArtifact(a.completion.resultPath);
+    if (text === null) return false;
+    const read = readPhaseResult(text);
+    return read.ok && read.result.verificationOnly;
+  };
+
+  /** §28.5.3 */
+  const auditRedVerification = (a: ActiveAppTurn): void => {
+    if (a.completion.kind === 'red' && redVerifiesOnly(a)) {
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} verification-only RED — the slice's new tests pass against behavior already built`, 0);
     }
   };
 
@@ -861,7 +912,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (check.kind === 'unconfigured') {
       deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check not configured — this RED was not independently checked`, null);
     } else if (check.unchecked.length > 0) {
-      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — those declared failures were not independently checked`, null);
+      const unseen = check.claim === 'all-passing' ? 'those added tests were not independently seen passing' : 'those declared failures were not independently checked';
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — ${unseen}`, null);
     }
     return { ok: true };
   };
@@ -985,12 +1037,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
-  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn carries; other loops never see one. */
-  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBrief } | Record<string, never> => {
+  /** §28.4.2 — the brief a turn carries, with how its loop reads it. */
+  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBriefDelivery } | Record<string, never> => {
     const r = deps.resolveDef(turn.repoDir, turn.loopName);
-    if (!r.ok || r.def.work.completion === undefined) return {};
+    if (!r.ok) return {};
+    const reader = sliceBriefReader(r.def.work.completion, turn.stepId, deps.reopenStep(turn.repoDir));
+    if (reader === null) return {};
     const brief = deps.sliceBrief(turn.repoDir);
-    return brief !== null ? { sliceBrief: brief } : {};
+    return brief !== null ? { sliceBrief: { brief, reader } } : {};
   };
 
   const reportCheck = (turn: Extract<ActiveAppTurn, { phase: 'review' }>): Extract<ArtifactCheck, { kind: 'report' }> => ({
@@ -1064,12 +1118,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return `cannot check this turn's branch against the one pickup created: ${pickup.detail}; repair the pickup record and retry, or terminate the run`;
     }
     const expected = pickup.branch;
+    const whose =
+      pickup.kind === 'fix-branch'
+        ? `the fix branch this run created to review PR #${pickup.pr} for ${pickup.primary.repo}#${pickup.primary.number}`
+        : 'the branch pickup created for this run';
     const current = deps.currentBranch(repoDir);
     if (!current.ok) {
-      return `cannot read the worktree's branch to check it against ${expected}, the branch pickup created for this run: ${current.detail}; fix the worktree and retry`;
+      return `cannot read the worktree's branch to check it against ${expected}, ${whose}: ${current.detail}; fix the worktree and retry`;
     }
     if (current.branch === expected) return null;
-    return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
+    return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, ${whose}; check out ${expected} and retry`;
   };
 
   // §27.4 — read once per turn, so the reviewer check and the prompts it composes name the same agent.
@@ -1096,12 +1154,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     });
 
   /** §27.3/§27.4 */
-  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, ticket: number | null): string[] => {
+  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, refs: WorkRefs): string[] => {
     const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
     return composeGoalReviewLines(
       run.reviewers,
       {
-        ...(ticket !== null ? { ticket } : {}),
+        ...promptIntent(refs),
         ...(subjectRel !== undefined ? { subjectRel } : {}),
         ...(run.slicePhase ? { slice: deps.currentSlice(turn.repoDir) } : {}),
         carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
@@ -1131,7 +1189,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (body === null) return null;
         // §19.1 — bind the consolidator to the engine-resolved issue it judges the round against, the SAME
         // identity the work turn and gate side-effects use, never one re-derived from the branch/PR/cwd.
-        const consolidateTicket = deps.workRefs(active.repoDir).ticket;
+        const consolidateRefs = deps.workRefs(active.repoDir);
         return composeConsolidatePrompt({
           recipeBody: body,
           catalog: active.catalog,
@@ -1141,14 +1199,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
-          ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
+          ...promptIntent(consolidateRefs),
         });
       }
       if (active.phase === 'review') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
         // §19.1 — the ticket handed to each reviewer is the engine-resolved issue, the SAME identity every other
         // turn binds to, never one a reviewer re-derives from the branch/PR/cwd.
-        const reviewTicket = deps.workRefs(active.repoDir).ticket;
+        const reviewRefs = deps.workRefs(active.repoDir);
         const loopBrief = readBrief(active);
         if (loopBrief === null) return null;
         return composeReviewAndFixPrompt({
@@ -1161,7 +1219,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(reportCheck(active)),
-          ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
+          ...promptIntent(reviewRefs),
           ...(active.subjectRel !== undefined ? { subjectRel: active.subjectRel } : {}),
           ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
           ...briefFor(active),
@@ -1179,7 +1237,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.completion.kind === 'red-report'
             ? {
                 redCheck: { command: deps.completionPredicates.redCheckCommand(active.repoDir), resultRel: active.completion.resultRel },
-                resultCheckCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: RED_COMPLETING_OUTCOME }),
+                resultCheckCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, ...RED_COMPLETION }),
               }
             : {}),
         });
@@ -1189,12 +1247,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (body === null || workBrief === null) return null;
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
-      const ticket = deps.workRefs(active.repoDir).ticket;
+      const workRefs = deps.workRefs(active.repoDir);
       const prompt = composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
-        ...(ticket !== null ? { ticket } : {}),
+        ...promptIntent(workRefs),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
@@ -1203,7 +1261,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               ? {
                   kind: 'red',
                   resultRel: active.completion.resultRel,
-                  checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: RED_COMPLETING_OUTCOME }),
+                  checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, ...RED_COMPLETION }),
                   redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir),
                 }
               : active.completion.kind === 'green'
@@ -1218,11 +1276,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...(active.reportSections !== undefined ? { reportSections: sectionTargets(active, active.reportSections) } : {}),
+        ...(active.selfCheck !== undefined ? { selfCheck: { kind: active.selfCheck, checkCommand: deps.artifactCheckCommand(SELF_CHECK_ARTIFACT_CHECK[active.selfCheck]) } } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
         ...(active.run.kind === 'goal'
           ? {
-              goalReview: goalReviewFor(active, active.run, ticket),
+              goalReview: goalReviewFor(active, active.run, workRefs),
               goalProgress: goalProgressLines({
                 progressRel: goalProgressRel(active.run.session),
                 notesRel: goalNotesRel(active.run.session),
@@ -1273,6 +1332,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
+    armAgentWait: () => deps.armAgentWait(),
+    cancelAgentWait: () => deps.cancelAgentWait(),
     writeError: (reason, stalled) => {
       if (!active) return;
       const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
@@ -1282,7 +1343,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       persist('error', reason);
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       const errored = active;
-      hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, 'error'));
+      hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, stalled === true ? { resumableStall: { doneRelPath: APP_DONE_REL_PATH } } : 'error'));
       deps.emitError(reason);
     },
     resumeStalled: () => {
@@ -1306,6 +1367,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
+        auditRedVerification(active);
         if (active.run.kind === 'rounds') enterReview(active, FIRST_ROUND);
         else routeWorkToGate(active);
         return;
@@ -1342,9 +1404,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
     }
     persist('working');
-    // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
+    // With `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
     // it from the skill injection's completion so the two never share the input line (AC10/CWE-74). The
-    // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap (§B.5 item 6(b)).
+    // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap.
     if (defer) {
       awaitingTrigger = true;
       return;
@@ -1518,10 +1580,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** §27.3 */
-  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, verdict: ConsolidatorVerdict = 'clean', reason?: string): void => {
+  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, verdict: ConsolidatorVerdict = 'clean', reason?: string, onSaved: () => void = () => {}): void => {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
-    reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', () => {});
+    reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', onSaved);
   };
 
   /** §27.3 — a leg that checkpointed starts the next one; a blocked session stops for a human. */
@@ -1542,13 +1604,26 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return false;
   };
 
-  /** §27.3 — a goal turn at the gate its block stopped it at, whose session no longer records the block. */
-  const blockResolved = (a: ActiveAppTurn | null): a is Extract<ActiveAppTurn, { phase: 'work' }> => {
-    if (a?.phase !== 'work' || a.run.kind !== 'goal' || runner.state() === 'in-flight') return false;
+  /** §27.3 */
+  let updatingBlockedGoal: ActiveAppTurn | null = null;
+  const updateBlockedGoal = (a: ActiveAppTurn | null): void => {
+    if (a?.phase !== 'work' || a.run.kind !== 'goal' || runner.state() === 'in-flight' || updatingBlockedGoal === a) return;
     const persisted = readAppLoopState(a.repoDir);
-    if (persisted?.turnKey !== a.turnKey || persisted.status !== 'complete' || persisted.verdict !== 'stop for a human') return false;
+    if (persisted?.turnKey !== a.turnKey || persisted.status !== 'complete' || persisted.verdict !== 'stop for a human') return;
     const end = goalEnd(a, a.run);
-    return end.kind === 'shortfall' || end.progress.status !== 'blocked';
+    if (end.kind === 'progress' && end.progress.status === 'blocked') {
+      if (end.progress.blocked !== persisted.verdictReason) {
+        updatingBlockedGoal = a;
+        try {
+          routeWorkToGate(a, 'stop for a human', end.progress.blocked ?? undefined,
+            () => deps.audit(a.repoDir, `§27 goal turn ${a.turnKey} operator block updated`, 0));
+        } finally {
+          updatingBlockedGoal = null;
+        }
+      }
+      return;
+    }
+    resumeResolvedBlock(a);
   };
 
   /** §27.3 */
@@ -1654,13 +1729,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     triggerDeferredTurn() {
       if (!awaitingTrigger || !active) return;
       awaitingTrigger = false;
-      // §B.5 item 4b — the chained arm: re-arm quiescence and wait for a fresh settle, never inject on the
+      // The chained arm: re-arm quiescence and wait for a fresh settle, never inject on the
       // stale quiet the just-submitted skill left behind.
       runner.requestTurn(active.turnKey, { preamble: active.boundaryCmd, forceChained: true });
     },
     cancelDeferredTurn() {
       if (!awaitingTrigger) return;
-      // §B.5 item 6(a) — the deadline lapsed with no completion signal: drop the accepted-but-unrequested
+      // The deadline lapsed with no completion signal: drop the accepted-but-unrequested
       // turn so the runner is free, then the coordinator reverts the flow step. No request was ever issued.
       awaitingTrigger = false;
       active = null;
@@ -1712,7 +1787,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onDoneSignal() {
       if (legPromptPending) return;
       const a = active;
-      if (blockResolved(a)) resumeResolvedBlock(a);
+      updateBlockedGoal(a);
       if (goalStopsShort(a)) {
         runner.onDoneSignal();
       } else if (a?.completion.kind === 'red') {
@@ -1784,6 +1859,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onStall() {
       runner.onStall();
     },
+    onAgentWaitElapsed() {
+      runner.onAgentWaitElapsed();
+    },
     routeOut(repoDir, stepId, turnKey, action) {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
       if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
@@ -1800,7 +1878,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // (ENOSPC/EPERM/a planted symlink) leaves the disk on `error`, so re-surface the live error and record
         // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
         // phases cannot drift on the write-failure contract.
-        const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number): void => {
+        const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number, accepted?: () => void): void => {
           // The one view push follows the accepted fact, so the stop is never shown without its halt (§27.9.1).
           if (!persist('complete', undefined, false)) {
             refuseRouteOut('turn-error', saveFailReason, round);
@@ -1808,6 +1886,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
           runner.release();
           deps.audit(repoDir, successAudit, 0);
+          accepted?.();
           hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'accepted'));
           deps.onViewChanged();
         };
@@ -1922,7 +2001,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               refuseRouteOut('turn-error', gate.reason);
               return;
             }
-            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`);
+            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`, undefined, () => auditRedVerification(a));
           });
           return;
         }

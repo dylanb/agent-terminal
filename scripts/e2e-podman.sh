@@ -7,6 +7,10 @@
 #   E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
 #                                           # red-check run (§28.5.2): the tests in <dir>/select.txt,
 #                                           # JSON report to <dir>/report.json (see e2e/entrypoint.sh)
+#   E2E_REPORT_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
+#                                           # full run that also writes <dir>/report.json (Playwright JSON)
+#                                           # and <dir>/environment.json; `pnpm run test:proof` reads both
+#                                           # (docs/e2e-podman.md)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,24 +28,42 @@ if [ "${mem_mib:-0}" -lt 8192 ]; then
   echo "  Fix once: podman machine stop && podman machine set --memory 8192 --cpus 6 && podman machine start" >&2
 fi
 
-podman build -t "$IMAGE" -f e2e/Containerfile .
+# Every checkout builds under the same tag, so another checkout's build can retag it at any moment. A report run
+# runs, and records, the ID this build wrote, never whatever the tag names afterwards.
+iidfile="$(mktemp)"
+trap 'rm -f "$iidfile"' EXIT
+podman build --iidfile "$iidfile" -t "$IMAGE" -f e2e/Containerfile .
 
+run_image="$IMAGE"
+report=()
+if [ -n "${E2E_REPORT_DIR:-}" ]; then
+  run_image="$(cat "$iidfile")"
+  run_image="${run_image#sha256:}"
+  report=(-e "E2E_REPORT_DIR=$E2E_REPORT_DIR" -e "E2E_IMAGE_ID=$run_image")
+fi
+
+rm -f "$iidfile"
+trap - EXIT
+tty=()
+[ -t 0 ] && tty=(-it)
+# exec + --init: a signal sent to this script reaches podman, which proxies it to the container's init; the
+# entrypoint as PID 1 would ignore SIGTERM and SIGHUP, which it sets no handler for.
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
-# The anonymous /work/out volume keeps a host build during the run (which empties out/) away from the bundle
-# the booting Electrons load.
-tty=()
-[ -t 0 ] && tty=(-it)
-podman run --rm ${tty[@]+"${tty[@]}"} \
+# out/ is a container-local tmpfs, so the app reads its build (including the example trees the build copies into
+# out/main/example) from the VM: parallel installs listing them through the macOS file share intermittently failed
+# with ENOMEM (scandir). It also keeps the Linux build out of the host's out/.
+exec podman run --rm --init ${tty[@]+"${tty[@]}"} \
   --cap-add=SYS_ADMIN \
   --security-opt label=disable \
   --shm-size=1g \
   -v "$PWD":/work \
   -v "$VOLUME":/work/node_modules \
-  -v /work/out \
+  --tmpfs /work/out:rw,exec \
   -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \
   -e "E2E_IO_DIR=${E2E_IO_DIR:-}" \
-  "$IMAGE"
+  ${report[@]+"${report[@]}"} \
+  "$run_image"

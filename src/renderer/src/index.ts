@@ -7,6 +7,10 @@ import { wireCrossHighlight } from './crossHighlight';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
+import { createPickupConfirm } from './pickupConfirm';
+import { createAdoptTicketChoice } from './adoptTicketChoice';
+import { createSetupCheckDialog } from './setupCheckDialog';
+import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -29,13 +33,34 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import type { GateDecisionOption } from '../../shared/ipc';
+import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
+import { createCliInstallAction } from './cliInstallAction';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
+const stopIncompatible = window.term.startup.onIncompatible(({ update, terminalVersion, controllerVersions: { min, max } }) => {
+  const supported = min === max ? `version ${min}` : `versions ${min}–${max}`;
+  const action = update === 'controller'
+    ? 'Update Agent Terminal Controller, then restart it.'
+    : 'Update Agent Terminal, then open this terminal again.';
+  const message = document.getElementById('startup-incompatible')!;
+  message.textContent = `This terminal uses controller protocol version ${terminalVersion}, but the running controller supports ${supported}. ${action}`;
+});
+
+createCliInstallAction(document.getElementById('startup-cli-install')!, { install: () => window.cli.install() });
+
+void window.term.startup.ready().then(() => {
+  stopIncompatible();
+  document.getElementById('startup-waiting')!.hidden = true;
+  document.getElementById('app')!.hidden = false;
+  initialize();
+  window.term.startup.rendered();
+});
+
+function initialize(): void {
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
 // One shared OSC-7 repo provider (§16.3) so no consumer re-derives the key.
 const repo = createRepoContext(window.monitor);
@@ -67,8 +92,8 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
-  apply: (previewId, replace) =>
-    window.examples.apply(previewId, replace),
+  apply: (previewId, replace, removeRetired) =>
+    window.examples.apply(previewId, replace, removeRetired),
 });
 void window.monitor
   .getSettings()
@@ -113,10 +138,6 @@ if (errorDialog) {
       title: `Bootstrap failed — ${step}`,
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
-  );
-  // §28.3.
-  window.flow.onLoopError((reason, kind) =>
-    showError({ title: kind === 'notice' ? 'Notice' : 'Loop error', message: reason }),
   );
 }
 
@@ -188,7 +209,7 @@ if (flowStripHost) {
           const key = repo.repoKey();
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
-        openExternal: (url) => void window.flow.openExternal(url),
+        openExternal: (url) => window.flow.openExternal(url),
         appRouteOut: (step, turnKey, action) => {
           const key = repo.repoKey();
           if (!key) return;
@@ -203,7 +224,7 @@ if (flowStripHost) {
         },
         appGateDecision: (step, turnKey, option) => {
           const key = repo.repoKey();
-          if (key) window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
+          if (key) return window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
         },
         // §27.9/AC4 — request-changes opens the composer; its submit dispatches the two-way decision and the
         // composer holds open until it resolves (true → close, false → keep the feedback for a retry). Wired
@@ -234,9 +255,9 @@ if (flowStripHost) {
             }
           : undefined,
         // §28.4.2 — Back to RED opens the same composer as request-changes, framed for an optional slice brief; its
-        // submit dispatches the two-way decision and the composer holds open until the flow is back at RED.
+        // submit dispatches the two-way decision and the composer holds open until the flow is back at its return step.
         composeBackToRed: feedbackComposer
-          ? (step, turnKey) => {
+          ? (step, turnKey, target) => {
               const key = repo.repoKey();
               if (!key) return;
               const dispatch = (brief: string): Promise<boolean> => window.flow.appBackToRed(key, step, turnKey, brief);
@@ -244,7 +265,7 @@ if (flowStripHost) {
                 .todoList(key)
                 .then((todos) => todos.filter((t) => t.status !== 'done').map((t) => ({ id: t.id, text: t.text })))
                 .catch(() => [] as Array<{ id: string; text: string }>)
-                .then((todos) => feedbackComposer.render({ step, todos, purpose: 'back-to-red' }, dispatch));
+                .then((todos) => feedbackComposer.render({ step, todos, purpose: 'back-to-red', target }, dispatch));
             }
           : undefined,
         armInterrupt: (step) => {
@@ -270,6 +291,23 @@ if (flowStripHost) {
     clearSelection: (key) => window.flow.clearActiveFlow(key),
     rebindHeldRun: (key, choice, ifStepMissing) => window.flow.rebindHeldRun(key, choice, ifStepMissing),
     confirmEndRun: (key, proceed, restoreFocusTo) => requestTerminate?.(key, proceed, restoreFocusTo),
+  });
+  const pickupConfirmHost = document.getElementById('pickup-confirm');
+  const pickupConfirmModalHost = document.getElementById('pickup-confirm-modal-host');
+  if (pickupConfirmHost && pickupConfirmModalHost) createPickupConfirm(pickupConfirmHost, {
+    modalHost: pickupConfirmModalHost,
+    onView: (cb) => {
+      viewListeners.add(cb);
+      return () => viewListeners.delete(cb);
+    },
+    confirm: (key, run, pr, ticket) => window.flow.confirmRunPickup(key, run, pr, ticket),
+    onFocusLost: landFocus,
+  });
+  const adoptTicketChoiceHost = document.getElementById('adopt-ticket-choice-modal-host');
+  if (adoptTicketChoiceHost) createAdoptTicketChoice(adoptTicketChoiceHost, {
+    onOffer: (cb) => window.flow.onAdoptTicketChoice(cb),
+    answer: (repoKey, step, choiceId, answer) => window.flow.resolveAdoptTicket(repoKey, step, choiceId, answer),
+    onFocusLost: landFocus,
   });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
@@ -321,6 +359,40 @@ if (flowStripHost) {
   if (seededKey !== null) strip.onRepoChanged(seededKey);
 }
 
+const setupCheckHost = document.getElementById('setup-check-host');
+const setupNeededHost = document.getElementById('setup-needed');
+if (setupCheckHost && setupNeededHost) {
+  let agentState: HostedAgentState = 'absent';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
+  const agentStateIs = (state: HostedAgentState): void => {
+    if (state === agentState) return;
+    agentState = state;
+    for (const cb of [...agentListeners]) cb(state);
+  };
+  window.setup.onAgentStateChanged(agentStateIs);
+  window.setup.agentState().then(agentStateIs, (e: unknown) => {
+    console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  const setupCheck = createSetupCheckDialog({ button: setupNeededHost, dialog: setupCheckHost }, {
+    status: (repoKey) => window.setup.status(repoKey),
+    dismiss: (dismissal) => window.setup.dismiss(dismissal),
+    previewExamples: () => window.examples.preview(),
+    installExamples: (previewId, { replace, removeRetired }) => window.examples.apply(previewId, replace, removeRetired),
+    runSetupFlow: createSetupFlowRun({
+      setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
+      start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
+    }),
+    onSetupLoopFailed: (reason) => showError({ title: 'Could not run the setup loop', message: reason }),
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
+    onFocusLost: landFocus,
+  });
+  repo.onChange((info) => void setupCheck.check(info.repoKey));
+}
+
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live
 // cwd; a selection routes to two sinks — send (inject, no submit, §9.3) and add-to-todo (§16.2).
 const artifactsHost = document.getElementById('artifacts');
@@ -350,4 +422,6 @@ if (artifactsHost) {
       if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
     })
     .catch(() => {}); // a rejected invoke (main restart) keeps the default widths, never rejects
+}
+
 }

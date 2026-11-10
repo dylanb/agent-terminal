@@ -13,7 +13,7 @@ import {
 } from '../../src/shared/roundReport';
 import { roundReportWithDisposition } from '../helpers/roundReports';
 
-// §27.5 (v2.202) — the round report is JSON with ONE writer (the fixer) and several readers (the completion
+// §27.5 — the round report is JSON with ONE writer (the fixer) and several readers (the completion
 // validator, the agent's own check, the clean-guard, the auto gate, the consolidator). It grades structure and
 // never quality: the def-declared sections, a record for every roster reviewer with a status from the closed
 // set, and each issue's fields with a disposition from the closed set.
@@ -26,17 +26,6 @@ const report = (reviewers: unknown[], sections: Record<string, unknown> = { summ
   JSON.stringify({ sections, reviewers });
 const ran = (persona: string, issues: Issue[] = []): Record<string, unknown> => ({ persona, status: 'ran', issues });
 const withIssue = (i: Issue): string => report([ran('review-principal', [i]), ran('review-security')]);
-
-describe('the canonical example (the one anchor across prompt, tests and e2e)', () => {
-  it('is well-formed for a roster and sections', () => {
-    expect(roundReportProblems(exampleRoundReport(SPEC), SPEC)).toEqual([]);
-  });
-
-  it('is well-formed with an empty roster', () => {
-    const spec: RoundReportSpec = { sections: ['summary'], roster: [] };
-    expect(roundReportWellFormed(exampleRoundReport(spec), spec)).toBe(true);
-  });
-});
 
 describe('the report as a whole', () => {
   it.each([

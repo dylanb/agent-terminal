@@ -17,6 +17,7 @@ import { isSelectionLocked } from '../../shared/flowStarted';
 import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
+import { createPressGroup } from './pressable';
 
 export interface FlowPickerDeps {
   /** Returns an unsubscribe. */
@@ -66,7 +67,7 @@ const STATUS_TEXT: Record<HeldRun['status'], string> = { in_progress: 'in progre
 const OUTCOME_TEXT: Record<RecoveryOutcome, string> = { resumes: 'resumes the run', ends: 'ends the run' };
 
 type Row =
-  | { kind: 'choice'; key: string; name: string; origin: string; outcome?: RecoveryOutcome; selected: boolean; choose: () => void }
+  | { kind: 'choice'; key: string; name: string; origin: string; outcome?: RecoveryOutcome; selected: boolean; choose: () => unknown }
   | { kind: 'unavailable'; key: string; name: string; origin: string; reason: string };
 
 const heldOf = (view: { runHold?: HeldRunView }): HeldRun | null => {
@@ -101,6 +102,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let pickGeneration = 0;
   let disposed = false;
   let rendering = false;
+  let controls = createPressGroup();
 
   // UI-STANDARDS §4.1/§4.2
   const alert = doc.createElement('div');
@@ -142,6 +144,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
   function switchTo(key: string | null): void {
     repoKey = key;
+    controls = createPressGroup();
     catalog = { kind: 'loading' };
     selected = UNSET;
     confirmed = UNSET;
@@ -187,10 +190,9 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   const canPick = (): boolean => repoKey !== null && catalog.kind === 'listed' && !locked;
-  let rebinding = false;
-  const canRecover = (): boolean => repoKey !== null && catalog.kind === 'listed' && held !== null && !rebinding;
+  const canRecover = (): boolean => repoKey !== null && catalog.kind === 'listed' && held !== null;
 
-  function write(next: FlowCatalogSelection, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
+  function write(next: FlowCatalogSelection, save: (key: string) => Promise<ActiveFlowWriteResult>): Promise<void> | undefined {
     const key = repoKey;
     if (key === null || !canPick()) return;
     const token = ++pickGeneration;
@@ -206,7 +208,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       alertText = reason;
       render();
     };
-    save(key).then(
+    return save(key).then(
       (result) => {
         if (result.ok) {
           if (!disposed && repoKey === key) confirmed = next;
@@ -216,52 +218,57 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     );
   }
 
-  const pick = (id: string): void => write({ kind: 'value', id }, (key) => deps.select(key, id));
-  const useDefault = (): void => write(UNSET, (key) => deps.clearSelection(key));
+  const pick = (id: string): Promise<void> | undefined => write({ kind: 'value', id }, (key) => deps.select(key, id));
+  const useDefault = (): Promise<void> | undefined => write(UNSET, (key) => deps.clearSelection(key));
 
-  function recover(choice: RebindChoice, outcome: RecoveryOutcome): void {
+  function recover(choice: RebindChoice, outcome: RecoveryOutcome): Promise<void> | undefined {
     const key = repoKey;
     if (key === null || held === null || !canRecover()) return;
-    if (outcome === 'resumes') {
-      rebind(key, choice, 'refuse');
-      return;
-    }
+    if (outcome === 'resumes') return rebind(key, choice, 'refuse');
     const consent = { endRunHeldAt: held.step };
     collapse();
-    deps.confirmEndRun(key, () => rebind(key, choice, consent), recoverButton());
+    deps.confirmEndRun(
+      key,
+      () => {
+        if (alertText !== '') {
+          alertText = '';
+          render();
+        }
+        const rebindConsented = (): Promise<void> | undefined => rebind(key, choice, consent);
+        const control = recoverButton();
+        if (control) controls.run(control, rebindConsented);
+        else void rebindConsented();
+      },
+      recoverButton(),
+    );
   }
 
-  function rebind(key: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): void {
+  function rebind(key: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<void> | undefined {
     if (repoKey !== key || !canRecover()) return;
     const token = ++pickGeneration;
-    rebinding = true;
-    alertText = '';
-    open = false;
-    render();
+    if (open || alertText !== '') {
+      alertText = '';
+      open = false;
+      render();
+    }
     recoverButton()?.focus();
     const announce = (reason: string): void => {
       if (disposed || repoKey !== key || token !== pickGeneration) return;
       alertText = displaySafeEcho(reason, MAX_ECHOED_LOCK_REASON_LENGTH);
       render();
     };
-    deps
-      .rebindHeldRun(key, choice, ifStepMissing)
-      .then(
-        (result) => {
-          if (!result.ok) {
-            announce(result.reason);
-            if (!disposed && repoKey === key) pull(key);
-          } else if (result.outcome === 'terminated' && result.notice !== undefined) {
-            noticeOutlivesRelease = held !== null;
-            announce(result.notice);
-          }
-        },
-        (e: unknown) => announce(reasonOf(e, 'Could not recover the run')),
-      )
-      .finally(() => {
-        rebinding = false;
-        render();
-      });
+    return deps.rebindHeldRun(key, choice, ifStepMissing).then(
+      (result) => {
+        if (!result.ok) {
+          announce(result.reason);
+          if (!disposed && repoKey === key) pull(key);
+        } else if (result.outcome === 'terminated' && result.notice !== undefined) {
+          noticeOutlivesRelease = held !== null;
+          announce(result.notice);
+        }
+      },
+      (e: unknown) => announce(reasonOf(e, 'Could not recover the run')),
+    );
   }
 
   const trigger = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-trigger');
@@ -341,9 +348,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       li.append(reason);
       return li;
     }
-    const { choose } = row;
     li.setAttribute('aria-selected', String(row.selected));
-    li.addEventListener('click', choose);
+    const choose = controls.bind(li, row.choose);
     li.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -412,12 +418,12 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.textContent = triggerLabel();
     button.disabled = locked;
     if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
-    button.addEventListener('click', () => {
+    controls.bind(button, () => {
       if (!canPick()) return;
       open = !open;
       render();
       if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0] ?? emptyNoteShown())?.focus();
-    });
+    }, { key: 'trigger' });
     return button;
   }
 
@@ -428,7 +434,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     again.textContent = 'Retry';
     again.setAttribute('aria-describedby', alert.id);
     again.disabled = locked && held === null;
-    again.addEventListener('click', retry);
+    controls.bind(again, retry);
     return again;
   }
 
@@ -446,7 +452,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     clear.type = 'button';
     clear.className = 'flow-picker-clear pill';
     clear.textContent = 'Use the default (clear selection)';
-    clear.addEventListener('click', useDefault);
+    controls.bind(clear, useDefault);
     return clear;
   }
 
@@ -478,13 +484,13 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.setAttribute('aria-haspopup', 'listbox');
     button.setAttribute('aria-describedby', [`${uid}-held`, ...(describedByAlert ? [alert.id] : []), ...extraIds].join(' '));
     button.textContent = 'Recover the run onto a flow…';
-    if (catalog.kind !== 'listed' || rebinding) button.setAttribute('aria-disabled', 'true');
-    button.addEventListener('click', () => {
+    if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
+    controls.bind(button, () => {
       if (!canRecover()) return;
       open = !open;
       render();
       if (open) (host.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])') ?? emptyNoteShown())?.focus();
-    });
+    }, { key: 'recover' });
     return button;
   }
 

@@ -5,7 +5,7 @@ import type { AgentKind } from '../../src/main/agentKind';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { createAppLoopEngineHarness } from '../helpers/appLoopEngineHarness';
 
-// §27.4 (v2.201) — the engine names each reviewer the way the hosted agent installs it: a Claude Code
+// §27.4 — the engine names each reviewer the way the hosted agent installs it: a Claude Code
 // sub-agent by its subagent_type, a Codex custom agent by its Codex name.
 
 const h = createAppLoopEngineHarness();
@@ -35,7 +35,7 @@ const reviewPrompt = (): string => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('under Codex the turns name each reviewer as its Codex agent (§27.4 v2.201)', () => {
+describe('under Codex the turns name each reviewer as its Codex agent (§27.4)', () => {
   it('a review-and-fix round spawns the Codex agents by name, never a Claude Code subagent_type', () => {
     const engine = engineFor('codex');
     driveToReviewInjected(engine);
@@ -98,8 +98,25 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4 v2
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
+    engine.onAgentWaitElapsed();
 
     expect(engine.liveErrorFor(h.repo)?.reason).toBe('no hosted agent at the prompt');
+  });
+
+  it('a turn entered before the agent starts injects once the agent is at its prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    h.hosted = 'absent';
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(false);
+
+    h.hosted = 'idle';
+    engine.onInjectable();
+    engine.onInjectable();
+    engine.onAgentWaitElapsed();
+
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
   });
 
   it('refuses the turn when the Codex agent of a reviewer is not installed, and says how to install it', () => {

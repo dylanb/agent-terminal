@@ -1,3 +1,5 @@
+import { createPressGroup, onPress, type PressGroup } from './pressable';
+
 export interface ModalCard {
   card: HTMLElement;
   initialFocus: HTMLElement | null;
@@ -21,6 +23,8 @@ export type ModalShellBuild = (ctx: {
   /** Accept: the user's own affirmative action (Confirm / Install). Closes WITHOUT firing `onDismiss`, so a
    *  caller that retracts the operation on dismissal does not also retract the one it is about to run. */
   confirm: () => void;
+  /** The dialog's controls bind here; Escape and the scrim do not dismiss while one of its presses is answered. */
+  presses: PressGroup;
 }) => ModalCard;
 
 export interface ModalShell {
@@ -79,9 +83,13 @@ export function createModalShell(
             : restoreFocusTo;
       }
 
+      const presses = createPressGroup();
+      const dismiss = (): void => {
+        if (!presses.busy) close();
+      };
       const scrim = doc.createElement('div');
       scrim.className = 'flow-scrim';
-      scrim.addEventListener('click', close);
+      onPress(scrim, dismiss);
 
       const modal = doc.createElement('div');
       modal.className = 'flow-modal';
@@ -90,26 +98,34 @@ export function createModalShell(
       modal.setAttribute('aria-labelledby', titleId);
       modal.tabIndex = -1;
       modal.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') return close();
+        if (e.key === 'Escape') return dismiss();
         if (e.key === 'Tab') {
           const f = [
             ...modal.querySelectorAll<HTMLElement>('a[href],button,input,textarea,select,[tabindex]'),
           ].filter((el) => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1');
           if (f.length === 0) return;
+          // A named radio group is one tab stop, held by its checked radio, so its first or last radio stands
+          // for the whole group (WAI-ARIA APG radio group).
+          const radioGroup = (el: Element | null): HTMLInputElement[] =>
+            el instanceof HTMLInputElement && el.type === 'radio' && el.name !== ''
+              ? f.filter((o): o is HTMLInputElement => o instanceof HTMLInputElement && o.type === 'radio' && o.name === el.name)
+              : [];
+          const isStop = (active: Element | null, stop: HTMLElement): boolean => active === stop || radioGroup(stop).includes(active as HTMLInputElement);
+          const stopFocus = (stop: HTMLElement): HTMLElement => radioGroup(stop).find((r) => r.checked) ?? stop;
           const first = f[0];
           const last = f[f.length - 1];
           const active = doc.activeElement;
-          if (e.shiftKey && (active === first || active === modal)) {
+          if (e.shiftKey && (isStop(active, first) || active === modal)) {
             e.preventDefault();
-            last.focus();
-          } else if (!e.shiftKey && active === last) {
+            stopFocus(last).focus();
+          } else if (!e.shiftKey && isStop(active, last)) {
             e.preventDefault();
-            first.focus();
+            stopFocus(first).focus();
           }
         }
       });
 
-      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear });
+      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear, presses });
       if (role) modal.setAttribute('role', role);
       if (describedById) modal.setAttribute('aria-describedby', describedById);
       grow?.setAttribute('data-modal-grow', '');

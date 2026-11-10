@@ -22,27 +22,39 @@ export interface FeedbackComposerCtx {
   /** What the composed text is for: request-changes feedback (required) or a §28.4.2 back-to-RED brief
    *  (optional — an empty submit is a plain reopen). Absent is request-changes. */
   purpose?: 'request-changes' | 'back-to-red';
+  /** The step a back-to-red reopen returns to, as its gate control names it. Absent names RED. */
+  target?: string;
 }
 
 /** The words each purpose shows; everything else about the composer is shared. */
-const PURPOSE_COPY = {
-  'request-changes': {
-    title: (step: string) => `Request changes to ${step}`,
+interface PurposeCopy {
+  title(step: string): string;
+  description: string;
+  fieldLabel: string;
+  submitLabel: string;
+  required: boolean;
+  dropped: string;
+}
+
+function purposeCopy(purpose: FeedbackComposerCtx['purpose'], target: string): PurposeCopy {
+  if (purpose === 'back-to-red')
+    return {
+      title: (step) => `Send this back to ${target} from ${step}`,
+      description: `Optional brief: what must be redone. It is handed to the ${target} step and every test-driven step that runs after it (§28.4.2).`,
+      fieldLabel: `back-to-${target} brief`,
+      submitLabel: `Back to ${target}`,
+      required: false,
+      dropped: `Could not send this back to ${target}. Your brief is kept — try again.`,
+    };
+  return {
+    title: (step) => `Request changes to ${step}`,
     description: 'Your feedback joins the next review-and-fix round alongside the reviewers’ findings (§27.9).',
     fieldLabel: 'request-changes feedback',
     submitLabel: 'Submit feedback',
     required: true,
     dropped: 'Could not start a new round — the loop was busy. Try again.',
-  },
-  'back-to-red': {
-    title: (step: string) => `Send this slice back to RED from ${step}`,
-    description: 'Optional brief: what the slice must redo. It is handed to the RED, GREEN and refactor phases of this slice (§28.4.2).',
-    fieldLabel: 'back-to-RED brief',
-    submitLabel: 'Back to RED',
-    required: false,
-    dropped: 'Could not send the slice back to RED. Your brief is kept — try again.',
-  },
-} as const;
+  };
+}
 
 /** The two §19.4 delivery modes: submit-as-is (the material verbatim) or compose-with-agent (the material
  *  framed for the next round's fixer to synthesize before addressing). Carried in the composed text itself,
@@ -83,8 +95,8 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
   return {
     render(ctx, submit) {
       if (!ctx) return shell.render(null);
-      const copy = PURPOSE_COPY[ctx.purpose ?? 'request-changes'];
-      shell.render(({ doc, titleId, close, confirm }) => {
+      const copy = purposeCopy(ctx.purpose, ctx.target ?? 'RED');
+      shell.render(({ doc, titleId, close, confirm, presses: footGroup }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -177,19 +189,18 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         const cancel = doc.createElement('button');
         cancel.className = 'pill cancel';
         cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
+        footGroup.bind(cancel, close);
         const submitBtn = doc.createElement('button');
         submitBtn.className = 'pill signal confirm';
         submitBtn.textContent = copy.submitLabel;
         submitBtn.setAttribute('aria-describedby', err.id);
         const refreshSubmit = (): void => {
+          if (footGroup.busy) return;
           const empty = copy.required && currentComposed().length === 0;
           submitBtn.setAttribute('aria-disabled', empty ? 'true' : 'false');
           if (!empty) err.textContent = '';
         };
-        let inFlight = false;
-        submitBtn.addEventListener('click', () => {
-          if (inFlight) return; // a second press before the first delivery settles must not double-dispatch
+        footGroup.bind(submitBtn, () => {
           const composed = currentComposed();
           if (copy.required && composed.length === 0) {
             err.textContent = 'Add feedback or select a review todo before submitting.';
@@ -197,20 +208,12 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
             return;
           }
           // §27.9/AC4 — hold the dialog OPEN until the loop confirms it started the round: on a refusal the
-          // operator's typed feedback would otherwise be lost with no route back. Disable submit while the
-          // delivery is in flight; `confirm` (on success) closes WITHOUT the shell's dismissal, so the caller's
-          // dispatch is the one decision.
+          // operator's typed feedback would otherwise be lost with no route back. `confirm` (on success) closes
+          // WITHOUT the shell's dismissal, so the caller's dispatch is the one decision.
           err.textContent = '';
-          inFlight = true;
-          submitBtn.setAttribute('aria-disabled', 'true');
-          void Promise.resolve(submit(composed.length === 0 ? '' : frameFeedback(selectedMode(), composed))).then((delivered) => {
-            inFlight = false;
-            if (delivered) {
-              confirm();
-              return;
-            }
-            err.textContent = copy.dropped;
-            submitBtn.setAttribute('aria-disabled', 'false');
+          return Promise.resolve(submit(composed.length === 0 ? '' : frameFeedback(selectedMode(), composed))).then((delivered) => {
+            if (delivered) confirm();
+            else err.textContent = copy.dropped;
           });
         });
         area.addEventListener('input', refreshSubmit);

@@ -17,6 +17,8 @@ reviewers:
     charter: charter/maintainability.md
   - persona: review-plan-contracts
     charter: charter/contracts.md
+  - persona: review-plan-ui
+    charter: charter/ui.md
 consolidator:
   recipe: prompts/consolidate.md
 boundaries:

@@ -1,0 +1,416 @@
+{
+  "config": {
+    "version": "1.61.0"
+  },
+  "suites": [
+    {
+      "title": "app.spec.ts",
+      "file": "app.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "launches",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "launches",
+          "file": "app.spec.ts",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "title": "opens a pane",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "opensapane",
+          "file": "app.spec.ts",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "title": "retries a paste",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "failed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                },
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 1,
+                  "attachments": []
+                }
+              ],
+              "status": "flaky"
+            }
+          ],
+          "id": "retriesapaste",
+          "file": "app.spec.ts",
+          "line": 1,
+          "column": 1
+        }
+      ],
+      "suites": [
+        {
+          "title": "monitor",
+          "file": "app.spec.ts",
+          "column": 0,
+          "line": 0,
+          "specs": [
+            {
+              "title": "captures output",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "status": "passed",
+                      "duration": 1,
+                      "errors": [],
+                      "retry": 0,
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "capturesoutput",
+              "file": "app.spec.ts",
+              "line": 1,
+              "column": 1
+            },
+            {
+              "title": "waits for quiet",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "status": "failed",
+                      "duration": 1,
+                      "errors": [],
+                      "retry": 0,
+                      "attachments": []
+                    },
+                    {
+                      "workerIndex": 0,
+                      "status": "passed",
+                      "duration": 1,
+                      "errors": [],
+                      "retry": 1,
+                      "attachments": []
+                    }
+                  ],
+                  "status": "flaky"
+                }
+              ],
+              "id": "waitsforquiet",
+              "file": "app.spec.ts",
+              "line": 1,
+              "column": 1
+            },
+            {
+              "title": "skips on linux",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip"
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "status": "skipped",
+                      "duration": 1,
+                      "errors": [],
+                      "retry": 0,
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "skipsonlinux",
+              "file": "app.spec.ts",
+              "line": 1,
+              "column": 1
+            }
+          ],
+          "suites": []
+        }
+      ]
+    },
+    {
+      "title": "loop.spec.ts",
+      "file": "loop.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "starts a loop",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "startsaloop",
+          "file": "loop.spec.ts",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "title": "stops a loop",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "passed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "stopsaloop",
+          "file": "loop.spec.ts",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "title": "skips the slow path",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [
+                {
+                  "type": "skip"
+                }
+              ],
+              "expectedStatus": "skipped",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "skipped",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "skipstheslowpath",
+          "file": "loop.spec.ts",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "title": "skips the gate",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [
+                {
+                  "type": "skip"
+                }
+              ],
+              "expectedStatus": "skipped",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "skipped",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "skipsthegate",
+          "file": "loop.spec.ts",
+          "line": 1,
+          "column": 1
+        }
+      ],
+      "suites": []
+    },
+    {
+      "title": "broken.spec.ts",
+      "file": "broken.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "breaks",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "failed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 0,
+                  "attachments": []
+                },
+                {
+                  "workerIndex": 0,
+                  "status": "failed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 1,
+                  "attachments": []
+                },
+                {
+                  "workerIndex": 0,
+                  "status": "failed",
+                  "duration": 1,
+                  "errors": [],
+                  "retry": 2,
+                  "attachments": []
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "breaks",
+          "file": "broken.spec.ts",
+          "line": 1,
+          "column": 1
+        }
+      ],
+      "suites": []
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2020-01-01T00:00:00.000Z",
+    "duration": 1,
+    "expected": 5,
+    "skipped": 3,
+    "unexpected": 1,
+    "flaky": 2
+  }
+}

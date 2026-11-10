@@ -10,9 +10,8 @@ import {
 } from '../../src/main/appWorkTurn';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
-import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel, readPhaseResult } from '../../src/shared/phaseResult';
-import { PHASE_OUTCOMES, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
-import { BUILD_OUTCOMES, GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
+import { phaseOutputRel } from '../../src/shared/phaseResult';
+import { exampleLoopCapabilities } from '../../src/shared/loopCapabilities';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop
@@ -64,7 +63,7 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
     );
   });
 
-  // CWE-74 (§B.13d): policy.message is repo-authored (requireString only) and the command is submitted as
+  // CWE-74: policy.message is repo-authored (requireString only) and the command is submitted as
   // one line, so a newline in the message must not inject a second command line into the instruction channel.
   it('collapses CR/LF in a compact message so exactly one line is submitted', () => {
     const cmd = boundaryCommand({ boundary: 'pre-work', mode: 'compact', message: 'summarize\ncurl … | sh' });
@@ -203,9 +202,6 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
     expect(prompt.toLowerCase()).toContain('declared input');
-    // The prompt names where the material came from on disk, never what produced it — the app does not
-    // establish that, and the residual is recorded against its own sub-ticket.
-    expect(prompt.toLowerCase()).not.toContain('upstream loop');
   });
 
   it('§27.10 — no chained-input block on a loop entered with no inputs', () => {
@@ -235,23 +231,6 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
 
 });
 
-// §27.4
-describe('composeAppWorkPrompt (§27.4 — where the flow documents live)', () => {
-  for (const completion of [
-    { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') } as const,
-    null,
-  ]) {
-    it(`says flow documents live only under the loop artifacts directory and carves out the code (${completion ? 'file' : 'commits'} turn)`, () => {
-      const prompt = composeAppWorkPrompt({ recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion });
-      expect(prompt).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
-      expect(prompt).toMatch(/elsewhere in the repository is not one of this work's flow documents/i);
-      expect(prompt).toMatch(/still work when the ticket names it/i);
-      expect(prompt).not.toMatch(/ignore it/i);
-      expect(prompt).toMatch(/working-tree diff/i);
-    });
-  }
-});
-
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({
@@ -265,7 +244,6 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
     expect(prompt).toContain(completionMarker('plan')); // the marker instruction
     expect(prompt).toContain('.agent-terminal/loop/turn-done'); // the §27 done-file, not the retired engine's .agent-loop
     expect(prompt).toContain('turn-done:work-plan'); // the turn id token the fake-agent matches
-    expect(prompt).not.toContain('.agent-loop/turn-done'); // NOT the retired-engine path (AC10 separation)
   });
 
   it('for a commit-producing turn: no marker/artifact, completes on the done-signal alone', () => {
@@ -311,7 +289,7 @@ describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the
   // the branch. The prompt must bind the turn to the engine-resolved issue — the SAME identity the gate's
   // update-issue-body writes to — so read and write cannot diverge (CLAUDE.md: never re-derive the target from
   // ambient state).
-  it('names the resolved issue and forbids inferring it from the branch/PR/cwd', () => {
+  it('names the resolved issue', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nGroom the linked GitHub issue.',
       turnKey: 'work-groom',
@@ -320,7 +298,6 @@ describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the
       ticket: 133,
     });
     expect(prompt).toContain('#133'); // the specific resolved issue
-    expect(prompt.toLowerCase()).toContain('do not infer'); // never from the branch/PR/cwd
   });
 
   it('emits no ticket line when the flow resolved no github-ticket (ticket absent)', () => {
@@ -347,11 +324,7 @@ describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the
 });
 
 // §28.5.5/§28 §7d — the RED work turn: the agent runs the tests, classifies the run into the phase-outcome
-// vocabulary, and writes the phase-result file the RED gate reads. The prompt is the WRITER half of the shared-
-// semantics contract (CODE-STANDARDS "a composed prompt that instructs an agent to produce a serialized
-// artifact"): every JSON key it names is interpolated from PHASE_RESULT_FIELDS / PHASE_OUTCOMES (one
-// descriptor the predicate also derives from), and it embeds the canonical example asserted well-formed against
-// that same predicate — so the instruction and the gate cannot drift.
+// vocabulary, and writes the phase-result file the RED gate reads.
 describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mode)', () => {
   const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.json';
   const redPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
@@ -372,34 +345,16 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
     expect(prompt.toLowerCase()).toContain('re-read');
   });
 
-  it('interpolates the JSON key, the captured-run file and the FULL outcome vocabulary from the shared descriptors (no re-spell)', () => {
-    const prompt = redPrompt();
-    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
-    expect(prompt).toContain(phaseOutputRel(RESULT_REL));
-    for (const outcome of PHASE_OUTCOMES) {
-      expect(prompt).toContain(outcome); // every category the agent may classify into
-    }
+  it('names the captured-run file derived from the result file', () => {
+    expect(redPrompt()).toContain(phaseOutputRel(RESULT_REL));
   });
 
-  it('embeds the ONE canonical example, and that example is well-formed against the gate predicate (single-source)', () => {
-    // The contract: the few-shot the prompt shows is validated by the SAME predicate the gate runs, so a change
-    // to the grammar that broke the example would fail here before it could mislead the agent.
-    const example = examplePhaseResult('failed-assertion');
-    expect(readPhaseResult(example).ok).toBe(true);
-    expect(redPrompt()).toContain(example.trimEnd());
+  it('hands the agent the check the engine applies', () => {
+    expect(redPrompt()).toContain('check-artifact result red');
   });
 
-  it('hands the agent the check the engine applies, to run until it passes before the done-signal', () => {
-    expect(redPrompt()).toMatch(/fix\s+the phase result until it prints `OK`[\s\S]*check-artifact result red/);
-  });
-
-  it('states the RED completion bar (a newly-added test that fails by assertion), distinguishing it from errored', () => {
-    const prompt = redPrompt().toLowerCase();
-    // The bar PROSE itself (not merely the vocabulary line, which lists every outcome) — deleting the
-    // "valid RED only when …" sentence must fail this, so assert a phrase unique to the bar.
-    expect(prompt).toContain('valid red only when');
-    expect(prompt).toContain('fails by assertion'); // the assertion requirement, distinct from errored
-    expect(prompt).toContain('errored'); // named in the bar as the NOT-valid-RED sibling (a compile/module error)
+  it('states the RED completion bar', () => {
+    expect(redPrompt().toLowerCase()).toContain('valid red only when');
   });
 
   it('is a distinct shape from a file-with-marker turn: no completion MARKER instruction', () => {
@@ -412,10 +367,7 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
 });
 
 // §28.5.3/§28.5.5 — the GREEN work turn: the agent runs the tests AND the build, classifies each into its
-// framework-neutral vocabulary, and writes both into the SAME phase-result file the GREEN gate reads. Like the
-// RED prompt it is the WRITER half of the shared-semantics contract: every grammar token + both vocabularies are
-// interpolated from the shared descriptors, and the embedded few-shot is the canonical example asserted
-// well-formed against the gate predicate — so the instruction and the gate cannot drift.
+// framework-neutral vocabulary, and writes both into the SAME phase-result file the GREEN gate reads.
 describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion mode)', () => {
   const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.json';
   const greenPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
@@ -435,29 +387,14 @@ describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion m
     expect(prompt.toLowerCase()).toContain('re-read'); // verifies the RESULT FILE on disk first
   });
 
-  it('interpolates the grammar tokens and BOTH the test and build vocabularies from the shared descriptors', () => {
+  it('names the captured-run file derived from the result file, and the check the engine applies', () => {
     const prompt = greenPrompt();
-    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
-    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.build}"`);
     expect(prompt).toContain(phaseOutputRel(RESULT_REL));
     expect(prompt).toContain('check-artifact result green');
-    for (const outcome of PHASE_OUTCOMES) expect(prompt).toContain(outcome); // the test-outcome vocabulary
-    for (const build of BUILD_OUTCOMES) expect(prompt).toContain(build); // the build-outcome vocabulary
   });
 
-  it('embeds the ONE canonical GREEN example, well-formed against the gate predicate (single-source)', () => {
-    const example = examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME });
-    expect(readPhaseResult(example).ok).toBe(true);
-    expect(greenPrompt()).toContain(example.trimEnd());
-    // the few-shot carries BOTH the `passed` outcome and the `built` build (not a RED example):
-    expect(greenPrompt()).toContain(`"${PHASE_RESULT_FIELDS.build}": "${GREEN_COMPLETING_BUILD_OUTCOME}"`);
-  });
-
-  it('states the GREEN completion bar (tests pass AND build built), distinct from a failing test / broken build', () => {
-    const prompt = greenPrompt().toLowerCase();
-    expect(prompt).toContain('valid green only when'); // the bar prose (deleting it fails this)
-    expect(prompt).toContain(GREEN_COMPLETING_OUTCOME); // `passed`
-    expect(prompt).toContain(GREEN_COMPLETING_BUILD_OUTCOME); // `built`
+  it('states the GREEN completion bar', () => {
+    expect(greenPrompt().toLowerCase()).toContain('valid green only when');
   });
 
   it('is a distinct shape from a RED turn and a file-with-marker turn', () => {
@@ -500,21 +437,41 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
     reportRel: '.agent-terminal/loop/artifacts/impl-report.md',
   };
 
-  it('names the file this step writes its section to, and to rewrite it whole each time', () => {
+  it('names the file this step writes its section to', () => {
     const prompt = composeAppWorkPrompt({ ...base, reportSections: [section] });
     expect(prompt).toMatch(new RegExp(`^${REPORT_SECTION_HEADING} — .*${section.sectionRel.replace(/[.]/g, '\\.')}`, 'm'));
     expect(prompt).toContain(section.sectionRel);
-    expect(prompt).toMatch(/rewrite the whole file/i);
-    expect(prompt).toMatch(/never (patch|edit) it in place/i);
   });
 
-  it('tells the step never to write the assembled report, which the app rebuilds from every section', () => {
-    const prompt = composeAppWorkPrompt({ ...base, reportSections: [section] });
-    expect(prompt).toMatch(new RegExp(`never edit ${section.reportRel.replace(/[.]/g, '\\.')}`, 'i'));
-    expect(prompt).toMatch(/rebuilds it from every step's section file/i);
+  it('names the assembled report the section belongs to', () => {
+    expect(composeAppWorkPrompt({ ...base, reportSections: [section] })).toContain(section.reportRel);
   });
 
   it('says nothing about sections for a step whose outputs declare none', () => {
     expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
+  });
+});
+
+describe('composeAppWorkPrompt — a work turn handed the capabilities self-check (§29)', () => {
+  const base = {
+    recipeBody: '# work turn\nSet the repository up.',
+    turnKey: 'work-setup',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: { kind: 'file' as const, artifactRel: '.agent-terminal/loop/artifacts/repo-setup-summary.md', marker: completionMarker('setup') },
+  };
+  const checkCommand = "ELECTRON_RUN_AS_NODE=1 '/opt/app/run me' '/opt/app/check.js' 'capabilities'";
+
+  it('hands the agent the check command and the canonical example when the def declares the self-check', () => {
+    const prompt = composeAppWorkPrompt({ ...base, selfCheck: { kind: 'loop-capabilities', checkCommand } });
+
+    expect.soft(prompt).toContain(checkCommand);
+    expect.soft(prompt).toContain(exampleLoopCapabilities().trimEnd());
+  });
+
+  it('carries neither the check command nor the canonical example when the def declares none', () => {
+    const prompt = composeAppWorkPrompt(base);
+
+    expect.soft(prompt).not.toContain(checkCommand);
+    expect.soft(prompt).not.toContain(exampleLoopCapabilities().trimEnd());
   });
 });

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
-import type { AgentState, FlowAutoGateView, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import type { AgentState, FlowAutoGateView, FlowDerived, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
@@ -62,6 +62,8 @@ const stateOf = (i: number) => {
   return cl.contains('active') ? 'active' : cl.contains('done') ? 'done' : 'todo';
 };
 const control = () => host.querySelector<HTMLButtonElement>('.flow-control');
+const buttonNamed = (name: string): HTMLElement | null =>
+  [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].find((b) => b.textContent?.trim() === name) ?? null;
 const segs = () => [...host.querySelectorAll<HTMLElement>('.flow.vert .seg')];
 // A connector bar touches the current step when the active station is one of its two neighbours in
 // the interleaved station/seg column.
@@ -484,10 +486,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     ...(notice ? { notice } : {}),
   });
 
-  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (§B.10 carrier, AC5)', async () => {
+  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (AC5)', async () => {
     // AC 5's migration notice arrives on the transition that enters the step; the ordinary success push
     // then drives a passive state re-pull carrying NO notice. Under the pre-sweep one-shot rule that
-    // re-pull erased it before the operator could read it — the defect §B.5 position 6 names. The strip
+    // re-pull erased it before the operator could read it . The strip
     // now holds it across passive re-pulls and drops it only on the next transition.
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()), // passive pulls carry no notice
@@ -510,7 +512,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const noticeNode = host.querySelector('.flow-notice'); // the node the transition created
 
     await strip.refresh(); // passive re-pull, state() carries no notice → HELD, not erased
-    // §D.4 row 2838(c) / WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
+    // WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
     // role=status region would re-announce the unchanged notice to assistive tech. Identity, not presence.
     expect(host.querySelector('.flow-notice')).toBe(noticeNode);
 
@@ -518,9 +520,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
   });
 
-  it('joins a passive re-pull\'s own notice to the held transition notice — both render (§B.10 carrier, AC5+AC10)', async () => {
-    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal (§B.5 item
-    // 6) arrives on a LATER passive state push. They are on different responses, so the seam cannot join
+  it('joins a passive re-pull\'s own notice to the held transition notice — both render (AC5+AC10)', async () => {
+    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal
+    // arrives on a LATER passive state push. They are on different responses, so the seam cannot join
     // them — the strip must, and neither may drop the other.
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
@@ -548,7 +550,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(notices).toContain('agent is busy');
   });
 
-  it('clears the held notice on a repo change — it belongs to the prior repo\'s step (§B.10 carrier)', async () => {
+  it('clears the held notice on a repo change — it belongs to the prior repo\'s step', async () => {
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
       start: vi.fn(),
@@ -598,7 +600,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           position: 1,
           total: 1,
           status: 'in_progress',
-          derived: { activity: 'active', todosDone: 2, todosTotal: 5, ready: false },
+          derived: { activity: 'active', waiting: null, todosDone: 2, todosTotal: 5, ready: false },
         }),
       ),
       start: vi.fn(),
@@ -617,6 +619,61 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(text.toLowerCase()).toContain('active');
   });
 
+  describe('the derived line while Waiting (#319 AC11)', () => {
+    const waitingView = (derived: FlowDerived): FlowStateView => ({
+      stepName: '/repo-step', runStarted: 'never-started' as const, steps: ['/repo-step'], position: 1, total: 1, status: 'in_progress', derived,
+    });
+    const stripOver = (read: () => FlowStateView, at: HTMLElement) => {
+      let fire = (): void => {};
+      const deps = {
+        state: vi.fn(async () => read()), start: vi.fn(), advance: vi.fn(), restart: vi.fn(), undo: vi.fn(), terminate: vi.fn(),
+        provideInput: vi.fn(), onStatusBar: vi.fn(),
+        onStateChanged: vi.fn((cb: () => void) => {
+          fire = cb;
+          return () => {};
+        }),
+      };
+      createFlowStrip(at, deps).onRepoChanged('/repo');
+      return () => fire();
+    };
+    const derivedLine = (at: HTMLElement): string | null => at.querySelector<HTMLElement>('.flow-derived')?.textContent ?? null;
+    const shownAlone = async (derived: FlowDerived): Promise<string | null> => {
+      const fresh = document.createElement('div');
+      document.body.append(fresh);
+      stripOver(() => waitingView(derived), fresh);
+      await vi.waitFor(() => expect(derivedLine(fresh)).toContain(`${derived.todosDone} / ${derived.todosTotal}`));
+      return derivedLine(fresh);
+    };
+    const WAITING = { program: 'MainThread', others: 1 };
+
+    it('reads Waiting with the label in its own case when the first view is already Waiting', async () => {
+      stripOver(() => waitingView({ activity: 'quiet', waiting: WAITING, todosDone: 2, todosTotal: 5, ready: false }), host);
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('2 / 5'));
+      expect(derivedLine(host)).toMatch(/\b(?:waiting|Waiting|WAITING)\b.*\bMainThread \+1\b/);
+    });
+
+    it('reads Waiting when a push brings it, then shows the quiet display it showed before #319 once Waiting ends', async () => {
+      let derived: FlowDerived = { activity: 'quiet', waiting: null, todosDone: 0, todosTotal: 4, ready: false };
+      const push = stripOver(() => waitingView(derived), host);
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('0 / 4'));
+
+      derived = { activity: 'quiet', waiting: WAITING, todosDone: 1, todosTotal: 4, ready: false };
+      push();
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('1 / 4'));
+      const whileWaiting = derivedLine(host);
+
+      derived = { activity: 'quiet', waiting: null, todosDone: 3, todosTotal: 4, ready: false };
+      push();
+      await vi.waitFor(() => expect(derivedLine(host)).toContain('3 / 4'));
+      const afterWaiting = derivedLine(host);
+
+      expect({ whileWaiting, afterWaiting }).toEqual({
+        whileWaiting: expect.stringMatching(/\b(?:waiting|Waiting|WAITING)\b.*\bMainThread \+1\b/),
+        afterWaiting: await shownAlone(derived),
+      });
+    });
+  });
+
   it('re-pulls flow:state when main emits flow:onStateChanged — the push path (§24.2.2 S5)', async () => {
     let fire = (): void => {};
     let done = 0;
@@ -628,7 +685,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           position: 1,
           total: 1,
           status: 'in_progress',
-          derived: { activity: 'quiet', todosDone: done, todosTotal: 3, ready: false },
+          derived: { activity: 'quiet', waiting: null, todosDone: done, todosTotal: 3, ready: false },
         }),
       ),
       start: vi.fn(),
@@ -1167,6 +1224,42 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).toHaveBeenCalledWith('/repo', 'plan', { ticket: '176' });
   });
 
+  it('a prompt submit stays pending until provideInput is answered, so the modal can hold its Confirm (§24.2.3 T3)', async () => {
+    let submit: ((v: Record<string, string>) => unknown) | undefined;
+    let answer!: (v: FlowStateView) => void;
+    const promptView: FlowStateView = {
+      stepName: 'plan', runStarted: 'never-started' as const,
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      provideInput: vi.fn(() => new Promise<FlowStateView>((res) => (answer = res))),
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, s: (v: Record<string, string>) => unknown) => {
+        if (prompt) submit = s;
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(submit).toBeDefined());
+
+    let settled = false;
+    const pending = submit!({ ticket: '176' });
+    expect(pending).toBeInstanceOf(Promise);
+    void (pending as Promise<unknown>).then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+
+    answer({ ...promptView, prompt: undefined });
+    await vi.waitFor(() => expect(settled).toBe(true));
+  });
+
   it('surfaces a provideInput write-failure from a prompt submit instead of swallowing it', async () => {
     const onError = vi.fn();
     let submit: ((v: Record<string, string>) => void) | undefined;
@@ -1442,9 +1535,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repo-step'); // prior UI preserved, host not cleared
   });
 
-  it('re-enables a control button when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
-    // The in-flight button is disabled, then re-enabled on the catch→refresh path; if state() ALSO
-    // rejects, the button must not be stranded disabled — the user can still retry.
+  it('a control can be used again when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
     const deps = fakeFlow('in_progress');
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
@@ -1454,8 +1545,32 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     deps.advance.mockRejectedValueOnce(new Error('advance failed'));
     deps.state.mockRejectedValueOnce(new Error('ipc down'));
     button.click();
+    await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
 
-    await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stranded disabled
+    button.click();
+    expect(deps.advance).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores its controls while a transition is still being answered, and shows the pressed one busy', async () => {
+    let answer!: (v: FlowStateView) => void;
+    const onTerminate = vi.fn();
+    const deps = { ...fakeFlow('in_progress'), onTerminate };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(buttonNamed('Advance')).not.toBeNull());
+    const inProgressView = await deps.state('/repo');
+    deps.advance.mockImplementationOnce(() => new Promise((res) => (answer = res)));
+
+    buttonNamed('Advance')!.click();
+    buttonNamed('Advance')!.click();
+    buttonNamed('Terminate')!.click();
+    expect(deps.advance).toHaveBeenCalledTimes(1);
+    expect(onTerminate).not.toHaveBeenCalled();
+    expect(buttonNamed('Advance')!.getAttribute('aria-busy')).toBe('true');
+
+    answer(inProgressView);
+    await vi.waitFor(() => expect(buttonNamed('Advance')!.getAttribute('aria-busy')).toBeNull());
+    buttonNamed('Advance')!.click();
+    expect(deps.advance).toHaveBeenCalledTimes(2);
   });
 
   it('dispose() unsubscribes the push handler and clears the host (UI-STANDARDS clean teardown)', async () => {
@@ -1687,20 +1802,43 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(document.activeElement).toBe(control());
     });
 
-    it('re-enables the Terminate control if both terminate() and the recovery state() reject (failure recovery)', async () => {
+    it('Terminate can be used again if both terminate() and the recovery state() reject (failure recovery)', async () => {
       const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
       const deps = { ...fakeFlow('in_progress'), onTerminate };
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(terminate()).not.toBeNull());
       const button = terminate()!;
-      // Make both the terminate call and refresh()'s re-pull reject, so no repaint detaches the
-      // button — only the finally re-enable can rescue it from being stranded disabled.
       deps.terminate.mockRejectedValueOnce(new Error('terminate failed'));
       deps.state.mockRejectedValueOnce(new Error('state failed'));
       button.click();
       await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
-      await vi.waitFor(() => expect(button.disabled).toBe(false));
-      expect(host.querySelector('.flow-terminate')).toBe(button); // never repainted
+      await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
+      expect(host.querySelector('.flow-terminate')).toBe(button);
+      button.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledTimes(2));
+    });
+
+    it('ignores the strip’s controls while a confirmed terminate is still being answered, and shows Terminate busy', async () => {
+      let answer!: (v: FlowStateView) => void;
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(buttonNamed('Terminate')).not.toBeNull());
+      const inProgressView = await deps.state('/repo');
+      deps.terminate.mockImplementationOnce(() => new Promise((res) => (answer = res)));
+
+      buttonNamed('Terminate')!.click();
+      buttonNamed('Terminate')!.click();
+      buttonNamed('Advance')!.click();
+      expect(deps.terminate).toHaveBeenCalledTimes(1);
+      expect(onTerminate).toHaveBeenCalledTimes(1);
+      expect(deps.advance).not.toHaveBeenCalled();
+      expect(buttonNamed('Terminate')!.getAttribute('aria-busy')).toBe('true');
+
+      answer(inProgressView);
+      await vi.waitFor(() => expect(buttonNamed('Terminate')!.getAttribute('aria-busy')).toBeNull());
+      buttonNamed('Terminate')!.click();
+      expect(deps.terminate).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -1739,7 +1877,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         position: 1,
         total: 1,
         status: 'in_progress',
-        derived: { activity, todosDone: 1, todosTotal: 3, ready: false },
+        derived: { activity, waiting: null, todosDone: 1, todosTotal: 3, ready: false },
       }));
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(control()).not.toBeNull());
@@ -1762,7 +1900,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         position: 1,
         total: 1,
         status: 'in_progress',
-        derived: { activity: 'active', todosDone: done, todosTotal: 3, ready: false },
+        derived: { activity: 'active', waiting: null, todosDone: done, todosTotal: 3, ready: false },
       }));
       createFlowStrip(host, { ...deps, onTerminate: vi.fn() }).onRepoChanged('/repo');
       await vi.waitFor(() => expect(host.querySelector('.flow-terminate')).not.toBeNull());
@@ -1815,7 +1953,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
               position: 1,
               total: 1,
               status: 'in_progress',
-              derived: { activity: 'active', todosDone: 1, todosTotal: 3, ready: false },
+              derived: { activity: 'active', waiting: null, todosDone: 1, todosTotal: 3, ready: false },
             },
       );
       createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -1973,5 +2111,96 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
       { ...base, status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } },
     );
     expect(pill.tone).not.toBe('await');
+  });
+});
+
+describe('start(repoKey) runs what a press of Start runs', () => {
+  const started = (extra: Partial<FlowStateView> = {}): FlowStateView => ({
+    stepName: '/repo-step',
+    runStarted: 'started',
+    steps: ['/repo-step'],
+    position: 1,
+    total: 1,
+    status: 'in_progress',
+    ...extra,
+  });
+
+  it("shows the start view's notice inline once it settles", async () => {
+    const deps = { ...fakeFlow(), start: vi.fn(async () => started({ notice: 'scripted start notice' })) };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo');
+
+    expect(host.textContent).toContain('scripted start notice');
+  });
+
+  it('hands a start view carrying a step-entry prompt to the input modal once it settles', async () => {
+    const prompt = { inputs: [{ name: 'note', type: 'text' }], bootstrap: '' };
+    const prompts: Array<FlowStateView['prompt'] | null> = [];
+    const deps = {
+      ...fakeFlow(),
+      start: vi.fn(async () => started({ prompt })),
+      onPrompt: (p: FlowStateView['prompt'] | null) => void prompts.push(p),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo');
+
+    expect(prompts).toEqual([prompt]);
+  });
+
+  it('signals FLOW_CHANGED_EVENT once it settles, so the todo overlay re-pulls', async () => {
+    const strip = createFlowStrip(host, fakeFlow());
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+    let fired = 0;
+    const onChanged = (): void => void (fired += 1);
+    window.addEventListener(FLOW_CHANGED_EVENT, onChanged);
+
+    try {
+      await strip.start('/repo');
+    } finally {
+      window.removeEventListener(FLOW_CHANGED_EVENT, onChanged);
+    }
+
+    expect(fired).toBe(1);
+  });
+
+  it('starts the repository it is given, not the one the strip shows, and leaves the shown one unstarted', async () => {
+    const strip = createFlowStrip(host, fakeFlow());
+    strip.onRepoChanged('/repo-b');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    await strip.start('/repo-a');
+    const shownAfterStart = control()?.textContent;
+    strip.onRepoChanged('/repo-a');
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-a-step'));
+
+    expect({ shownAfterStart, repoA: control()?.textContent }).toEqual({ shownAfterStart: 'Start', repoA: 'Advance' });
+  });
+
+  it('reports a failed start as a failed Start press does, and settles without rejecting', async () => {
+    const errors: string[] = [];
+    const deps = {
+      ...fakeFlow(),
+      start: vi.fn(async (): Promise<FlowStateView> => {
+        throw new Error('scripted start failure');
+      }),
+      onError: (reason: string) => void errors.push(reason),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()?.textContent).toBe('Start'));
+
+    const outcome = await strip.start('/repo').then(
+      () => 'settled',
+      () => 'rejected',
+    );
+
+    expect({ outcome, errors }).toEqual({ outcome: 'settled', errors: ['scripted start failure'] });
   });
 });

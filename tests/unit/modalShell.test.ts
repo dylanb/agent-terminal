@@ -202,3 +202,30 @@ describe('accept vs dismiss (the onDismiss contract)', () => {
     expect(host.firstChild).toBeNull();
   });
 });
+
+describe('modal shell while the dialog is answering a press', () => {
+  const scrim = () => host.querySelector<HTMLElement>('.flow-scrim')!;
+
+  it('Escape and the scrim leave the dialog open until the press is answered, then dismiss it', async () => {
+    let answer!: () => void;
+    let closes = 0;
+    createModalShell(host, 'm', () => void closes++).render(({ doc, presses }) => {
+      const card = doc.createElement('div');
+      const submit = doc.createElement('button');
+      submit.textContent = 'Submit';
+      presses.bind(submit, () => new Promise<void>((r) => (answer = r)));
+      card.append(submit);
+      return { card, initialFocus: submit };
+    });
+    [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Submit'))!.click();
+
+    modal().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    scrim().click();
+    expect({ open: host.querySelector('[role="dialog"]') !== null, closes }).toEqual({ open: true, closes: 0 });
+
+    answer();
+    await new Promise((r) => setTimeout(r, 0));
+    modal().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect({ open: host.querySelector('[role="dialog"]') !== null, closes }).toEqual({ open: false, closes: 1 });
+  });
+});

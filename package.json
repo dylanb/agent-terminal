@@ -1,8 +1,15 @@
 {
   "name": "agent-terminal",
-  "version": "0.1.0",
-  "description": "Foundation for a coding-agent management application: bash in a PTY, xterm.js UI, shadow screen model, monitor pane",
-  "homepage": "https://github.com/dylanb",
+  "version": "0.2.0",
+  "description": "Desktop app for running, monitoring and steering terminal coding agents (Claude Code, Codex): PTY shell, xterm.js, shadow screen model, monitor pane and a test-driven flow/loop engine",
+  "homepage": "https://github.com/dylanb/agent-terminal#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dylanb/agent-terminal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dylanb/agent-terminal/issues"
+  },
   "author": {
     "name": "Dylan Barrell",
     "email": "dylan@barrell.com"
@@ -17,16 +24,20 @@
     "postinstall": "electron-rebuild -f -w node-pty && node scripts/postinstall-sign.mjs",
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc -p tsconfig.tests.json",
     "start": "electron-vite preview",
-    "lint": "eslint .",
-    "pretest": "playwright install chromium",
+    "lint": "eslint . && node scripts/lint-mermaid.mjs",
+    "pretest": "pnpm run typecheck && playwright install chromium",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm run build && playwright test",
-    "package": "pnpm run gen-icon && pnpm run build && electron-builder",
+    "test:proof": "vite build --config vite.testProof.config.ts --logLevel error && node out/test-proof/testProof.cjs",
+    "package": "pnpm run gen-icon && pnpm run build && electron-builder && electron-builder --config electron-builder.controller.yml",
+    "sync:status": "node scripts/sync.mjs status",
+    "sync:record": "node scripts/sync.mjs record",
     "prepare": "husky"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/language": "^6.12.3",
@@ -40,7 +51,8 @@
     "js-yaml": "^4.2.0",
     "markdown-it": "^14.2.0",
     "mermaid": "^11.15.0",
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
@@ -49,6 +61,8 @@
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.9.3",
+    "@types/pngjs": "^6.0.5",
+    "@types/ws": "^8.18.2",
     "@vitest/browser": "^4.1.10",
     "@vitest/browser-playwright": "^4.1.10",
     "electron": "^42.4.0",
@@ -57,6 +71,7 @@
     "eslint": "^10.11.0",
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
+    "pngjs": "7.0.0",
     "smol-toml": "1.3.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",

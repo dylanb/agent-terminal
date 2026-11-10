@@ -10,6 +10,7 @@ import { resolveCatalogEntry } from './flowCatalog';
 import type { CatalogResolution, DispositionRead } from './resolveRunDefinition';
 import { clearDisposition, recordDisposition } from './runDisposition';
 import { createBoundSourceLoader } from './runResolver';
+import type { LoopDefV2Tiers } from './loopDefV2';
 import { heldRunOf } from './runHoldRead';
 import type { WorktreeLock, WorktreeLockScope } from './worktreeLock';
 
@@ -38,10 +39,11 @@ export function rebindRunRecord(worktree: string, binding: DispositionRead): voi
 
 export function realHeldRunRecoveryDeps(
   globalDir: string,
+  defTiers: LoopDefV2Tiers,
 ): Omit<HeldRunRecoveryDeps, 'lock' | 'terminate' | 'selectIfUnlocked'> {
   return {
     hold: heldRunOf,
-    loadBound: createBoundSourceLoader(globalDir),
+    loadBound: createBoundSourceLoader(globalDir, defTiers),
     resumesAt,
     rebindRecord: rebindRunRecord,
     selectionResolves: (worktree, id) => resolveCatalogEntry({ worktreeDir: worktree, globalRoot: globalDir }, id),

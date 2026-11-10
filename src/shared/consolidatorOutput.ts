@@ -94,8 +94,8 @@ export function consolidatorOutputWellFormed(text: string, catalog: string[]): b
   return consolidatorOutputProblems(text, catalog).length === 0;
 }
 
-/** The single canonical example the predicate test, the fake-agent output and the prompt few-shot all
- *  reference — one per verdict so the consumers cannot drift (§93). `another round` demonstrates a roster;
+/** The single canonical example the fake-agent output and the prompt few-shot both reference — one per
+ *  verdict so the consumers cannot drift (§93). `another round` demonstrates a roster;
  *  `stop for a human` demonstrates the reason. */
 export function exampleConsolidatorOutput(verdict: ConsolidatorVerdict, catalog: string[]): string {
   const f = CONSOLIDATOR_FIELDS;

@@ -8,7 +8,7 @@ import {
   type ApproveDecider,
 } from '../../src/main/appGateDecision';
 import { gateDecisionAuditCmd } from '../../src/shared/audit';
-import type { AppLoopRunState } from '../../src/main/appLoopState';
+import type { AppLoopBootstrap, AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { FlowStateView, GateDecisionOption } from '../../src/shared/ipc';
 import { createEpicPromotionCoordinator } from '../../src/main/epicPromotion';
@@ -18,7 +18,8 @@ import type { AppGateCommitCtx } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
 // bound def's declared side-effect out of band, then reaches the terminal accept and advances the flow; a
-// failed side-effect is surfaced + audited but never aborts the accept (AC3). It acts only on the step+turn
+// failed side-effect is surfaced + audited, and either holds a human gate for a retry or, at any other gate, never
+// aborts the accept (AC3). It acts only on the step+turn
 // identity the decision names (AC7) and only when the run is AT the gate, and validates the option against the
 // bound def at the operation (AC9). It never writes retired-engine state — its persist port is the §27 writer (AC8).
 
@@ -81,21 +82,22 @@ interface Recorder {
   briefs: Array<{ repoDir: string; fromStep: string; text: string }>;
   briefClears: string[];
   assembles: string[];
+  pushes: string[];
   order: string[];
 }
 
-function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
+function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; sideEffectNoTarget?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null; bootstrap?: AppLoopBootstrap | null; pushThrows?: () => string | undefined; holds?: boolean }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], assembles: [], order: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], assembles: [], pushes: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
-      bootstrap: null,
+      pickup: over.bootstrap ?? null,
     }),
     assembleReport: (_r, report) => {
       rec.assembles.push(report.path);
@@ -105,9 +107,18 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       rec.sideEffects.push({ action, ctx });
       rec.order.push('side-effect');
       if (over.sideEffectThrows) throw new Error(over.sideEffectThrows);
+      return over.sideEffectNoTarget === undefined ? { outcome: 'done' } : { outcome: 'no-target', reason: over.sideEffectNoTarget };
     },
+    runPushSideEffect: async (branch) => {
+      rec.pushes.push(branch);
+      rec.order.push('push');
+      const reason = over.pushThrows?.();
+      if (reason !== undefined) throw new Error(reason);
+    },
+    failureHoldsGate: () => over.holds ?? false,
     runCommitSideEffect: async (ctx) => {
       rec.commitSideEffects.push(ctx);
+      rec.order.push('commit');
       if (over.commitThrows) throw new Error(over.commitThrows);
       return over.commitOutcome === 'nothing-to-commit'
         ? { outcome: 'nothing-to-commit' }
@@ -144,6 +155,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       rec.briefClears.push(repoDir);
       rec.order.push('clear-brief');
     },
+    reopenStep: () => null,
     sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
@@ -161,7 +173,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   it('runs the declared side-effect, persists the terminal accept, and advances the flow', async () => {
     const { deps, rec } = mkDeps({});
     await approve(deps);
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, pickup: null } }]);
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
@@ -596,7 +608,7 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
 
   // §28.4.2 (CWE-703/755) — reopening the slice is best-effort: a throw from the reopen port (the flow-state
   // write behind flow.reopenSlice cannot land — a symlinked/EACCES `.agent-terminal`, ENOSPC) is surfaced to
-  // the operator and the decision resolves without stranding, never rejecting into the one-way void caller.
+  // the operator and the decision resolves without stranding, never rejecting.
   // Pairs the happy path above; the sibling polish branch pins the same surfacing for its throwing port.
   it('surfaces a thrown reopen-slice error and resolves without stranding (CWE-703)', async () => {
     const { deps, rec } = mkDeps({
@@ -701,6 +713,31 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     expect(rec.audits.some((a) => a.cmd.includes('clear-brief failed') && a.cmd.includes('EISDIR') && a.exit === 1)).toBe(true);
   });
 
+  const noCompletion = () => ({
+    ok: true as const,
+    def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits' } },
+    tierRoot: '/tmp/tier',
+    defDir: '/tmp/tier/loop',
+  });
+
+  it('clears the brief on approving the return step when its loop is not a TDD phase', async () => {
+    const { deps, rec } = mkDeps({ run: run('dev-loop', 'dev'), resolveDef: noCompletion, reopenStep: () => 'dev' });
+    await runAppGateDecision('/repo', 'dev', 'consolidate-dev', 'approve', deps);
+    expect(rec.briefClears).toEqual(['/repo']);
+  });
+
+  it('keeps the brief on approving a later step that is not a TDD phase', async () => {
+    const { deps, rec } = mkDeps({ run: run('integration-loop', 'integration'), resolveDef: noCompletion, reopenStep: () => 'dev' });
+    await runAppGateDecision('/repo', 'integration', 'consolidate-integration', 'approve', deps);
+    expect(rec.briefClears).toEqual([]);
+  });
+
+  it('keeps the brief on approving a RED return step, whose GREEN and refactor are still to come', async () => {
+    const { deps, rec } = mkDeps({ run: run('red-loop', 'red'), resolveDef: () => withCompletion('red'), reopenStep: () => 'red' });
+    await runAppGateDecision('/repo', 'red', 'consolidate-red', 'approve', deps);
+    expect(rec.briefClears).toEqual([]);
+  });
+
   it('keeps the brief on a red or green approve', async () => {
     for (const c of ['red', 'green'] as const) {
       const { deps, rec } = mkDeps({ run: run(`${c}-loop`, c), resolveDef: () => withCompletion(c) });
@@ -742,8 +779,7 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
   });
 
   // §27.9 / N5 (AC6, CWE-703) — entering polish is best-effort: a throw (an unresolvable loop area — a planted
-  // symlink) is surfaced to the operator and the decision resolves without stranding, never rejecting into the
-  // one-way caller. Pairs the happy path above so the surfacing behavior is pinned, not just the success.
+  // symlink) is surfaced to the operator and the decision resolves without stranding, never rejecting. Pairs the happy path above so the surfacing behavior is pinned, not just the success.
   it('surfaces a thrown enter-polish error and resolves without stranding (AC6)', async () => {
     const { deps, rec } = mkDeps({
       gate: POLISH_GATE,
@@ -794,7 +830,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
     });
     await expect(approve(deps)).resolves.toBe(true); // resolves as landed — the throw is caught, never rejects into the caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, pickup: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
     expect(rec.errors).toEqual([]); // a best-effort clear failure is audited, not surfaced as a blocking dialog
     expect(rec.audits.some((a) => a.cmd.includes('clear') && a.cmd.includes('polish') && a.exit === 1)).toBe(true);
@@ -1007,4 +1043,168 @@ describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
     expect(flow.state(wt).stepName).toBe('next');
     expect(entered).toEqual(['next']);
   });
+});
+
+// §28.3 — every gate commit is pushed to the branch of the pull request the pickup opened (§27.10).
+describe('runAppGateDecision — a gate commit is pushed to the pull request branch (§28.3)', () => {
+  const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
+
+  it('pushes the pickup branch after the commit lands', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED'), bootstrap: PICKUP });
+    await approve(deps);
+    expect(rec.pushes).toEqual(['plan-loop/issue-7']);
+    expect(rec.order.indexOf('commit')).toBeLessThan(rec.order.indexOf('push'));
+    expect(rec.audits.some((a) => a.cmd.includes('push: plan-loop/issue-7') && a.exit === 0)).toBe(true);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('still pushes when there is nothing new to commit, so an earlier unpushed commit reaches the pull request', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('approve'), commitOutcome: 'nothing-to-commit', bootstrap: PICKUP });
+    await approve(deps);
+    expect(rec.pushes).toEqual(['plan-loop/issue-7']);
+  });
+
+  it('pushes nothing when the run has no pickup, and the approve advances without an error', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED') });
+    await approve(deps);
+    expect(rec.pushes).toEqual([]);
+    expect(rec.errors).toEqual([]);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('pushes nothing when the commit itself failed', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED'), commitThrows: 'git commit failed', bootstrap: PICKUP });
+    await approve(deps);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('at a gate a failure does not hold, a failed push is surfaced and audited and the flow still advances', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED'), bootstrap: PICKUP, pushThrows: () => 'rejected: non-fast-forward' });
+    await approve(deps);
+    expect(rec.errors.join('\n')).toMatch(/non-fast-forward/);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect failed') && a.cmd.includes('push') && a.exit === 1)).toBe(true);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+});
+
+// §27.13 — at a human approval gate every approve failure leaves the gate open, and approving again retries.
+describe('runAppGateDecision — a failed approve at a human gate holds the gate for a retry (§27.13)', () => {
+  const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
+  const COMMIT_THEN_PUBLISH: GateOptionDef[] = [
+    { option: 'approve', sideEffects: [{ kind: 'commit', args: { label: 'approve' } }, { kind: 'gh', args: { action: 'publish-pr-body' } }] },
+  ];
+
+  it('a failed push accepts nothing, advances nothing, runs no later side-effect, and surfaces the failure', async () => {
+    const { deps, rec } = mkDeps({ gate: COMMIT_THEN_PUBLISH, bootstrap: PICKUP, holds: true, pushThrows: () => 'could not reach origin' });
+    expect(await approve(deps)).toBe(false);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+    expect(rec.errors.join('\n')).toMatch(/could not reach origin/);
+    expect(rec.audits.some((a) => a.cmd.includes('push') && a.exit === 1)).toBe(true);
+    expect(rec.audits.some((a) => a.cmd === gateDecisionAuditCmd('decision', 'approve', undefined, 'human'))).toBe(false);
+  });
+
+  it('approving again once the push can land commits nothing new, pushes, publishes, accepts and advances', async () => {
+    let failing = true;
+    let committed = false;
+    const { deps, rec } = mkDeps({
+      gate: COMMIT_THEN_PUBLISH,
+      bootstrap: PICKUP,
+      holds: true,
+      pushThrows: () => (failing ? 'could not reach origin' : undefined),
+      runCommitSideEffect: async () => {
+        if (committed) return { outcome: 'nothing-to-commit' };
+        committed = true;
+        return { outcome: 'committed', sha: 'a'.repeat(40), branch: PICKUP.branch };
+      },
+    });
+    expect(await approve(deps)).toBe(false);
+    failing = false;
+    expect(await approve(deps)).toBe(true);
+    expect(rec.pushes).toEqual([PICKUP.branch, PICKUP.branch]);
+    expect(rec.sideEffects.map((e) => e.action)).toEqual(['publish-pr-body']);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('the nothing-to-commit notice is not shown for an approve that was held', async () => {
+    const { deps, rec } = mkDeps({ gate: COMMIT_THEN_PUBLISH, commitOutcome: 'nothing-to-commit', bootstrap: PICKUP, holds: true, pushThrows: () => 'could not reach origin' });
+    await approve(deps);
+    expect(rec.notices).toEqual([]);
+  });
+
+  it('a failed gh side-effect holds the gate, and approving again retries it', async () => {
+    let failing = true;
+    const { deps, rec } = mkDeps({
+      holds: true,
+      runSideEffect: async (action, ctx) => {
+        rec.sideEffects.push({ action, ctx });
+        if (failing) throw new Error('gh: HTTP 502');
+        return { outcome: 'done' };
+      },
+    });
+    expect(await approve(deps)).toBe(false);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(rec.errors.join('\n')).toMatch(/HTTP 502/);
+    failing = false;
+    expect(await approve(deps)).toBe(true);
+    expect(rec.sideEffects.map((e) => e.action)).toEqual(['mark-ready', 'mark-ready']);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('a failed commit holds the gate', async () => {
+    const { deps, rec } = mkDeps({ gate: COMMIT_THEN_PUBLISH, bootstrap: PICKUP, holds: true, commitThrows: 'git commit failed' });
+    expect(await approve(deps)).toBe(false);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.pushes).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+  });
+
+  it('a report that cannot be assembled holds the gate before any side-effect runs', async () => {
+    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
+    const { deps, rec } = mkDeps({
+      holds: true,
+      resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l' }),
+      assembleReport: () => {
+        throw new Error('the report section a/impl-report/red.md leads outside a/impl-report');
+      },
+    });
+    expect(await approve(deps)).toBe(false);
+    expect(rec.sideEffects).toEqual([]);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(rec.errors.join('\n')).toMatch(/red\.md/);
+  });
+
+  it('a clean approve at a human gate runs every side-effect before the accept persists', async () => {
+    const { deps, rec } = mkDeps({
+      gate: COMMIT_THEN_PUBLISH,
+      bootstrap: PICKUP,
+      holds: true,
+      persistAccept: () => void rec.order.push('accept'),
+    });
+    expect(await approve(deps)).toBe(true);
+    expect(rec.order).toEqual(['commit', 'push', 'side-effect', 'accept']);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+});
+
+// §27.13 — a side-effect with nothing to act on (no PR or issue: the run had no pickup) is skipped, never a failure.
+describe('runAppGateDecision — a side-effect with nothing to act on is skipped with a notice (§27.13)', () => {
+  for (const holds of [true, false]) {
+    it(`${holds ? 'at a human gate' : 'at a gate that does not hold'}, the approve goes through and the skip is shown and audited`, async () => {
+      const { deps, rec } = mkDeps({ holds, sideEffectNoTarget: 'no PR to mark ready' });
+      expect(await approve(deps)).toBe(true);
+      expect(rec.errors).toEqual([]);
+      expect(rec.notices.join('\n')).toMatch(/mark-ready.*no PR to mark ready/);
+      expect(rec.audits.some((a) => a.cmd.includes('side-effect skipped') && a.cmd.includes('no PR to mark ready') && a.exit === 0)).toBe(true);
+      expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
+      expect(rec.accepts).toHaveLength(1);
+      expect(rec.advances).toEqual(['/repo']);
+    });
+  }
 });

@@ -22,21 +22,30 @@ describe('classifyHostedAgent (§27.2 presence + idleness)', () => {
   });
 });
 
-// §27.2 — deriving "a hosted agent occupies the prompt" from the OSC-133 command spans. A running span
-// is the foreground agent; ZERO spans means the agent is itself the PTY program (no bash prompt to sit
-// idle at — e.g. APP_SHELL=<agent>), also present. The absent case is the leak-prone one: instrumented
-// spans exist but NONE is running — a bare ready prompt where an injected turn would type into the shell.
-describe('hostedAgentPresent (§27.2 — present iff no bare idle prompt)', () => {
-  it('no span data at all is present (the agent is the PTY program, no bash prompt)', () => {
-    expect(hostedAgentPresent([])).toBe(true);
+// §27.2 — deriving "a hosted agent occupies the prompt" from the OSC-133 command spans. A running span whose
+// command line starts a listed agent is the foreground agent; ZERO spans in a shell that never showed a prompt
+// means the agent is itself the PTY program (e.g. APP_SHELL=<agent>), also present. Anything else is a bare
+// shell, or a program an injected turn must not be typed into.
+describe('hostedAgentPresent (§27.2 — present iff a listed agent holds the prompt)', () => {
+  const AGENTS = ['claude', 'codex'];
+  const span = (command: string, running: boolean) => ({ command, running });
+  it('a shell that has not shown a prompt and ran nothing is present (the agent is the PTY program)', () => {
+    expect(hostedAgentPresent([], false, AGENTS)).toBe(true);
   });
-  it('a running span is present (the agent is the foreground command)', () => {
-    expect(hostedAgentPresent([{ running: true }])).toBe(true);
-    expect(hostedAgentPresent([{ running: false }, { running: true }])).toBe(true);
+  it('a shell at its prompt that has run nothing yet is absent (a fresh bare shell)', () => {
+    expect(hostedAgentPresent([], true, AGENTS)).toBe(false);
+  });
+  it('a running span that started a listed agent is present', () => {
+    expect(hostedAgentPresent([span('claude', true)], true, AGENTS)).toBe(true);
+    expect(hostedAgentPresent([span('ls', false), span('cd repo; codex', true)], true, AGENTS)).toBe(true);
+  });
+  it('a running span of any other program is absent', () => {
+    expect(hostedAgentPresent([span('npm run dev', true)], true, AGENTS)).toBe(false);
+    expect(hostedAgentPresent([span('vim notes.md', true)], true, AGENTS)).toBe(false);
   });
   it('spans exist but none running is absent (a bare ready prompt — the leak case)', () => {
-    expect(hostedAgentPresent([{ running: false }])).toBe(false);
-    expect(hostedAgentPresent([{ running: false }, { running: false }])).toBe(false);
+    expect(hostedAgentPresent([span('claude', false)], true, AGENTS)).toBe(false);
+    expect(hostedAgentPresent([span('claude', false), span('codex', false)], false, AGENTS)).toBe(false);
   });
 });
 
@@ -52,6 +61,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
   let inject: Mock<(prompt: string) => void>;
   let armTimer: Mock<() => void>;
   let cancelTimer: Mock<() => void>;
+  let armAgentWait: Mock<() => void>;
   let writeError: Mock<(reason: string) => void>;
   let onComplete: Mock<(turnKey: string) => void>;
   let noteSettle: Mock<() => void>;
@@ -65,6 +75,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     inject = vi.fn();
     armTimer = vi.fn();
     cancelTimer = vi.fn();
+    armAgentWait = vi.fn();
     writeError = vi.fn();
     onComplete = vi.fn();
     noteSettle = vi.fn();
@@ -76,6 +87,8 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
       completionShortfall: () => (artifact ? null : shortfall),
       armTimer,
       cancelTimer,
+      armAgentWait,
+      cancelAgentWait: vi.fn(),
       writeError,
       onComplete,
       noteSettle,
@@ -99,7 +112,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('forceChained defers an INITIAL turn to a fresh settle instead of injecting on the current quiet (§B.5 item 4b)', () => {
+  it('forceChained defers an INITIAL turn to a fresh settle instead of injecting on the current quiet', () => {
     // A default initial turn injects synchronously against the already-idle agent (test above). Forced
     // chained, it must re-arm quiescence and wait for a FRESH active→quiet edge, so a work turn requested
     // in the same tick as a just-submitted skill injection cannot race that injection (CWE-74).
@@ -318,17 +331,52 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(inject).toHaveBeenCalledTimes(1);
   });
 
-  it('no hosted agent at the prompt: errors instead of leaking the prompt into the bare shell (§27.2)', () => {
-    // The motivating defect: injecting on raw quiescence typed a whole work-agent prompt into bash when
-    // no Claude instance was at the prompt. `absent` (normal buffer / no agent) must NEVER inject — it
-    // stops in `error` (D48, human-needed) so the operator is told to start Claude, not left with a
-    // prompt silently pasted into the shell. Distinct from `busy`, which defers and waits.
+  it('no hosted agent at the prompt: injects nothing and waits for one to start (§27.2)', () => {
+    // Injecting into a bare shell would type the whole prompt into it, so `absent` never injects. The
+    // operator may not have started Claude or Codex yet, so the turn waits for one instead of failing.
     hosted = 'absent';
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
     expect(inject).not.toHaveBeenCalled();
-    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(writeError).not.toHaveBeenCalled();
+    expect(armAgentWait).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('in-flight');
+  });
+
+  it('an agent started within the wait gets the turn once it is idle at its prompt', () => {
+    hosted = 'absent';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onInjectable(); // the shell settled again: still no agent
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).not.toHaveBeenCalled();
+    hosted = 'idle';
+    r.onInjectable();
+    expect(inject).toHaveBeenCalledWith('PROMPT for work-plan');
+    r.onAgentWaitElapsed();
+    expect(writeError).not.toHaveBeenCalled();
+    expect(r.state()).toBe('in-flight');
+  });
+
+  it('no agent by the end of the wait: errors without injecting', () => {
+    hosted = 'absent';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onAgentWaitElapsed();
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledWith('no hosted agent at the prompt');
     expect(r.state()).toBe('error');
+    hosted = 'idle';
+    r.onInjectable();
+    expect(inject).not.toHaveBeenCalled();
+  });
+
+  it('the end of a wait never errors a turn that was not waiting for an agent', () => {
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onAgentWaitElapsed();
+    expect(writeError).not.toHaveBeenCalled();
+    expect(r.state()).toBe('in-flight');
   });
 
   it('a refused injection sends nothing, not even the boundary, and errors with the refusal as the reason', () => {
@@ -340,17 +388,17 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
-  it('a deferred turn errors if the agent leaves the prompt while waiting (Claude quit mid-wait, §27.2)', () => {
-    // Busy → deferred (wait it out). If the agent then disappears (operator quits Claude → normal buffer),
-    // the next injectable poke must resolve to `error`, not re-inject into the now-bare shell.
+  it('a deferred turn whose agent leaves the prompt waits for one, then errors (Claude quit mid-wait, §27.2)', () => {
     hosted = 'busy';
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
-    expect(inject).not.toHaveBeenCalled();
     hosted = 'absent';
     r.onInjectable();
     expect(inject).not.toHaveBeenCalled();
-    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(writeError).not.toHaveBeenCalled();
+    r.onAgentWaitElapsed();
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledWith('no hosted agent at the prompt');
     expect(r.state()).toBe('error');
   });
 

@@ -1,4 +1,4 @@
-// §28.5.1 (v2.210) — the record of every test RED wrote that a later step changed, kept for the branch and read
+// §28.5.1 — the record of every test RED wrote that a later step changed, kept for the branch and read
 // by the implementation approval as its `red-test-changes` input.
 
 import { readFileSync } from 'node:fs';

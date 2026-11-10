@@ -116,6 +116,7 @@ export interface AppGitRemote {
   fetchRef(url: string, ref: string): Promise<string>;
   readRef(url: string, ref: string): Promise<string | null>;
   createRef(url: string, oid: string, ref: string): Promise<void>;
+  fastForwardRef(url: string, oid: string, ref: string): Promise<void>;
   deleteRef(url: string, ref: string, expectedOid: string): Promise<void>;
 }
 
@@ -132,6 +133,7 @@ export function createAppGitRemote(
       objectDirectory: string;
       objectFormat: 'sha1' | 'sha256';
     }> = Promise.all([
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       runAppCommand(
         'git',
         [
@@ -142,6 +144,7 @@ export function createAppGitRemote(
         ],
         repoDir,
       ),
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       runAppCommand('git', ['rev-parse', '--show-object-format'], repoDir),
     ]).then(([objects, objectFormat]) => {
       const rawObjects = objects.trim();
@@ -175,6 +178,7 @@ export function createAppGitRemote(
     );
     try {
       const repository = await layout();
+      // eslint-disable-next-line local/git-hardening -- runs in its own temporary repository under the caller's protected args
       await runAppCommand(
         'git',
         [
@@ -191,6 +195,7 @@ export function createAppGitRemote(
       // sees every object they own as unreachable and collects it.
       const noHousekeeping = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
       const git = (args: string[]): Promise<string> =>
+        // eslint-disable-next-line local/git-hardening -- runs in its own temporary repository under the caller's protected args
         executeAppCommand(
           'git',
           ['--git-dir', temporaryGitDir, ...configArgs, ...noHousekeeping, ...args],
@@ -248,6 +253,17 @@ export function createAppGitRemote(
           'push',
           '--receive-pack=git-receive-pack',
           `--force-with-lease=${ref}:`,
+          '--',
+          url,
+          `${source}:${ref}`,
+        ]);
+      }),
+    fastForwardRef: (url, oid, ref) =>
+      isolated(async (git) => {
+        const source = parseAppGitObjectId(oid, 'local ref');
+        await git([
+          'push',
+          '--receive-pack=git-receive-pack',
           '--',
           url,
           `${source}:${ref}`,

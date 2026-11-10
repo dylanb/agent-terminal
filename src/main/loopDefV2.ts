@@ -61,7 +61,7 @@ export interface BoundaryPolicy {
  *  an open def-declared set. NOT the §27.8 executable capability: a program a def names is declared once,
  *  on the top-level `exec` field (`ExecSideEffect`), which `toGate` refuses to let a gate side-effect name —
  *  one surface, not scattered (CWE-829). Def tiers carry no trust distinction and the executable side-effect
- *  is unshipped; shipping it requires deciding trust afresh (v2.129). */
+ *  is unshipped; shipping it requires deciding trust afresh. */
 export interface GateSideEffect {
   kind: string;
   args: Record<string, unknown>;
@@ -93,6 +93,14 @@ export function requiresResultBinding(mode: WorkCompletion): boolean {
   return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);
 }
 
+/** The checks a work turn's agent can be handed to run on what it wrote (§29). Prompt-only: no engine gate. */
+export const SELF_CHECKS = ['loop-capabilities'] as const;
+export type SelfCheck = (typeof SELF_CHECKS)[number];
+const SELF_CHECK_SET: ReadonlySet<string> = new Set(SELF_CHECKS);
+function isSelfCheck(value: string): value is SelfCheck {
+  return SELF_CHECK_SET.has(value);
+}
+
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
  *  §28.4 — the optional completion mode (absent for the existing §27 loops). */
 export interface WorkRecipe {
@@ -105,6 +113,7 @@ export interface WorkRecipe {
   checkpoint?: { passes: number };
   /** §28.5.1 */
   frozenCheck?: true;
+  selfCheck?: SelfCheck;
 }
 
 /** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
@@ -142,6 +151,18 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
+/** A pickup that adopts the existing pull request the step's `pr`-typed input names, instead of opening one for a
+ *  ticket. */
+export interface AdoptPickupV2 {
+  adopt: 'pr';
+}
+
+export type PickupV2 = PickupContractV2 | AdoptPickupV2;
+
+export function isAdoptPickup(pickup: PickupV2): pickup is AdoptPickupV2 {
+  return 'adopt' in pickup;
+}
+
 /** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
  *  full-catalog sweep. Closed set, recognized by exact string. */
 export const POLISH_POLICIES = ['fix', 'defer'] as const;
@@ -159,7 +180,7 @@ export interface ReportStructure {
 
 /** The def-supplied executable side-effect (§27.8): a def MAY name a program to run. INERT in this slice —
  *  no execution surface runs one. Def tiers carry no trust distinction; shipping the executable side-effect
- *  requires deciding trust afresh (v2.129). */
+ *  requires deciding trust afresh. */
 export interface ExecSideEffect {
   program: string;
 }
@@ -176,7 +197,7 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2 | null;
+  pickup: PickupV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
@@ -332,7 +353,7 @@ function toGate(raw: unknown): GateOptionDef[] {
       const kind = requireString(seRec.kind, `gate option ${option} side-effect kind`);
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
       // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
-      // tiers carry no trust distinction (v2.129).
+      // tiers carry no trust distinction.
       if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
@@ -378,9 +399,15 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   });
 }
 
-function toPickup(raw: unknown): PickupContractV2 | null {
+function toPickup(raw: unknown): PickupV2 | null {
   if (raw === undefined) return null;
   const pickup = requireRecord(raw, 'pickup');
+  if ('adopt' in pickup) {
+    if (pickup.adopt !== 'pr') fail(`pickup adopt must be pr: ${String(pickup.adopt)}`);
+    const stray = Object.keys(pickup).find((key) => key !== 'adopt');
+    if (stray !== undefined) fail(`pickup adopt: pr takes no other key: ${stray}`);
+    return { adopt: 'pr' };
+  }
   return {
     initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
     branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
@@ -420,6 +447,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
   if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
+  let workSelfCheck: SelfCheck | undefined;
+  if (work.self_check !== undefined) {
+    const c = requireString(work.self_check, 'work self_check');
+    if (!isSelfCheck(c)) fail(`unknown work self_check: ${c} (expected ${SELF_CHECKS.join(' or ')})`);
+    workSelfCheck = c;
+  }
 
   let workGoal: string | undefined;
   if (work.goal !== undefined) {
@@ -486,6 +519,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       ...(workGoal !== undefined ? { goal: workGoal } : {}),
       ...(workCheckpoint !== undefined ? { checkpoint: workCheckpoint } : {}),
       ...(workFrozenCheck ? { frozenCheck: true as const } : {}),
+      ...(workSelfCheck !== undefined ? { selfCheck: workSelfCheck } : {}),
     },
     reviewers,
     rounds,
@@ -504,7 +538,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
  *  EXISTING file wins). The loop name is held to a single safe segment BEFORE it is joined to any tier root.
  *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. Each
  *  candidate carries the jail its own construction site resolved and a plain display name used only to
- *  compose failure messages — no tier carries a trust label (v2.129). */
+ *  compose failure messages — no tier carries a trust label. */
 interface DefCandidate {
   tierRoot: string;
   defDir: string;
@@ -597,12 +631,12 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;
-  // AC 5 (§B.6): with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
+  // AC 5: with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
   // turns the bare miss into a reason naming why it stopped resolving, on the same per-step loop-error path
   // AC 4 uses. PRESENCE only: the retired def's content is never read, parsed, moved or deleted. The retired
   // root is the operator's own ground and may be absent on a first run, so it jails through resolveOwnedDirJail
   // (a null jail — no ~/.claude — is simply "no retired def", the bare reason); the reason-surfacing branch
-  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape (§B.6).
+  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape.
   if (ctx.tiers.retired !== null) {
     const retiredJail = resolveOwnedDirJail(ctx.tiers.retired);
     if (retiredJail !== null) {

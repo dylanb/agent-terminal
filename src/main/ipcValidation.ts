@@ -3,14 +3,16 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
-import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
+import { isAppBootstrapConflictTarget, isTicketRef } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { RUN_IDENTITY_KEYS } from '../shared/runIdentity';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
   INSTALL_DESTINATION_IDS,
+  isTheme,
   SESSION_ID,
   type FlowAppRouteOutMsg,
   type FlowAppGateDecisionMsg,
@@ -34,10 +36,12 @@ import {
   type FlowClearActiveFlowMsg,
   type FlowListCatalogMsg,
   type FlowRebindHeldRunMsg,
+  type FlowConfirmRunPickupMsg,
   type RebindChoice,
   type StepMissingConsent,
   CATALOG_ORIGINS,
   type FlowResolveAppBootstrapConflictMsg,
+  type FlowResolveAdoptTicketMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
@@ -57,6 +61,9 @@ import {
   type UiSetSettingsMsg,
   type ViewerReadMsg,
   type ViewerTreeMsg,
+  type SetupAgentStateMsg,
+  type SetupDismissMsg,
+  type SetupStatusMsg,
 } from '../shared/ipc';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
@@ -77,7 +84,7 @@ function isLiveSession(m: Record<string, unknown>): boolean {
 }
 
 function isPositiveInt(n: unknown): n is number {
-  return typeof n === 'number' && Number.isInteger(n) && n > 0;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 }
 
 export function isValidInput(m: unknown): m is PtyInputMsg {
@@ -124,7 +131,8 @@ export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApp
     typeof m.previewId !== 'string' ||
     m.previewId.length === 0 ||
     m.previewId.length > INSTALL_PREVIEW_ID_MAX ||
-    !Array.isArray(m.replace)
+    !Array.isArray(m.replace) ||
+    typeof m.removeRetired !== 'boolean'
   ) {
     return false;
   }
@@ -150,7 +158,7 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   const s = m.settings;
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
-  if ('theme' in s && s.theme !== 'light' && s.theme !== 'dark') return false;
+  if ('theme' in s && !isTheme(s.theme)) return false;
   // Artifact viewer widths (§20.2).
   for (const k of ['artifactTreeWidth', 'artifactFullscreenTreeWidth'] as const) {
     if (k in s && (typeof s[k] !== 'number' || !Number.isFinite(s[k]))) return false;
@@ -209,6 +217,21 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
   );
 }
 
+export function isValidSetupStatus(m: unknown): m is SetupStatusMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+export function isValidSetupAgentState(m: unknown): m is SetupAgentStateMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidSetupDismiss(m: unknown): m is SetupDismissMsg {
+  if (!isRecord(m) || !isLiveSession(m) || !isRecord(m.dismissal)) return false;
+  const { dismissal } = m;
+  if (dismissal.kind === 'repo') return isSafeRepoKey(dismissal.repoKey);
+  return dismissal.kind === 'examples' && typeof dismissal.appVersion === 'string';
+}
+
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
 export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlowMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
@@ -244,6 +267,23 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
     isSafeRepoKey(m.repoKey) &&
     isValidRebindChoice(m.choice) &&
     isValidStepMissingConsent(m.ifStepMissing)
+  );
+}
+
+/** flow:confirmRunPickup (§27.13, §6) */
+export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPickupMsg {
+  return (
+    isRecord(m) &&
+    hasExactKeys(m, ['sessionId', 'repoKey', 'run', 'pr', 'ticket']) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isRecord(m.run) &&
+    hasExactKeys(m.run, RUN_IDENTITY_KEYS) &&
+    typeof m.run.flow === 'string' &&
+    typeof m.run.startedAt === 'number' &&
+    Number.isFinite(m.run.startedAt) &&
+    isPositiveInt(m.pr) &&
+    isPositiveInt(m.ticket)
   );
 }
 
@@ -356,6 +396,15 @@ export function isValidFlowResolveAppBootstrapConflict(
     typeof m.wipe === 'boolean' &&
     isAppBootstrapConflictTarget(m)
   );
+}
+
+/** flow:resolveAdoptTicket — the operator's answer to one ticket-choice offer. */
+export function isValidFlowResolveAdoptTicket(m: unknown): m is FlowResolveAdoptTicketMsg {
+  if (!isRecord(m) || !isLiveSession(m) || !isSafeRepoKey(m.repoKey)) return false;
+  if (typeof m.step !== 'string' || m.step.length === 0 || typeof m.choiceId !== 'string' || m.choiceId.length === 0) return false;
+  const answer = m.answer;
+  if (!isRecord(answer)) return false;
+  return answer.kind === 'cancel' || (answer.kind === 'ticket' && isTicketRef(answer.ticket));
 }
 
 /** flow:resolveEpicPromotion — the operator's confirm/decline of the §28.7 confirm-first preview. `repoKey`

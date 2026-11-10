@@ -1,5 +1,5 @@
 // §28.3/§28.5.1 — the `commit` gate side-effect: a local `git commit` fired out-of-band on §27.9 approve,
-// alongside the §27.13 `gh` side-effects. Best-effort (§27.13 / AC3): a failure never aborts the accept. On a
+// alongside the §27.13 `gh` side-effects (§27.13 decides whether its failure holds the gate). On a
 // commit it captures the new HEAD SHA (§28.5.1) — the baseline the next phase's frozen-tests diffs from — and
 // stages ONLY the phase's own paths (the injected phase-start snapshot leaves operator WIP untouched, §28.3).
 
@@ -82,6 +82,7 @@ export function createAppGateCommit(
  *  when there are none (git's contract); any other failure rethrows. */
 async function hasStagedChanges(repoDir: string): Promise<boolean> {
   try {
+    // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
     await run('git', ['diff', '--cached', '--quiet'], repoDir, 'commit side-effect: git diff failed');
     return false;
   } catch (e) {
@@ -93,6 +94,7 @@ async function hasStagedChanges(repoDir: string): Promise<boolean> {
 export function createRealAppGateCommit(
   repoDir: string,
 ): RunAppGateCommitSideEffect {
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const readRev = async (args: string[], failure: string): Promise<string> => (await run('git', args, repoDir, failure)).trim();
   const git: AppGateCommitOperations = {
     // Rejects on a rootless repo (no HEAD) — the §28 chain always runs post-pickup, so a missing HEAD is a
@@ -100,6 +102,7 @@ export function createRealAppGateCommit(
     headCommit: () => readRev(['rev-parse', '--verify', '--end-of-options', 'HEAD'], 'commit side-effect: git rev-parse HEAD failed'),
     commitWorkingTree: async (label, dirtyAtPhaseStart) => {
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       await run('git', ['add', '-A'], repoDir, 'commit side-effect: git add failed');
       // Unstage what a phase commit must never sweep (§28.3): operator WIP already dirty at phase start, and
       // the app's OWN state dirs — APP_STATE_DIRS, the SAME set the clean-tree gate uses (never a parallel
@@ -109,6 +112,7 @@ export function createRealAppGateCommit(
       // something other than a literal path are closed: `--literal-pathspecs` a leading-`:` magic pathspec,
       // `--` a leading-`-` option, separate argv (execFile, no shell) a metachar — CWE-88/CWE-78. `git reset`
       // of a non-staged path is a clean no-op.
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       await run(
         'git',
         ['--literal-pathspecs', 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
@@ -116,6 +120,7 @@ export function createRealAppGateCommit(
         'commit side-effect: git reset failed',
       );
       if (!(await hasStagedChanges(repoDir))) return { outcome: 'nothing-to-commit' };
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       await run('git', ['commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
       // §28.5.1 — read the new commit AND its parent from ONE snapshot (`rev-list --parents -n 1`), chained
       // right after `git commit`: an atomic pair, so the composition's parent-vs-`before` check compares a

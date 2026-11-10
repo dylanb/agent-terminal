@@ -8,7 +8,6 @@ steps:
     gate_authority: auto
     loop: groom-intent-loop
     loop_namespace: app
-    todo_template: ticket-grooming
     inputs:
       - name: ticket
         type: github-ticket
@@ -77,5 +76,8 @@ steps:
     loop: impl-approve-loop
     loop_namespace: app
   - id: finalize
-    kind: manual
-    todo_template: polish
+    kind: loop
+    gate_authority: human
+    loop: finalize-loop
+    loop_namespace: app
+    todo_template: finalize

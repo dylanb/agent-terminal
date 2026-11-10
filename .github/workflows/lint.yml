@@ -1,0 +1,39 @@
+# Lint and typecheck gate every PR; test.yml and e2e.yml run the suites only after a merge (docs/test-proof.md).
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fails the build on any code TODO/FIXME comment (local/no-todo-comments) or any Markdown Mermaid
+      # diagram that does not parse, catching a --no-verify bypass of the husky pre-commit hook before
+      # either reaches the default branch.
+      - run: pnpm lint
+
+      # vitest strips types without checking them, so this is the only check of the tests' types.
+      - run: pnpm typecheck

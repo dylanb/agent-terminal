@@ -3,16 +3,27 @@ import type { BundleLocation } from './bundleLocation';
 
 export type IconLocation = BundleLocation;
 
-export function resolveWindowIconPath(loc: IconLocation): string {
+const ICON_FILES = {
+  terminal: 'icon.png',
+  controller: 'controller-icon.png',
+  'controller-needs-human': 'controller-icon-needs-human.png',
+  'controller-error': 'controller-icon-error.png',
+} as const;
+
+export type AppIcon = keyof typeof ICON_FILES;
+
+export const APP_ICONS = Object.keys(ICON_FILES) as AppIcon[];
+
+export function resolveWindowIconPath(loc: IconLocation, icon: AppIcon): string {
   return loc.packaged
-    ? path.join(loc.resourcesPath, 'icon.png')
-    : path.join(loc.appPath, 'build', 'icon.png');
+    ? path.join(loc.resourcesPath, ICON_FILES[icon])
+    : path.join(loc.appPath, 'build', ICON_FILES[icon]);
 }
 
 /** The Dock / CMD-TAB icon path, or null off macOS where `app.dock` does not exist. macOS ignores
  *  `BrowserWindow.icon` for the Dock, so it must be set explicitly via `app.dock.setIcon`. */
-export function resolveDockIconPath(platform: NodeJS.Platform, loc: IconLocation): string | null {
-  return platform === 'darwin' ? resolveWindowIconPath(loc) : null;
+export function resolveDockIconPath(platform: NodeJS.Platform, loc: IconLocation, icon: AppIcon): string | null {
+  return platform === 'darwin' ? resolveWindowIconPath(loc, icon) : null;
 }
 
 export interface DockIconTarget {
@@ -23,8 +34,9 @@ export function applyDockIcon(
   dock: DockIconTarget | undefined,
   platform: NodeJS.Platform,
   loc: IconLocation,
+  icon: AppIcon,
 ): void {
-  const iconPath = resolveDockIconPath(platform, loc);
+  const iconPath = resolveDockIconPath(platform, loc, icon);
   if (!iconPath || !dock) return;
   // The Dock icon is cosmetic; setIcon throws synchronously on an unreadable image, and this runs
   // inside createWindow before the BrowserWindow exists — so a throw here must never abort the window.

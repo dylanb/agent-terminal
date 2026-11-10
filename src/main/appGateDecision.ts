@@ -4,12 +4,9 @@
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd, type GateDecider, type GateDecisionAuditKind } from '../shared/audit';
 import type { AutoHaltReason } from '../shared/gateAuthority';
-import {
-  validFeedback,
-  validInstruction,
-  type AppLoopBootstrap,
-  type AppLoopRunState,
-} from './appLoopState';
+import { validFeedback, validInstruction, type AppLoopRunState } from './appLoopState';
+import type { RunPickup } from './trustedPickups';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import type {
   GateSideEffect,
   LoopDefV2,
@@ -18,8 +15,10 @@ import type {
 import type { EpicGateOutcome } from './epicPromotion';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 import type { RunAppGateCommitSideEffect } from './appGateCommit';
+import type { RunAppGatePush } from './appGatePush';
 import { stripStatusControlChars } from '../shared/loopStatus';
 import { errMsg } from './errno';
+import { approveEndsSliceBrief } from './sliceBriefReader';
 import type { SectionedReport } from './reportSections';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
@@ -27,7 +26,8 @@ import type { SectionedReport } from './reportSections';
 export interface AppGateRefs {
   pr: number | null;
   ticket: number | null;
-  bootstrap: AppLoopBootstrap | null;
+  /** The run's trusted pickup: a ticket run's, or an adopting run's. */
+  pickup: RunPickup | null;
 }
 
 /** The executor's injection seam — each member a domain concept, not a mechanism (CODE-STANDARDS seam rule),
@@ -37,9 +37,12 @@ export interface AppGateDecisionDeps {
   resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   refs(repoDir: string): AppGateRefs;
   runSideEffect: RunAppGateSideEffect;
-  /** §28.3 — the `commit` side-effect port: a local `git commit` carrying the descriptor's phase label,
-   *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
+  /** §28.3 — the `commit` side-effect port: a local `git commit` carrying the descriptor's phase label. */
   runCommitSideEffect: RunAppGateCommitSideEffect;
+  /** §28.3 */
+  runPushSideEffect: RunAppGatePush;
+  /** §27.13 */
+  failureHoldsGate(repoDir: string, step: string): boolean;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   /** §27.10 — rebuild a report from the section files its steps wrote; throws when it cannot. */
   assembleReport(repoDir: string, report: SectionedReport): void;
@@ -51,14 +54,16 @@ export interface AppGateDecisionDeps {
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
    *  redo/polish family it is NOT approve — no accept, no advance — the flow jumps back and RED re-runs.
-   *  Returns whether the flow is now back at RED. `reopened` runs once the flow is back at RED and before the
+   *  Returns whether the flow is now back at its return step. `reopened` runs once it is and before the
    *  re-entry is recorded (§25), so the decision entry lands in the gate's step window, not RED's. */
   reopenSlice(repoDir: string, reopened: () => void): boolean;
   /** §28.4.2 — persist the operator's brief for the slice about to be reopened (the composition root keys it to
    *  the current slice). Throws when it cannot be written; the executor then does not reopen. */
   recordSliceBrief(repoDir: string, fromStep: string, text: string): void;
-  /** §28.4.2 — drop the slice brief: on a failed reopen (rollback) and when the slice ends (refactor approve). */
+  /** §28.4.2 — drop the slice brief: on a failed reopen (rollback) and when its last reader is approved. */
   clearSliceBrief(repoDir: string): void;
+  /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
+  reopenStep(repoDir: string): string | null;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
   maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string, decider?: GateDecider): EpicGateOutcome;
@@ -114,6 +119,7 @@ export function resolveGateSideEffectBodyFile(
 
 export type GateApproveOutcome =
   | { kind: 'advanced'; effectFailures: string[] }
+  | { kind: 'held' }
   | { kind: 'preview-raised' }
   | { kind: 'blocked' }
   | { kind: 'refused'; reason: string }
@@ -202,10 +208,10 @@ export async function runAppGateDecision(
     return entered;
   }
   // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
-  // slice's RED step (reopenSlice) so the operator can redo missed work. One-way like polish (no note to lose):
+  // slice's RED step (reopenSlice) so the operator can redo missed work. Like polish it carries no note to lose:
   // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
   // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
-  // never crashing the decision path into the one-way void caller as an unhandled rejection.
+  // never rejecting the decision path.
   if (option === 'back-to-red') {
     const brief = validInstruction(note?.trim());
     if (brief !== undefined) {
@@ -290,8 +296,117 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     }
   }
 
+  const refs = deps.refs(repoDir);
+  /** False when the side-effect failed; an unknown kind is skipped. */
+  const runEffect = async (se: GateSideEffect, notify: (notice: string) => void): Promise<boolean> => {
+    if (se.kind === 'gh') {
+      const action = typeof se.args.action === 'string' ? se.args.action : '';
+      const ctx: AppGateSideEffectCtx = {
+        pr: refs.pr,
+        ticket: refs.ticket,
+        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
+        pickup: refs.pickup,
+      };
+      try {
+        const result = await deps.runSideEffect(action, ctx);
+        if (result.outcome === 'no-target') {
+          gateAudit('side-effect-skipped', 0, `${action}: ${result.reason}`);
+          notify(`${action} skipped: ${result.reason}`);
+        } else {
+          gateAudit('side-effect', 0, action);
+        }
+        return true;
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
+        deps.emitError(`approve side-effect failed: ${reason}`);
+        return false;
+      }
+    }
+    if (se.kind !== 'commit') return true;
+    // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
+    // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
+    const label = typeof se.args.label === 'string' ? se.args.label : '';
+    try {
+      const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
+      if (result.outcome === 'committed') {
+        // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
+        gateAudit('side-effect', 0, `commit: ${label}`);
+        // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
+        // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
+        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
+        // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
+        // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
+        // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
+        // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
+        // an automatic block.
+        try {
+          deps.recordBaseline(repoDir, result.branch, result.sha);
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          gateAudit('baseline-record-failed', 1, reason);
+          deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
+        }
+      } else {
+        // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
+        // wording must never read as a failure.
+        gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
+        notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      gateAudit('side-effect-failed', 1, `commit: ${reason}`);
+      deps.emitError(`approve side-effect failed: ${reason}`);
+      return false;
+    }
+    // §28.3
+    if (refs.pickup === null || isAdoptedPickup(refs.pickup)) return true;
+    const branch = refs.pickup.branch;
+    try {
+      await deps.runPushSideEffect(branch);
+      gateAudit('side-effect', 0, `push: ${branch}`);
+      return true;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      gateAudit('side-effect-failed', 1, `push: ${branch}: ${reason}`);
+      deps.emitError(`could not push ${branch} to the pull request: ${reason}`);
+      return false;
+    }
+  };
+  /** §27.10 — false when a report could not be rebuilt. */
+  const assembleReports = (): boolean => {
+    let ok = true;
+    for (const o of r.def.outputs) {
+      if (o.sectionsDir === undefined) continue;
+      try {
+        deps.assembleReport(repoDir, { path: o.path, sectionsDir: o.sectionsDir });
+      } catch (e) {
+        const reason = errMsg(e);
+        deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
+        deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
+        ok = false;
+      }
+    }
+    return ok;
+  };
+
+  // §27.13
+  const holds = decider.kind === 'human' && deps.failureHoldsGate(repoDir, step);
+  const heldNotices: string[] = [];
+  if (holds) {
+    let ok = assembleReports();
+    for (const se of gateOpt.sideEffects) {
+      if (!ok) break;
+      ok = await runEffect(se, (notice) => heldNotices.push(notice));
+    }
+    if (!ok) {
+      deps.onViewChanged();
+      return { kind: 'held' };
+    }
+  }
+
   // D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
-  // re-run the outward side-effect); a failed side-effect does not (§27.13 / AC3).
+  // re-run the outward side-effect); past a gate that does not hold, a failed side-effect does not (§27.13 / AC3).
   try {
     deps.persistAccept(repoDir, { loop: run.loop, step: run.step, turnKey: run.turnKey, status: 'accepted' });
   } catch (e) {
@@ -316,73 +431,12 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   }
   deps.onViewChanged();
 
-  // §27.10
-  for (const o of r.def.outputs) {
-    if (o.sectionsDir === undefined) continue;
-    try {
-      deps.assembleReport(repoDir, { path: o.path, sectionsDir: o.sectionsDir });
-    } catch (e) {
-      const reason = errMsg(e);
-      deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
-      deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
-    }
-  }
-
-  // §27.13/§28.3 / AC3 — dispatch each declared side-effect by kind; an unknown kind is silently skipped.
-  const refs = deps.refs(repoDir);
-  for (const se of gateOpt.sideEffects) {
-    if (se.kind === 'gh') {
-      const action = typeof se.args.action === 'string' ? se.args.action : '';
-      const ctx: AppGateSideEffectCtx = {
-        pr: refs.pr,
-        ticket: refs.ticket,
-        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-        bootstrap: refs.bootstrap,
-      };
-      try {
-        await deps.runSideEffect(action, ctx);
-        gateAudit('side-effect', 0, action);
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
-        deps.emitError(`approve side-effect failed: ${reason}`);
-      }
-    } else if (se.kind === 'commit') {
-      // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
-      // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
-      const label = typeof se.args.label === 'string' ? se.args.label : '';
-      try {
-        const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
-        if (result.outcome === 'committed') {
-          // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
-          gateAudit('side-effect', 0, `commit: ${label}`);
-          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
-          // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
-          // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
-          // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
-          // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
-          // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-          // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
-          // an automatic block. Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
-          try {
-            deps.recordBaseline(repoDir, result.branch, result.sha);
-          } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
-            gateAudit('baseline-record-failed', 1, reason);
-            deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
-          }
-        } else {
-          // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
-          // wording must never read as a failure, and this path must not throw (the accept/advance run below).
-          gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
-          deps.emitNotice(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
-        }
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        gateAudit('side-effect-failed', 1, `commit: ${reason}`);
-        deps.emitError(`approve side-effect failed: ${reason}`);
-      }
-    }
+  if (holds) {
+    for (const notice of heldNotices) deps.emitNotice(notice);
+  } else {
+    assembleReports();
+    // §27.13/§28.3 / AC3
+    for (const se of gateOpt.sideEffects) await runEffect(se, deps.emitNotice);
   }
 
   // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
@@ -393,9 +447,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   } catch (e) {
     gateAudit('source-slices-failed', 1, e instanceof Error ? e.message : String(e));
   }
-  // §28.4.2 — refactor is the slice's last phase: approving it ends the slice, so its back-to-RED brief goes.
-  // Best-effort after the accept persisted; a residual brief is keyed to this slice and never reaches another.
-  if (r.def.work.completion === 'refactor') {
+  // §28.4.2 — the brief goes when its last reader is approved. Best-effort after the accept persisted.
+  if (approveEndsSliceBrief(r.def.work.completion, step, deps.reopenStep(repoDir))) {
     try {
       deps.clearSliceBrief(repoDir);
     } catch (e) {

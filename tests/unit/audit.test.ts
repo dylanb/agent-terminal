@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
+import { dump } from 'js-yaml';
 import {
   auditFileStamp,
   auditTimestamp,
@@ -101,6 +102,32 @@ describe('audit stream serialize ↔ parse (§25.3)', () => {
     expect(parsed.header).toEqual(header);
     expect(parsed.events).toEqual([events[0]]);
   });
+});
+
+describe("ticket.assoc's repository (§25.5, #304 AC 4)", () => {
+  const header: AuditHeader = { flow: 'adopt-pr', repo: 'repo', repoPath: '/a/repo', started: '2026-11-06T10:00:00Z' };
+  const assoc = (fields: Record<string, unknown>): Record<string, unknown> => ({ ts: '2026-11-06T10:00:01Z', type: 'ticket.assoc', ticket: 177, ...fields });
+  const stream = (event: Record<string, unknown>): string => `${serializeDoc(header)}---\n${dump(event)}`;
+
+  it("replays an adopting run's ticket with its repository", () => {
+    const parsed = parseAuditStream(stream(assoc({ repo: 'contributor/fork' })));
+    expect.soft(parsed.events).toEqual([assoc({ repo: 'contributor/fork' })]);
+    expect.soft(parsed.incomplete).toBe(false);
+  });
+
+  it("replays a ticket run's ticket, which names no repository, as before", () => {
+    const parsed = parseAuditStream(stream(assoc({})));
+    expect.soft(parsed.events).toEqual([assoc({})]);
+    expect.soft(reconstructTimeline(stream(assoc({}))).ticket).toBe(177);
+  });
+
+  for (const repo of ['contributor', 'contributor/fork/extra', 'contributor/fo rk', 42]) {
+    it(`refuses a ticket association whose repository ${JSON.stringify(repo)} is not <owner>/<name>`, () => {
+      const parsed = parseAuditStream(stream(assoc({ repo })));
+      expect.soft(parsed.events).toEqual([]);
+      expect.soft(parsed.incomplete).toBe(true);
+    });
+  }
 });
 
 describe('lifecycleEvents — start opens the run (§25.4/§25.5)', () => {
@@ -742,7 +769,7 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
     expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'engine-input-missing' }, { reason: 'interrupt-armed' }, { reason: 'engine-input-missing', detail: 'x' }]))).toEqual(['interrupt-armed', 'engine-input-missing']);
   });
 
-  // #137 S2 — v2.184 retired (f) and (g); the letters are not reused.
+  // (f) and (g) are retired; the letters are not reused.
   it('(f) and (g) are not halt reasons', () => {
     expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: f — x')).toBeNull();
     expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: g — x')).toBeNull();

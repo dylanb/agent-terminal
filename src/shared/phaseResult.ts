@@ -4,7 +4,7 @@
 // is kept verbatim in a file of its own beside the result, which the predicate requires to be present and
 // non-empty but never reads.
 
-import { PHASE_OUTCOMES, type PhaseOutcome } from './phaseOutcome';
+import { PHASE_OUTCOMES, RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, type PhaseOutcome } from './phaseOutcome';
 import { BUILD_OUTCOMES, type BuildOutcome } from './buildOutcome';
 import { isJsonRecord, readJsonObject } from './jsonArtifact';
 
@@ -12,6 +12,7 @@ export const PHASE_RESULT_FIELDS = {
   outcome: 'outcome',
   build: 'build',
   intendedFailures: 'intendedFailures',
+  verificationOnly: 'verificationOnly',
 } as const;
 
 /** A check a RED test is meant to fail at (§28.5.3): repo-relative, `/`-separated, and its 1-based line. */
@@ -26,7 +27,20 @@ export interface PhaseResult {
   build: BuildOutcome | null;
   /** §28.5.3 — the RED result's declared failure locations; null when the result declares none. */
   intendedFailures: IntendedFailure[] | null;
+  /** §28.5.3 — a RED whose new tests pass because the slice's behavior already exists. */
+  verificationOnly: boolean;
 }
+
+/** What completes a phase: the outcome (and, for GREEN, the build) it wants, and whether a verification-only
+ *  result also completes it (RED alone, §28.5.3). */
+export interface PhaseResultWant {
+  outcome: PhaseOutcome;
+  build?: BuildOutcome;
+  acceptsVerificationOnly?: true;
+}
+
+/** §28.5.3 */
+export const RED_COMPLETION: PhaseResultWant = { outcome: RED_COMPLETING_OUTCOME, acceptsVerificationOnly: true };
 
 export type PhaseResultRead = { ok: true; result: PhaseResult } | { ok: false; problem: string };
 
@@ -72,7 +86,15 @@ export function readPhaseResult(text: string): PhaseResultRead {
     }
     intendedFailures = entries as IntendedFailure[];
   }
-  return { ok: true, result: { outcome: outcome as PhaseOutcome, build: build as BuildOutcome | null, intendedFailures } };
+  const verificationOnly = doc[f.verificationOnly] ?? false;
+  if (typeof verificationOnly !== 'boolean') return { ok: false, problem: `its "${f.verificationOnly}" is not true or false` };
+  if (verificationOnly && outcome !== RED_VERIFICATION_OUTCOME) {
+    return { ok: false, problem: `its "${f.verificationOnly}" claims a run whose "${f.outcome}" is not ${RED_VERIFICATION_OUTCOME}` };
+  }
+  if (verificationOnly && intendedFailures !== null) {
+    return { ok: false, problem: `its "${f.verificationOnly}" run declares "${f.intendedFailures}", which only a failing run has` };
+  }
+  return { ok: true, result: { outcome: outcome as PhaseOutcome, build: build as BuildOutcome | null, intendedFailures, verificationOnly } };
 }
 
 /** §28.5.5 */
@@ -91,12 +113,15 @@ export function phaseOutputRel(resultRel: string): string {
  *  agent's own check both decide by this. */
 export function phaseResultEnd(
   files: { result: string; captured: string | null; capturedRel: string },
-  want: { outcome: PhaseOutcome; build?: BuildOutcome },
+  want: PhaseResultWant,
 ): PhaseResultRead {
   const read = readPhaseResult(files.result);
   if (!read.ok) return { ok: false, problem: `it is not well-formed: ${read.problem}` };
-  const { outcome, build } = read.result;
-  if (outcome !== want.outcome) return { ok: false, problem: `it reports ${outcome}, not ${want.outcome}` };
+  const { outcome, build, verificationOnly } = read.result;
+  if (verificationOnly && want.acceptsVerificationOnly !== true) {
+    return { ok: false, problem: 'it is a verification-only result, which completes only a RED' };
+  }
+  if (!verificationOnly && outcome !== want.outcome) return { ok: false, problem: `it reports ${outcome}, not ${want.outcome}` };
   if (want.build !== undefined && build !== want.build) {
     return { ok: false, problem: `it reports ${build === null ? 'no build' : `build ${build}`}, not ${want.build}` };
   }
@@ -119,15 +144,19 @@ export function exampleCapturedOutput(outcome: PhaseOutcome): string {
   return `${SAMPLE_CAPTURED[outcome]}\n`;
 }
 
-/** The ONE canonical example the predicate test, the fake-agent e2e output and the prompt few-shot reference
- *  (§28.5.5), one per outcome so any can be scripted; `opts` adds GREEN's build or RED's intended failures. */
-export function examplePhaseResult(outcome: PhaseOutcome, opts?: { build?: BuildOutcome; intendedFailures?: IntendedFailure[] }): string {
+/** The ONE canonical example the fake-agent e2e output and the prompt few-shot reference (§28.5.5), one per
+ *  outcome so any can be scripted; `opts` adds GREEN's build or RED's intended failures. */
+export function examplePhaseResult(
+  outcome: PhaseOutcome,
+  opts?: { build?: BuildOutcome; intendedFailures?: IntendedFailure[]; verificationOnly?: true },
+): string {
   const f = PHASE_RESULT_FIELDS;
   return `${JSON.stringify(
     {
       [f.outcome]: outcome,
       ...(opts?.build !== undefined ? { [f.build]: opts.build } : {}),
       ...(opts?.intendedFailures !== undefined ? { [f.intendedFailures]: opts.intendedFailures } : {}),
+      ...(opts?.verificationOnly === true ? { [f.verificationOnly]: true } : {}),
     },
     null,
     2,

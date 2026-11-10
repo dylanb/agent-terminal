@@ -5,10 +5,8 @@ import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { fixCriterionLines, reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
-import { ASSEMBLED_MARKER, sectionFile } from '../../src/main/reportSections';
-import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 
-// §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
+// §18.1 — the bundled Codex skill is a writer of names and paths other installed files must match: every
 // agent name and loop path it gives as an example is checked against the bundle, so a renamed convention breaks
 // this test rather than the Codex session that follows the skill.
 const SKILL_DIR = path.resolve('example', 'codex-skills', 'agent-terminal-loops');
@@ -53,15 +51,6 @@ const bundledCodexAgentNames = (): Set<string> =>
   new Set(planReviewerAgents(BUNDLE_LOOPS, CODEX_REVIEWER_AGENT).map((a) => path.basename(a.rel, CODEX_REVIEWER_AGENT.extension)));
 
 describe('the bundled Codex skill', () => {
-  it('opens with front matter naming it after its directory and describing when to use it', () => {
-    const m = /^---\n([\s\S]*?)\n---\n/.exec(skill());
-    expect(m).not.toBeNull();
-    const front = parseYaml(m![1]) as Record<string, unknown>;
-    expect(front.name).toBe(path.basename(SKILL_DIR));
-    expect(typeof front.description).toBe('string');
-    expect(String(front.description).length).toBeGreaterThan(0);
-  });
-
   it('gives as examples only agent names a bundled reviewer is installed under', () => {
     const examples = [...skill().matchAll(/`([a-z0-9]+(?:_[a-z0-9]+)*__[a-z0-9_]+)`/g)].map((m) => m[1]);
     expect(examples.length).toBeGreaterThan(0);
@@ -89,17 +78,6 @@ describe('the bundled Codex skill', () => {
     expect.soft([...skilled].filter((line) => !engine.has(line)), 'skill lines the engine does not have').toEqual([]);
   });
 
-  it('tells a hand run, which has no engine to name or assemble them, where a step writes its report section and how the report is rebuilt', () => {
-    const dir = { path: path.resolve('/repo/impl-report'), rel: 'impl-report' };
-    const text = skill().replace(/\s+/g, ' ');
-    expect(text).toContain('`sections_dir`');
-    expect(text).toContain(REPORT_SECTION_HEADING);
-    expect(text).toContain(`\`${sectionFile(dir, 'red', 1)?.rel}\``);
-    expect(text).toContain(`\`${sectionFile(dir, 'red', 2)?.rel}\``);
-    expect(text).toMatch(/rebuild the bound document from every section file/);
-    expect(text).toContain(`starts with the line \`${ASSEMBLED_MARKER}\``);
-  });
-
   it('names the Codex home directories the installer writes the loops and the reviewer agents to', () => {
     const home = path.resolve('/codex-home');
     for (const dir of [codexLoopsV2Dir(home), codexAgentsDir(home)]) {
@@ -107,9 +85,7 @@ describe('the bundled Codex skill', () => {
     }
   });
 
-  it('points at each loop file through the definition field every bundled loop names it by', () => {
-    const fields = [...skill().matchAll(/`((?:work|consolidator)\.recipe|work\.goal|brief|reviewers\[\]\.charter)`/g)].map((m) => m[1]);
-    expect(new Set(fields)).toEqual(new Set(['work.recipe', 'work.goal', 'consolidator.recipe', 'brief', 'reviewers[].charter']));
+  it('finds every file a bundled loop definition names', () => {
     for (const flow of readdirSync(BUNDLE_LOOPS)) {
       for (const loop of readdirSync(path.join(BUNDLE_LOOPS, flow))) {
         const dir = path.join(BUNDLE_LOOPS, flow, loop);

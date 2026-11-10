@@ -7,7 +7,7 @@
 import type { LoopDefV2, PolishPolicy, ReviewerTools } from './loopDefV2';
 import { boundaryCommand, flowDocumentLines, designCheckLines, sliceBriefLines } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
-import type { SliceBrief } from './appLoopState';
+import type { SliceBriefDelivery } from './sliceBriefReader';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CHANGE_RECORDING_DISPOSITIONS, DISPOSITIONS, DOCUMENTATION_DISPOSITION, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, NIT_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, FAILED_STATUS, NOT_LOADED_STATUS, RAN_STATUS, REPORT_FIELDS, exampleRoundReport } from '../shared/roundReport';
@@ -15,7 +15,7 @@ import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/ph
 import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../shared/reviewJudgement';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
@@ -95,13 +95,15 @@ export interface ReviewAndFixPromptReq {
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
    *  or a phase-result file (the reviewers then pull the diff themselves). */
   subjectRel?: string;
   /** §27.10/§27.4 */
   inputs?: ChainedInput[];
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
-  sliceBrief?: SliceBrief;
+  sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
   loopBrief?: string;
   /** §28.4 */
@@ -172,22 +174,25 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
+export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'adoption' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
 
 /** §27.4 */
 export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   const lines: string[] = [];
-  lines.push(
-    req.ticket !== undefined
-      ? `Review the work for GitHub issue #${req.ticket}. Read the issue and its comments with \`gh issue view ${req.ticket} --comments\`.`
-      : "Review this loop's work.",
-  );
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption).slice(1));
+  else {
+    lines.push(
+      req.ticket !== undefined
+        ? `Review the work for GitHub issue #${req.ticket}. Read the issue and its comments with \`gh issue view ${req.ticket} --comments\`.`
+        : "Review this loop's work.",
+    );
+  }
   if (req.subjectRel !== undefined) {
     lines.push(
       `Grade ${req.subjectRel}, the artifact this loop produced, not the issue body on GitHub. The issue is the`,
       'intent the artifact must honour, and it can still hold text the artifact has since fixed.',
     );
-  } else {
+  } else if (req.adoption === undefined) {
     lines.push(
       "The code and tests under review are this branch's change: its commits since it left the repository's",
       'default branch, plus any uncommitted changes. See them with git: `git log`, `git status`, and `git diff HEAD`.',
@@ -200,7 +205,7 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
     lines.push('Grade it against these documents, beside the ticket:', ...req.carried.map((i) => `  - ${i.id}: ${i.rel}`));
   }
   lines.push(
-    ...flowDocumentLines('described-elsewhere').slice(1),
+    ...(req.adoption === undefined ? flowDocumentLines('described-elsewhere').slice(1) : []),
     'Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only',
     'the targeted tests that checking a specific finding needs.',
     'Do not change any file: report your findings, and the fixer makes every change.',
@@ -359,7 +364,8 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     );
   }
   // §19.1 — bind the turn to the engine-resolved ticket it hands each reviewer (one shared source).
-  if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption));
+  else if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   if (req.subjectRel !== undefined) {
     lines.push(
       '',
@@ -380,7 +386,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       `\`${NEEDS_HUMAN_DISPOSITION}\` (a different mechanism or a narrower criterion), never another patch.`,
     );
   }
-  lines.push(...flowDocumentLines());
+  if (req.adoption === undefined) lines.push(...flowDocumentLines());
   lines.push(...fixCriterionLines(), ...designCheckLines());
   if (req.polish === 'defer') lines.push(...polishDeferLines());
   lines.push(...rosterLines(req.roster, req.agentKind));

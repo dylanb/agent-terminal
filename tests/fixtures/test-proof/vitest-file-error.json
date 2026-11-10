@@ -1,0 +1,72 @@
+{
+  "numTotalTestSuites": 2,
+  "numPassedTestSuites": 1,
+  "numFailedTestSuites": 1,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 4,
+  "numPassedTests": 3,
+  "numFailedTests": 0,
+  "numPendingTests": 1,
+  "numTodoTests": 0,
+  "startTime": 0,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads one",
+          "status": "passed",
+          "title": "reads one",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads two",
+          "status": "passed",
+          "title": "reads two",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads three",
+          "status": "passed",
+          "title": "reads three",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha is skipped on purpose",
+          "status": "skipped",
+          "title": "is skipped on purpose",
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 0,
+      "endTime": 1,
+      "status": "passed",
+      "message": "",
+      "name": "/repo/tests/unit/alpha.test.ts"
+    },
+    {
+      "assertionResults": [],
+      "startTime": 0,
+      "endTime": 1,
+      "status": "failed",
+      "message": "Cannot find module './missing'",
+      "name": "/repo/tests/unit/delta.test.ts"
+    }
+  ]
+}

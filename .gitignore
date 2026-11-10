@@ -2,9 +2,9 @@ node_modules/
 out/
 dist/
 build/*
-!build/icon.svg
-!build/icon.png
-!build/icon.svg.sha256
+!build/*.svg
+!build/*.png
+!build/*.svg.sha256
 test-results/
 playwright-report/
 .vitest-attachments/
@@ -15,3 +15,6 @@ plan.md
 .agent-terminal/flow-state.yaml
 .pnpm-store/
 __screenshots__/
+
+# Local env, e.g. a private sync source URL (docs/sync.md)
+.env

@@ -29,6 +29,13 @@ const TODOS = [
   { id: 't2', text: 'The plan and ticket disagree on the API shape' },
 ];
 const open = (over: Partial<{ step: string; todos: { id: string; text: string }[] }> = {}) => ({ step: 'plan', todos: TODOS, ...over });
+const buttonNamed = (name: string): HTMLElement => {
+  const found = [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].filter(
+    (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name,
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+};
 
 describe('feedback composer (§27.9 / AC4)', () => {
   it('opens a dialog naming the step, with a free-text feedback field', () => {
@@ -134,6 +141,27 @@ describe('feedback composer (§27.9 / AC4)', () => {
     await flush();
   });
 
+  it('ignores Submit and Cancel while a delivery is being answered, shows Submit busy, and takes a press again after', async () => {
+    const answers: Array<(delivered: boolean) => void> = [];
+    const submit = vi.fn(() => new Promise<boolean>((r) => answers.push(r)));
+    createFeedbackComposer(host).render(open({ todos: [] }), submit);
+    textarea().value = 'once only';
+    textarea().dispatchEvent(new Event('input'));
+    const send = buttonNamed('Submit feedback');
+    send.click();
+    send.click();
+    buttonNamed('Cancel').click();
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector<HTMLElement>('.flow-scrim')?.click();
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('.flow-modal')).not.toBeNull();
+    expect(send.getAttribute('aria-busy')).toBe('true');
+    answers[0](false);
+    await flush();
+    send.click();
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
   it('Cancel closes the dialog without submitting', () => {
     const submit = vi.fn();
     createFeedbackComposer(host).render(open(), submit);
@@ -145,7 +173,7 @@ describe('feedback composer (§27.9 / AC4)', () => {
   it('Escape closes the dialog without submitting', () => {
     const submit = vi.fn();
     createFeedbackComposer(host).render(open(), submit);
-    host.querySelector('.flow-modal')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(submit).not.toHaveBeenCalled();
     expect(host.querySelector('.flow-modal')).toBeNull();
   });
@@ -261,11 +289,16 @@ describe('feedback composer — compose-with-agent vs submit-as-is (§19.4 / AC4
 describe('feedback composer — the back-to-red variant (§28.4.2)', () => {
   const backToRed = (over: Partial<{ step: string; todos: { id: string; text: string }[] }> = {}) => ({ ...open(over), purpose: 'back-to-red' as const });
 
-  it('names the reopen and the phases the brief reaches', () => {
-    createFeedbackComposer(host).render(backToRed({ step: 'green' }), vi.fn());
+  it('names the step the reopen returns to and the gate it is sent from', () => {
+    createFeedbackComposer(host).render({ ...backToRed({ step: 'integration' }), target: 'dev' }, vi.fn());
     const dialog = host.querySelector('.flow-modal')!;
-    expect(dialog.querySelector('h3')?.textContent).toContain('RED');
-    expect(dialog.textContent).toMatch(/RED, GREEN and refactor/);
+    expect(dialog.querySelector('h3')?.textContent).toContain('dev');
+    expect(dialog.querySelector('h3')?.textContent).toContain('integration');
+    expect(submitBtn().textContent).toBe('Back to dev');
+  });
+
+  it('names RED when no return step is given', () => {
+    createFeedbackComposer(host).render(backToRed({ step: 'green' }), vi.fn());
     expect(submitBtn().textContent).toBe('Back to RED');
   });
 

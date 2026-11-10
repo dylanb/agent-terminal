@@ -12,9 +12,9 @@ export function resolveExampleFlowsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'flows');
 }
 
-/** §18.1. The global-fallback `flow` destination seeds from this same path as the catalog's `feature-dev-v2`
+/** §18.1. The global-fallback `flow` destination seeds from this same path as the catalog's `feature-dev-v3`
  *  entry, so the two destinations cannot drift into shipping divergent bytes. */
-export const FEATURE_DEV_ID = 'feature-dev-v2';
+export const FEATURE_DEV_ID = 'feature-dev-v3';
 export function resolveFeatureDevFlowDir(loc: BundleLocation): string {
   return path.join(resolveExampleFlowsDir(loc), FEATURE_DEV_ID);
 }
@@ -32,7 +32,7 @@ export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'loops-v2');
 }
 
-/** §18.1 v2.199. */
+/** §18.1. */
 export function resolveExampleCodexSkillsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'codex-skills');
 }

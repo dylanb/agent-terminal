@@ -13,7 +13,7 @@ import {
 import { loadFlowDefinition } from '../../src/main/flow';
 
 // §27.15 / AC 4 (N8 sweep): the closed set narrows to the ONE surviving (§27) member; absence re-points at
-// it; and the retired `legacy` literal is still RECOGNIZED (§H.5) so a flow file naming it LOADS and fails
+// it; and the retired `legacy` literal is still RECOGNIZED so a flow file naming it LOADS and fails
 // per-step rather than being rejected whole. The marking that names no surviving engine lives once and is
 // affirmative against the surviving set (CLAUDE.md shared-semantics).
 describe('loop namespace closed set (§27.15 engine selection)', () => {
@@ -29,12 +29,12 @@ describe('loop namespace closed set (§27.15 engine selection)', () => {
     }
   });
 
-  it('still RECOGNIZES legacy as a parseable binding that names no surviving engine (§H.5, AC 4)', () => {
+  it('still RECOGNIZES legacy as a parseable binding that names no surviving engine (AC 4)', () => {
     expect(RETIRED_LOOP_NAMESPACE).toBe('legacy');
     expect(isRecognizedLoopBinding('legacy')).toBe(true);
     expect(isRecognizedLoopBinding('app')).toBe(true);
     // the marking the three seams read — affirmative against the surviving set, so a marked binding is
-    // unbindable by construction (§B.4)
+    // unbindable by construction
     expect(bindsNoSurvivingEngine('legacy')).toBe(true);
     expect(bindsNoSurvivingEngine('app')).toBe(false);
   });
@@ -91,7 +91,7 @@ describe('loadFlowDefinition — def-namespace binding on a loop step (AC 4)', (
     if (!load.ok) expect(load.error.toLowerCase()).toContain('namespace');
   });
 
-  // §B.3: the whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved
+  // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved
   // binding — so an explicitly-`app` step keeps today's whole-file rejection while a namespace-less or a
   // legacy-marked step with the same unsafe name LOADS and fails per-step at resolution (AC 4's floor).
   it('rejects the whole file for an unsafe loop name on an EXPLICITLY-app step', () => {

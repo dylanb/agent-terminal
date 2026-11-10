@@ -79,7 +79,7 @@ describe('AC1 — the install seeds a catalog of >1 named flow at the resolver r
 
     const created = filesFor(res.created, FLOW_CATALOG);
     expect(created.length).toBeGreaterThan(0);
-    expect(created).toContain(path.join('feature-dev-v2', 'flow.yaml'));
+    expect(created).toContain(path.join('feature-dev-v3', 'flow.yaml'));
 
     // The bundle must ship more than one catalog flow, and every one of them must be seeded at the
     // reader's read location — the set is enumerated from the bundle, never hard-coded.
@@ -122,19 +122,19 @@ describe('AC2 — every installed catalog flow resolves as a runnable flow with 
   });
 });
 
-describe('AC3 — feature-dev-v2 remains installable and is one of the catalog entries', () => {
-  it('seeds feature-dev-v2 both as the global-fallback flow and as a named catalog entry', () => {
+describe('AC3 — feature-dev-v3 is the global-fallback flow and a catalog entry; the retired flows ship nowhere', () => {
+  it('seeds both the global-fallback flow and the feature-dev-v3 catalog entry', () => {
     applyInstallExamples(dirs, []);
 
-    // The global-fallback flow home keeps feature-dev-v2 (regression — the existing flow destination).
     expect(existsSync(path.join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
+    expect(existsSync(path.join(catalogDirFor(home), 'feature-dev-v3', 'flow.yaml'))).toBe(true);
+  });
 
-    // …and feature-dev-v2 is one of the enumerated catalog entries, its definition named feature-dev-v2.
-    const featureDev = path.join(catalogDirFor(home), 'feature-dev-v2', 'flow.yaml');
-    expect(existsSync(featureDev)).toBe(true);
-    if (existsSync(featureDev)) {
-      const doc = parseYaml(readFileSync(featureDev, 'utf8')) as { name?: unknown };
-      expect(doc.name).toBe('feature-dev-v2');
+  it('installs no feature-dev or feature-dev-v2 catalog entry or loop folder', () => {
+    applyInstallExamples(dirs, []);
+    for (const retired of ['feature-dev', 'feature-dev-v2']) {
+      expect(entryDirs(catalogDirFor(home))).not.toContain(retired);
+      expect(entryDirs(path.join(configRoot, 'loops-v2'))).not.toContain(retired);
     }
   });
 });
@@ -220,7 +220,7 @@ describe('AC5 — a first install on a machine with no prior config creates the 
 
     applyInstallExamples(dirs, []);
 
-    const featureDev = path.join(catalogDirFor(home), 'feature-dev-v2', 'flow.yaml');
+    const featureDev = path.join(catalogDirFor(home), 'feature-dev-v3', 'flow.yaml');
     expect(existsSync(featureDev)).toBe(true);
     expect(entryDirs(catalogDirFor(home)).length).toBeGreaterThanOrEqual(2);
   });

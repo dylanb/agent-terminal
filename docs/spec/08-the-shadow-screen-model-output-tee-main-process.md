@@ -11,104 +11,43 @@ This is the foundation of all agent monitoring. Every byte the PTY emits is writ
 
 ### 8.2 Implementation sketch
 
-```js
-// main process
-const { Terminal: ShadowTerminal } = require('@xterm/headless');
-
-const shadow = new ShadowTerminal({
-  cols: 80, rows: 24,
-  scrollback: 5000,            // match the renderer
-  allowProposedApi: true,
-});
-
-let lastStatus = { altScreen: false, bracketedPaste: false, agentState: 'quiet' };
-let settleTimer = null;
-
-ptyProcess.onData((data) => {
-  win.webContents.send('pty:data', { sessionId: SID, data });  // render path
-  shadow.write(data);                                          // tee
-  noteOutputActivity();                                        // quiescence detector (§8.3)
-  clearTimeout(settleTimer);
-  settleTimer = setTimeout(publishStatus, 80);                 // debounce: agents redraw in bursts
-});
-
-function publishStatus() {
-  const status = {
-    altScreen: shadow.buffer.active.type === 'alternate',
-    bracketedPaste: shadow.modes.bracketedPasteMode,
-    agentState,                                                // 'active' | 'quiet' (§8.3)
-  };
-  if (status.altScreen !== lastStatus.altScreen ||
-      status.bracketedPaste !== lastStatus.bracketedPaste ||
-      status.agentState !== lastStatus.agentState) {
-    lastStatus = status;
-    win.webContents.send('monitor:update', { sessionId: SID, ...status, quietSince });
-  }
-}
-
-// Resize: PTY and shadow move together (pty:resize handler).
-function onResize({ cols, rows }) {
-  ptyProcess.resize(cols, rows);
-  shadow.resize(cols, rows);
-}
-```
-
-**Notes**
-- `shadow.write()` is asynchronous (parsed on a queue). For *status events* the debounce above is enough. Anything that must read the buffer **after** specific bytes are parsed should use the write callback: `shadow.write(data, () => { /* buffer is current */ })`. The injector (§9.3) reads modes at injection time, after the queue has long settled, so this rarely matters in practice — but never read the buffer synchronously right after a `write()` and assume it's current.
-- **Version-pin** `@xterm/headless` to the same core version as `@xterm/xterm`. Two parsers at different versions can disagree on edge-case sequences, and capture correctness depends on agreement.
-- Throughput: writing every chunk twice is cheap (headless has no renderer); this is the same pattern VS Code uses for its terminal process model. Not a concern at interactive rates.
-- **Reading captured text out of the shadow** (used later by semantic capture; available now for debugging): walk `shadow.buffer.active` rows via `getLine(y).translateToString(true)`, or attach `@xterm/addon-serialize` for formatted snapshots. The skeleton's capture comes from user selection in the renderer, but the shadow is the source the automated pipeline will read from — keep it accurate from day one.
+- **`shadow.write()` is asynchronous** (parsed on a queue). Anything that must read the buffer *after* specific bytes are parsed uses the write callback; never read the buffer synchronously right after a `write()` and assume it is current.
+- **Two timescales, two jobs.** An 80 ms settle debounce smooths redraw bursts before *reading* shadow state for status; the quiescence threshold (§8.3, default 1000 ms) is a *semantic* judgment that the agent has stopped. Merging them makes status laggy or quiescence trigger-happy.
+- **Status is published on change only** (`monitor:update`), so consumers react to transitions rather than polling.
 
 ### 8.3 Quiescence detection
 
-The agent is **`active`** while its **rendered screen keeps changing** and flips to **`quiet`** once the visible buffer has been unchanged for `QUIET_MS`. Quiet is the "the agent is probably waiting for you" signal — surfaced in the monitor pane, the injection engine's "injectable" gate (§27.2), and the **trigger hook** the semantic pipeline attaches to (scan the shadow buffer on the `active → quiet` transition, not per output chunk). **Activity is a screen change, not a byte** (the shipped screen-stability refinement below): the shadow computes the visible viewport's text after each write settles and only counts a write that *changed* it as activity — so a full-screen TUI agent (Claude Code, Codex) that repaints an unchanged frame on a timer while idle correctly reads `quiet`, and a spinner/stream reads `active`.
+The agent is **`active`** while its **rendered screen keeps changing** and flips to **`quiet`** once the visible buffer has been unchanged for `APP_QUIET_MS` (default 1000 ms). Quiet is the "the agent is probably waiting for you" signal — surfaced in the monitor pane, the injection engine's "injectable" gate (§27.2), and the trigger the semantic scanner runs on (the `active → quiet` transition, not every output chunk).
 
-```js
-const QUIET_MS = 1000;        // no output for this long => 'quiet'; tune per agent (§14)
-let agentState = 'quiet';     // 'active' | 'quiet'
-let quietSince = null;        // epoch ms of the last active->quiet transition (null while active)
-let quietTimer = null;
+- **Activity is a screen change, not a byte.** Only a write that changed the visible viewport text counts. Byte presence pinned a full-screen TUI agent that repaints an unchanged frame on a timer `active` forever, which stalled the §27.2 injection gate.
+- **Quiet is a strong hint, not proof.** An agent can be thinking or waiting on the network without repainting (false quiet), and a TUI that genuinely animates while idle reads `active`. Claude Code animates a spinner while working and settles to a static input box when idle.
+- **It tracks the agent, not the user.** Keystrokes don't reset the timer directly; only the echo/redraw they provoke does. A session at a quiet prompt stays `quiet` while the user types — the question is "has the agent stopped producing output".
+- **Transitions, not levels, are the API.** Consumers subscribe to `monitor:update`; nothing polls the state.
 
-function noteOutputActivity() {
-  if (agentState !== 'active') {
-    agentState = 'active';
-    quietSince = null;
-    publishStatus();          // flip to 'working' immediately — don't wait for the settle debounce
-  }
-  clearTimeout(quietTimer);
-  quietTimer = setTimeout(() => {
-    agentState = 'quiet';
-    quietSince = Date.now();
-    publishStatus();          // the active->quiet transition: future semantic-scan trigger
-  }, QUIET_MS);
-}
-```
+#### 8.3.1 Waiting — a quiet screen whose agent still has a command running
 
-**Semantics and design decisions**
-- **Two timescales, two jobs.** The 80 ms settle debounce (§8.2) smooths redraw bursts before *reading* shadow state; the 1000 ms quiescence threshold is a *semantic* judgment that the agent has stopped talking. Keep them separate — merging them either makes status laggy or quiescence trigger-happy.
-- **Quiet means "the screen stopped changing," not "waiting for input."** An agent can be thinking or waiting on the network without repainting (false quiet). A TUI that *animates* while idle (a live clock, a looping animation) still reads `active` — but a TUI that merely repaints the **same** frame does not, since an identical repaint is not a screen change. Claude Code animates a spinner *while working* (correctly `active`) and settles to a static input box when idle (correctly `quiet`) — verify per agent and treat `quiet` as a strong hint, not proof.
-- **It tracks the agent, not the user.** User keystrokes don't reset the timer directly; the echo/redraw they provoke does. A session sitting at a quiet prompt stays `quiet` even as the user types — correct, since the question being answered is "has the agent stopped producing output."
-- **Transitions, not levels, are the API.** Consumers (the status strip now, the semantic scanner later) subscribe to changes via `monitor:update`; nothing polls `agentState`.
-- **Screen-stability quiescence (shipped).** The detector counts only output that *changed the shadow's visible buffer* as activity: `shadow.write` compares the just-parsed viewport text to the prior one and notes activity to the detector only on a difference (`quiescence.ts` is unchanged — it debounces "activity noted", the shadow decides what counts). This was the deferred refinement; it landed because byte-presence pinned a full-screen TUI agent `active` forever, which stalled the §27.2 injection gate (every turn deferred, nothing injected). The `active` flip now arrives one parse-callback tick later than byte-presence did (the buffer must be parsed to compare it) — imperceptible, and quiet is unaffected.
+An agent that starts a long command (a test suite, a build) and returns to a static prompt reads `quiet`, which looks the same as "finished". **Waiting** is a third, **display-only** activity for that case: while the screen is `quiet` and a command the agent started is still running, the terminal shows **Waiting · `<program>`**. It never changes `active`/`quiet` or anything that reads it — the §27.2 injection gate, the semantic scanner and the §27.12 stall watchdog behave exactly as without it, and a running command neither extends nor resets the watchdog.
+
+- **Who is the agent, and what is a command.** The agent is the shell's foreground process group, led by its leader; when the shell itself is in the foreground there are no commands. A **command** is a process the agent's leader started in a process group of its own and off the agent's terminal (a new session, or a pseudo-terminal of its own), that is over a second old (an elapsed reading of 2 s, because macOS rounds `ps` time up and procps truncates it) and is no helper. Its descendants belong to it. Every process in the agent's group, and everything such a process starts, is part of the agent — a stdio MCP server and the browser it launches are never commands. A process re-parented away from the agent (`nohup … &` whose shell exited), or one a harness runs under a daemon that is not the agent's descendant, is not seen, and such a terminal reads Idle.
+- **The label is the program name the OS reports**, never the command line, so no argument ever leaves the process table. A command whose program is a shell is labelled by its first child (earliest started), or by the shell's own name when it has none. Several commands show the earliest-started one plus a count: `node +1`. Names are the OS's executable names, truncated at 15 characters on Linux and 16 on macOS.
+- **Helpers.** A candidate is a helper, and never a command, when it — or the process its label comes from — has a listed helper program name, or has an empty name. The built-in list (`src/main/waitingRule.ts`) holds `codex-code-mode-host`. The operator may add names in `helper-programs.yaml` in the app-state home's `.agent-terminal/` directory (§23.4): a YAML list of program names, which the app only reads. A listed name matches a process when it equals that process's program name after both are cut to the OS's name limit. A missing file adds nothing. A broken one (unreadable, not YAML, not a list of strings) adds nothing and logs one warning naming the file to the main-process log each time its content or read error changes. The file is re-read at most every 15 s, so an edit takes effect within about 20 s, with no restart.
+- **Timing.** Lookups run only while the screen is `quiet`, one at a time, `WAITING_POLL_GAP_MS` (1000 ms) after the previous one settles. Each runs `ps` asynchronously with a fixed argv and is aborted, and its child killed, at `APP_WAITING_LOOKUP_TIMEOUT_MS` (default 1000 ms). A lookup that fails or times out reads as no commands, each distinct failure is logged once with no process text, and an answer that arrives after the screen turned `active` is ignored. A command under a second old never shows Waiting; one still running shows it within 5 s of its 1 s mark; the terminal leaves Waiting within 5 s of the last command exiting, and at once when the screen turns `active`. Off macOS and Linux no lookup runs and no terminal reads Waiting.
+- **Grace on the controller only.** For `WAITING_GRACE_MS` (3000 ms) after an `active → quiet` flip, the controller status (§23.6) keeps reporting Working unless a lookup has already found a command, then follows the latest lookup. A command started just before the agent's screen settled therefore never shows a brief Idle on the card. The window's strips follow the latest lookup with no grace.
+- **Where it shows.** The controller card, header counts, tray and timeline (§23.6); the monitor status strip's `agent` chip (`agent: waiting · <label>`, with no quiet counter) and the flow strip's derived line (`… · waiting · <label>`). `monitor:update` and the flow view's derived status each carry the Waiting value beside the screen state, and carry none while the screen is `active`. The value and its label have one definition, `src/shared/waiting.ts`.
 
 ### 8.4 Capture events (skeleton scope)
 
-In this version, capture events originate from the user's selection (`monitor:capture`, §6/§7.5). Main assigns `{id, capturedAt}` and rebroadcasts on `monitor:event`. The event shape is deliberately the one the future semantic pipeline will emit:
+Main stamps every capture event and keeps the session's list, replaying it to a (re)loaded monitor pane. The list is persisted per launch directory at `<L>/.agent-terminal/monitor-events.json` so events survive an app restart in the same directory, however the prior instance ended. The app never writes `.gitignore`; ignoring `.agent-terminal/` is the user's choice (§19.1).
 
-```ts
-interface MonitorEvent {
-  id: string;
-  sessionId: string;
-  type: 'capture';            // later: 'agent-question' | 'tool-use' | 'diff' | ...
-  source: 'selection';        // later: 'heuristic' | 'shadow-scan' | ...
-  text: string;
-  range: { start: Cell; end: Cell; baseY: number;
-           bufferType: 'normal'|'alternate' } | null;  // provenance only (§7.3) — never re-extract from these
-  capturedAt: string;         // ISO timestamp, stamped by main
-}
-```
+The file is an **untrusted** source — a cloned repo can ship one — so:
 
-Main keeps the session's event list in memory and replays it to a (re)loaded monitor pane on request. The list is also persisted per launch-directory (`<L>/.agent-terminal/monitor-events.json`, atomic tmp+rename + owner-only `0o600`; the app never writes `.gitignore`, so ignoring `.agent-terminal/` is the user's choice, §19.1; written after each mutation) and seeded from that file on construct. The file is an **untrusted** source (a cloned repo can ship one), so on load each element is validated to the §15.4 event shape (malformed entries dropped), the file is refused above a size cap (CWE-400), the write uses an unpredictable temp name + exclusive create so a planted symlink cannot redirect it (CWE-59), and inject-able events (`command-output`, §16.2) are dropped on restore so the file cannot seed an Insert-at-cursor card (CWE-78). The `command-output` drop is **permanent, not a phase limit** — a restored file is indistinguishable from an attacker-shipped one, so even a user's own prior-session command-output never restores. Restored non-inject-able events (capture/finding/completion) remain viewable and addable to todos; their text can still reach the prompt via the manual Add-to-todo → todo Insert path, but only `submit=false` (no auto-execution) and only by deliberate multi-step user action — that manual, visible-at-prompt path is the **accepted boundary**, distinct from the one-click direct affordance the `command-output` drop removes. Events thus survive an app restart in the same directory regardless of how the prior instance terminated (v2.95), reusing this same replay path. The list is unbounded by design this phase — an accepted limit; a future eviction cap would mirror todoStore's `maxDoneTodos` (§16.4).
+- each element is validated to the §15.4 event shape on load, and malformed entries are dropped;
+- the file is refused above a size cap (CWE-400);
+- the write uses an unpredictable temp name and exclusive create, so a planted symlink cannot redirect it (CWE-59);
+- inject-able `command-output` events (§16.2) are dropped on restore, so the file cannot seed an Insert-at-cursor card (CWE-78). This drop is **permanent, not a phase limit**: a restored file is indistinguishable from an attacker-shipped one, so even a user's own earlier command output never restores.
+
+Restored non-inject-able events (capture/finding/completion) stay viewable and addable to todos. Their text can still reach the prompt through Add-to-todo → todo Insert, but only without submit and only by deliberate multi-step user action — that visible, manual path is the **accepted boundary**.
+
+The list is unbounded — an accepted limit.
 
 ---
-

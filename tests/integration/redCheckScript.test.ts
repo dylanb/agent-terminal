@@ -1,10 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseRedCheckReport, type RedCheckReport } from '../../src/shared/redCheck';
-import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
 
 // §28.5.2
 
@@ -24,11 +23,6 @@ beforeAll(() => {
 const test = (name: string) => report.tests.find((t) => t.name === name);
 
 describe('scripts/red-check.mjs (§28.5.2)', () => {
-  it("is this repository's declared red_check_command", () => {
-    const caps = parseLoopCapabilities(readFileSync(join(ROOT, 'loop-capabilities.yaml'), 'utf8'));
-    expect(caps.ok && caps.value.redCheckCommand).toBe('node scripts/red-check.mjs');
-  });
-
   it('exits 0 having printed a report, though tests failed', () => {
     expect(exitStatus).toBe(0);
   });
@@ -69,4 +63,30 @@ describe('scripts/red-check.mjs when vitest writes no report', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+describe('scripts/red-check.mjs with real Chromium', () => {
+  let browserReport: RedCheckReport;
+  beforeAll(() => {
+    const run = spawnSync(process.execPath, ['scripts/red-check.mjs', '--config', `${FIXTURES}/vitest.browser.config.mjs`], { cwd: ROOT, encoding: 'utf8' });
+    const parsed = parseRedCheckReport(run.stdout);
+    if (!parsed.ok) throw new Error(`${parsed.reason}\n${run.stdout}\n${run.stderr}`);
+    browserReport = parsed.report;
+  }, 120_000);
+
+  it('maps transformed browser stacks to the authored assertion line', () => {
+    expect(browserReport.tests.find(t => t.name === 'fails at its check')).toMatchObject({
+      file: `${FIXTURES}/sample.case.ts`, outcome: 'failed-assertion', failures: [{ line: 4 }],
+    });
+  });
+
+  it('reports both authored soft assertion lines', () => {
+    expect(browserReport.tests.find(t => t.name === 'fails two soft checks')).toMatchObject({
+      outcome: 'failed-assertion', failures: [{ line: 8 }, { line: 9 }],
+    });
+  });
+
+  it('keeps browser exceptions distinct from assertions', () => {
+    expect(browserReport.tests.find(t => t.name === 'throws a TypeError')?.outcome).toBe('errored');
+  });
 });

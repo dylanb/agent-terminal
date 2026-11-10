@@ -9,8 +9,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_QUIET_MS: '-5' }).quietMs).toBe(1000);
   });
 
-  it('defaults the loop stall watchdog to ten minutes and parses an override (§27.12/D48)', () => {
-    expect(resolveRuntimeConfig({}).stallTimeoutMs).toBe(600_000);
+  it('defaults the loop stall watchdog to forty-five minutes and parses an override (§27.12/D48)', () => {
+    expect(resolveRuntimeConfig({}).stallTimeoutMs).toBe(2_700_000);
     expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: '4000' }).stallTimeoutMs).toBe(4000);
     expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: 'nope' }).stallTimeoutMs).toBe(
       resolveRuntimeConfig({}).stallTimeoutMs,
@@ -21,6 +21,32 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({}).startupExitGraceMs).toBe(1000);
     expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: '500' }).startupExitGraceMs).toBe(500);
     expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: 'nope' }).startupExitGraceMs).toBe(1000);
+  });
+
+  it('defaults the shell quit grace to 2000ms and parses a valid override, falling back on garbage', () => {
+    expect(resolveRuntimeConfig({}).shellQuitGraceMs).toBe(2000);
+    expect(resolveRuntimeConfig({ APP_SHELL_QUIT_GRACE_MS: '600000' }).shellQuitGraceMs).toBe(600_000);
+    expect(resolveRuntimeConfig({ APP_SHELL_QUIT_GRACE_MS: 'nope' }).shellQuitGraceMs).toBe(2000);
+  });
+
+  it('defaults the controller branch re-read to five minutes and parses a valid override, falling back on garbage', () => {
+    expect(resolveRuntimeConfig({}).branchRefreshMs).toBe(300_000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '1000' }).branchRefreshMs).toBe(1000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: 'nope' }).branchRefreshMs).toBe(300_000);
+    expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '0' }).branchRefreshMs).toBe(300_000);
+  });
+
+  it('defaults the wait for an agent to reach the prompt to sixty seconds and parses a valid override', () => {
+    expect(resolveRuntimeConfig({}).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '5000' }).agentWaitMs).toBe(5000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: 'nope' }).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '0' }).agentWaitMs).toBe(60_000);
+  });
+
+  it('lists claude and codex as agent commands by default and parses a comma-separated override', () => {
+    expect(resolveRuntimeConfig({}).agentCommands).toEqual(['claude', 'codex']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' claude, gemini ,,aider ' }).agentCommands).toEqual(['claude', 'gemini', 'aider']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' , ' }).agentCommands).toEqual(['claude', 'codex']);
   });
 
   // §27.9.1 N9b.5(e), #137 AC14 — the engine's gate-decision bound.
@@ -38,6 +64,15 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '0.1' }).autoGateDecisionMs).toBe(1);
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '1e12' }).autoGateDecisionMs).toBe(2_147_483_647);
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '2147483648' }).autoGateDecisionMs).toBe(2_147_483_647);
+  });
+
+  it('reads the Waiting lookup bound from APP_WAITING_LOOKUP_TIMEOUT_MS, with a positive default it falls back to on garbage', () => {
+    const fallback = resolveRuntimeConfig({}).waitingLookupTimeoutMs;
+    expect({
+      defaultIsPositive: Number.isInteger(fallback) && fallback > 0,
+      override: resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: '2500' }).waitingLookupTimeoutMs,
+      garbage: ['nope', '0', '-5', ''].map((raw) => resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: raw }).waitingLookupTimeoutMs),
+    }).toEqual({ defaultIsPositive: true, override: 2500, garbage: [fallback, fallback, fallback, fallback] });
   });
 
   it('enables shell integration by default and opts out only on exactly "0"', () => {

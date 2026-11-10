@@ -159,7 +159,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]'));
   });
 
-  // WCAG 2.4.3 / 2.1.1 (AC 9, §B.9): the two retired controls that used to render on an ERROR view carrying a
+  // WCAG 2.4.3 / 2.1.1 (AC 9): the two retired controls that used to render on an ERROR view carrying a
   // round — the mark-complete button (the panel's last tab stop) and syncRetry's recovery Retry — are BOTH
   // gone. The delta is per branch (two here), the case a single flat tab-stop number would miss: the
   // surviving keyboard-reachable controls are exactly the §27 work-turn route-out group and the Close entry.
@@ -206,6 +206,51 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     const name = btn.getAttribute('aria-label') ?? '';
     expect(name).toContain('changes'); // label-in-name (2.5.3): accessible name contains the visible text
     expect(name).toContain('request'); // …and is not the bare abbreviation
+  });
+
+  it('ignores the gate while an approve is still being answered, shows Approve busy, and takes a decision again after', async () => {
+    const answers: Array<(landed: boolean) => void> = [];
+    const appGateDecision = vi.fn((_step: string, _turnKey: string, _option: string) => new Promise<boolean>((r) => answers.push(r)));
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'polish'] }), 'plan');
+    const approve = host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]')!;
+    const polish = host.querySelector<HTMLButtonElement>('[data-gate-option="polish"]')!;
+
+    approve.click();
+    approve.click();
+    polish.click();
+    expect({ decisions: appGateDecision.mock.calls.map((c) => c[2]), busy: approve.getAttribute('aria-busy') }).toEqual({
+      decisions: ['approve'],
+      busy: 'true',
+    });
+
+    answers[0](false);
+    await vi.waitFor(() => expect(approve.getAttribute('aria-busy')).toBeNull());
+    polish.click();
+    expect(appGateDecision.mock.calls.map((c) => c[2])).toEqual(['approve', 'polish']);
+  });
+
+  it('holds only the gate whose approve is still being answered: another worktree\'s gate takes a decision meanwhile', async () => {
+    const answers: Array<(landed: boolean) => void> = [];
+    const appGateDecision = vi.fn((_step: string, _turnKey: string, _option: string) => new Promise<boolean>((r) => answers.push(r)));
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    const gateA = appGate({ branch: 'feature-a', gateOptions: ['approve', 'polish'] });
+    const gateB = appGate({ branch: 'feature-b', gateOptions: ['approve', 'polish'], appTurn: { step: 'green', turnKey: 'consolidate-green' } });
+    const approve = () => host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]')!;
+
+    panel.render(gateA, 'plan');
+    approve().click();
+    panel.render(gateB, 'green');
+    approve().click();
+    panel.render(gateA, 'plan');
+    approve().click();
+    expect({
+      decisions: appGateDecision.mock.calls.map((c) => [c[0], c[2]]),
+      gateABusy: approve().getAttribute('aria-busy'),
+    }).toEqual({ decisions: [['plan', 'approve'], ['green', 'approve']], gateABusy: 'true' });
+
+    answers.forEach((answer) => answer(true));
+    await vi.waitFor(() => expect(approve().getAttribute('aria-busy')).toBeNull());
   });
 
   it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
@@ -281,8 +326,20 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeBackToRed });
     panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], appTurn: { step: 'green', turnKey: 'consolidate-green' } }), 'green');
     host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!.click();
-    expect(composeBackToRed).toHaveBeenCalledWith('green', 'consolidate-green');
+    expect(composeBackToRed).toHaveBeenCalledWith('green', 'consolidate-green', 'RED');
     expect(appGateDecision).not.toHaveBeenCalled();
+  });
+
+  it('names the back-to-red control after the step it returns to, and hands that step to the composer', () => {
+    const composeBackToRed = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: 'dev', appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
+    expect(btn.textContent).toBe('Back to dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
+    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · Back to dev');
+    btn.click();
+    expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
   });
 
   it('renders NO §27 request-changes button when no composer is wired — it is a composer-only affordance (WCAG 4.1.2)', () => {
@@ -721,6 +778,26 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
   });
 
+  it('ignores the ref link while the browser is still being opened for it, shows it busy, and never navigates the app', async () => {
+    let opened!: () => void;
+    const openExternal = vi.fn(() => new Promise<void>((res) => (opened = res)));
+    const githubRef = vi.fn(async (kind: GithubRefKind) => (kind === 'issue' ? ref() : null));
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const link = refRow('Ticket')!.querySelector<HTMLAnchorElement>('a[href]')!;
+    const press = (): boolean => link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(press()).toBe(false);
+    expect(press()).toBe(false);
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(link.getAttribute('aria-busy')).toBe('true');
+
+    opened();
+    await vi.waitFor(() => expect(link.getAttribute('aria-busy')).toBeNull());
+    press();
+    expect(openExternal).toHaveBeenCalledTimes(2);
+  });
+
   it('renders a short body verbatim with no ellipsis (truncateBody pass-through branch)', async () => {
     const githubRef = vi.fn(async (kind: GithubRefKind) =>
       kind === 'issue' ? ref({ body: 'short body' }) : null,
@@ -813,11 +890,11 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
   });
 });
 
-// The N8 sweep's split of this organism (§B.9): the surviving State section is relabelled off the retired
+// The N8 sweep's split of this organism: the surviving State section is relabelled off the retired
 // file, the five repo-authored display sinks are stripped (CWE-117 / CWE-1007), the gate row is affirmative
 // on both conjuncts (appTurn present AND appGateDecision injected), and focus routes to the surviving
 // control. AC 3's behavior-preserving rule does not cover the labels an operator reads (AC 9).
-describe('docked loop panel — the sweep split (§B.9)', () => {
+describe('docked loop panel — the sweep split', () => {
   const BIDI = '‮'; // right-to-left override — a DISPLAY_UNSAFE byte that reorders an accessible name
 
   const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
@@ -861,6 +938,23 @@ describe('docked loop panel — the sweep split (§B.9)', () => {
     const name = btn!.getAttribute('aria-label') ?? '';
     expect(name).not.toContain(BIDI); // …no override reaches the accessible name…
     expect(name).toContain('request'); // …which is still the unabbreviated form (label-in-name)
+  });
+
+  it('strips a bidi override planted in the return step from the back-to-red label, its accessible name and the composer target (CWE-117)', () => {
+    const composeBackToRed = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: `dev${BIDI}`, appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
+    expect(btn.textContent).toBe('Back to dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
+    btn.click();
+    expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
+  });
+
+  it('names the back-to-red control after RED when the return step is nothing but control characters', () => {
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed: vi.fn() });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: BIDI, appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    expect(host.querySelector('[data-gate-option="back-to-red"]')?.textContent).toBe('Back to RED');
   });
 
   it('strips a bidi override from the step in the arm-interrupt aria-label, but dispatches the RAW step identity (§6, CWE-117)', () => {
@@ -1216,9 +1310,9 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   });
 });
 
-// §27.12 (v2.201) — a stalled turn is often an agent waiting on the operator. The panel says how to get it
+// §27.12 — a stalled turn is often an agent waiting on the operator. The panel says how to get it
 // going again without restarting anything, one of the ways being to have the agent write its turn-done file.
-describe('docked loop panel — getting a stalled agent going again (§27.12 v2.201)', () => {
+describe('docked loop panel — getting a stalled agent going again (§27.12)', () => {
   const stalled = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
     loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'green', turnKey: 'work-green' }, stalled: true, ...over });
 

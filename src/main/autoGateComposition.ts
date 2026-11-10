@@ -10,6 +10,7 @@ import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from '.
 import type { LoopBinding } from '../shared/loopNamespace';
 import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
 import { createBoundSourceLoader } from './runResolver';
+import type { LoopDefV2Tiers } from './loopDefV2';
 import { createFlowStateStore } from './flowState';
 import { readRunBinding } from './runDisposition';
 
@@ -62,7 +63,7 @@ export function composeLoopBindingResolve(autoGate: AutoGate, observedResolveDef
   };
 }
 
-/** The engine's approve: the human approve's §B.3 refusal and its per-worktree deps. */
+/** The engine's approve: the human approve's marked-binding refusal and its per-worktree deps. */
 export function composeEngineApprove(
   approveDepsFor: (repoKey: string) => AppGateDecisionDeps,
   bindingOf: (repoKey: string, step: string) => LoopBinding | null,
@@ -87,8 +88,8 @@ export function composeLifecycleEndRun(autoGate: AutoGate): (repoKey: string) =>
   return (repoKey) => autoGate.endRun(repoKey);
 }
 
-export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'] {
-  const loadBound = createBoundSourceLoader(globalRoot);
+export function composeCurrentRun(globalRoot: string, defTiers: LoopDefV2Tiers): AutoGateDeps['currentRun'] {
+  const loadBound = createBoundSourceLoader(globalRoot, defTiers);
   return (repoDir) => {
     const binding = readRunBinding(repoDir);
     if (binding === null) return null;

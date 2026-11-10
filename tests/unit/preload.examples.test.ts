@@ -37,22 +37,30 @@ describe('examplesApi routing (§6 / §18.1)', () => {
 
   it('apply forwards the per-destination replace list intact', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply(previewId, ['appLoops', 'commands']);
+    await examplesApi.apply(previewId, ['appLoops', 'commands'], false);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
       replace: ['appLoops', 'commands'],
+      removeRetired: false,
     });
   });
 
   it('apply forwards an empty replace list as an empty list, never as a missing field', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply(previewId, []);
+    await examplesApi.apply(previewId, [], false);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
       replace: [],
+      removeRetired: false,
     });
+  });
+
+  it('apply forwards the answer to removing the retired examples (§18.1)', async () => {
+    invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [], removed: [] });
+    await examplesApi.apply(previewId, [], true);
+    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, expect.objectContaining({ removeRetired: true }));
   });
 
   it('apply resolves the destination-grouped result', async () => {
@@ -63,7 +71,7 @@ describe('examplesApi routing (§6 / §18.1)', () => {
       skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
     };
     invoke.mockResolvedValueOnce(result);
-    expect(await examplesApi.apply(previewId, ['commands'])).toEqual(
+    expect(await examplesApi.apply(previewId, ['commands'], false)).toEqual(
       result,
     );
   });

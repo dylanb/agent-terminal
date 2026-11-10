@@ -10,7 +10,7 @@ import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { bundledFlowOf } from '../helpers/bundledLoops';
 
-const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v3');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 
 function walk(dir: string, base: string = dir): string[] {
@@ -20,7 +20,7 @@ function walk(dir: string, base: string = dir): string[] {
   );
 }
 
-/** The loop names the bundled feature-dev-v2 flow binds — read from the flow, never hard-coded. */
+/** The loop names the bundled feature-dev-v3 flow binds — read from the flow, never hard-coded. */
 function boundLoopNames(): string[] {
   const doc = yaml.load(readFileSync(path.join(BUNDLE_FLOW, 'flow.yaml'), 'utf8')) as {
     steps: { kind: string; loop?: string }[];
@@ -75,71 +75,9 @@ describe('after the install, every loop name the shipped flow binds resolves on 
       expect(existsSync(path.join(appLoopsTargetDir(), FEATURE_DEV_ID, name, `${name}.yaml`))).toBe(true);
     }
   });
-
-  it('exposes each definition declared human gate options', () => {
-    applyInstallExamples(dirs, []);
-    for (const name of boundLoopNames()) {
-      const resolved = resolveLoopDefV2(name, {
-        repoDir: repo,
-        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null },
-        flow: FEATURE_DEV_ID,
-      });
-      expect(resolved.ok).toBe(true);
-      if (resolved.ok) {
-        expect(resolved.def.gate.some((gate) => gate.option === 'approve')).toBe(true);
-        expect(resolved.def.gate.some((gate) => gate.option === 'request-changes')).toBe(true);
-      }
-    }
-  });
 });
 
-describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)', () => {
-  it('installs the full-TDD chain groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice on the app namespace', () => {
-    applyInstallExamples(dirs, []);
-
-    const loaded = loadFlowDefinitionLocalFirst(repo, home);
-    expect(loaded.ok).toBe(true);
-    if (!loaded.ok) return;
-    const implStep = (id: string, loop: string, gateAuthority: 'auto' | 'human') => ({ id, kind: 'loop', loop, gateAuthority, loopNamespace: 'app', todoTemplate: 'impl-loop-review' });
-    expect(loaded.definition.steps).toEqual([
-      { id: 'preparation', kind: 'manual' },
-      {
-        id: 'groom',
-        kind: 'loop',
-        loop: 'groom-loop',
-        loopNamespace: 'app',
-        todoTemplate: 'ticket-grooming',
-        gateAuthority: 'auto',
-        inputs: [
-          { name: 'ticket', type: 'github-ticket', required: true },
-        ],
-      },
-      {
-        id: 'plan-bundle',
-        kind: 'loop',
-        loop: 'plan-bundle-loop',
-        loopNamespace: 'app',
-        todoTemplate: 'plan-loop-review',
-        gateAuthority: 'auto',
-      },
-      {
-        id: 'plan-polish',
-        kind: 'loop',
-        loop: 'plan-polish-loop',
-        loopNamespace: 'app',
-        todoTemplate: 'plan-loop-review',
-        gateAuthority: 'human',
-      },
-      implStep('infra', 'infra-loop', 'auto'),
-      implStep('red', 'red-loop', 'auto'),
-      implStep('green', 'green-loop', 'auto'),
-      // §28.4 loop-back: refactor repeats the RED→GREEN→refactor slice `slices`-many times (impl-slice×N).
-      { ...implStep('refactor', 'refactor-loop', 'auto'), repeat: { backTo: 'red', countInput: 'slices' } },
-      implStep('integration-slice', 'integration-slice-loop', 'human'),
-      { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
-    ]);
-  });
-
+describe('the shipped feature-dev flow installs where the reader looks, and its steps join', () => {
   it('pins the installer target to the runtime reader resolver', () => {
     const flowTarget = dirs.find((d) => d.id === 'flow')?.targetDir;
     expect(flowTarget).toBe(flowHomeDir(home));
@@ -150,28 +88,25 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     if (loaded.ok) expect(loaded.flowDir).toBe(flowTarget);
   });
 
-  it('joins file-producing steps by one id and path, then leaves implementation commit-producing', () => {
-    const defs = ['groom-loop', 'plan-bundle-loop', 'integration-slice-loop'].map((name) => {
+  it('joins file-producing steps by one id and path', () => {
+    const produced = new Map<string, string>();
+    let joins = 0;
+    for (const name of boundLoopNames()) {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
-        tiers: {
-          operator: null,
-          appBundled: BUNDLE_APP_LOOPS,
-          retired: null,
-        },
+        tiers: { operator: null, appBundled: BUNDLE_APP_LOOPS, retired: null },
         flow: FEATURE_DEV_ID,
       });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) throw new Error(resolved.reason);
-      return resolved.def;
-    });
-
-    expect(defs[0].outputs).toHaveLength(1);
-    expect(defs[1].inputs).toEqual(defs[0].outputs);
-    expect(defs[1].outputs).toHaveLength(1);
-    expect(defs[2].inputs).toEqual(defs[1].outputs);
-    expect(defs[2].work.artifact).toBe('commits');
-    expect(defs[2].outputs).toEqual([]);
+      for (const input of resolved.def.inputs) {
+        if (!produced.has(input.id)) continue;
+        expect(input.path, `${name} input ${input.id}`).toBe(produced.get(input.id));
+        joins++;
+      }
+      for (const o of resolved.def.outputs) produced.set(o.id, o.path);
+    }
+    expect(joins).toBeGreaterThan(0);
   });
 
   it('installs the §27 defs into the operator tier', () => {

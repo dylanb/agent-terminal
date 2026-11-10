@@ -139,7 +139,7 @@ describe('isRealContainer', () => {
   });
 });
 
-// AC 5's all-or-nothing migration writer (§B.6/§D.4). A §27 def is a directory tree (<name>.yaml + charter/
+// AC 5's all-or-nothing migration writer. A §27 def is a directory tree (<name>.yaml + charter/
 // + prompts/), so what must be atomic is the TREE: it stages the whole tree into an unpredictable sibling
 // and commits with one renameSync, so no partial <name>/ can exist for the resolver to find. The four
 // outcomes are classified by what the DESTINATION is (lstat), never by the commit's errno, so a planted

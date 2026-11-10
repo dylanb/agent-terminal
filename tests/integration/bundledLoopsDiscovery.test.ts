@@ -22,10 +22,11 @@ const onDisk = (rel: (flow: string, loop: string) => string): string[] =>
   );
 
 describe('bundled loop discovery (#207 drift-test infrastructure)', () => {
-  it('lists every (flow, loop) pair, so a loop shipped in two flows is listed in both', () => {
+  it('lists every (flow, loop) pair without assuming a retired flow is still shipped', () => {
     const pairs = bundledFlowLoops();
     expect(pairs.length).toBe(onDisk((_f, loop) => `${loop}.yaml`).length);
-    expect(pairs.filter((p) => p.loop === 'groom-loop').map((p) => p.flow).sort()).toEqual(['feature-dev-v2', 'plan-only']);
+    expect(pairs.length).toBeGreaterThan(0);
+    expect(new Set(pairs.map((p) => `${p.flow}/${p.loop}`)).size).toBe(pairs.length);
   });
 
   it('resolves each pair from its own flow folder', () => {

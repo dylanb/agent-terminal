@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AppLoopEnterResult, AppLoopEntry, PickupBranch } from './appLoopEngine';
-import type { AppLoopBootstrap, PickupRecord } from './appLoopState';
+import type { AppLoopBootstrap, AppLoopBootstrapIntent, PickupRecord, RecordedPickup } from './appLoopState';
+import type { RunPickup } from './trustedPickups';
 import type { AppGateRefs } from './appGateDecision';
 import {
   AmbiguousBootstrapOperationError,
@@ -10,22 +11,27 @@ import {
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from './bootstrapPorts';
-import type { PickupContractV2 } from './loopDefV2';
+import { isAdoptPickup, type AdoptPickupV2, type PickupContractV2, type PickupV2 } from './loopDefV2';
+import type { AdoptionOwnership, AdoptionStartResult } from './adoptionStart';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
 import { BUSY_NOTICE } from './flowEntryActions';
 import {
   hasAppBootstrapConflict,
+  isAdoptedPickup,
+  isPickupBranchName,
   sameAppBootstrapConflictTarget,
+  sameTicketRef,
   type AppBootstrapConflictTarget,
+  type TicketRef,
 } from '../shared/appBootstrap';
-import type { FlowRefs } from '../shared/ipc';
+import type { AdoptTicketAnswer, FlowRefs, ResolveAdoptTicketResult } from '../shared/ipc';
 
 export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
   github: AppBootstrapGitHub;
   conflicts: AppBootstrapConflicts;
-  prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
+  prepareBootstrap(identity: AppLoopBootstrapIntent): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
   clearBootstrap(): void;
 }
@@ -36,9 +42,19 @@ export interface AppLoopBootstrapRequest {
   confirmedWipe?: AppBootstrapConflictTarget;
 }
 
-// Def tiers carry no trust distinction (v2.129): a bootstrap spec is exactly the resolved def's pickup
+// Def tiers carry no trust distinction: a bootstrap spec is exactly the resolved def's pickup
 // contract, with no tier/origin label gating it.
 export type AppLoopBootstrapSpec = PickupContractV2;
+
+/** An adopt-form pickup's job: the pull request the flow's `pr` ref named when the step was entered. */
+export interface AdoptJobSpec extends AdoptPickupV2 {
+  pr: number | null;
+}
+
+/** The job's pickup for the def's pickup and the flow's refs at entry. */
+export function jobBootstrapFor(pickup: PickupV2 | null, refs: FlowRefs | undefined): AppLoopBootstrapJob['bootstrap'] {
+  return pickup !== null && isAdoptPickup(pickup) ? { ...pickup, pr: refs?.pr ?? null } : pickup;
+}
 
 export type AppBootstrapPrOwnership =
   | { kind: 'none' }
@@ -46,6 +62,7 @@ export type AppBootstrapPrOwnership =
   | { kind: 'ambiguous'; marker: string; absentChecks?: number };
 
 export interface AppLoopBootstrapOwnership {
+  kind: 'opened';
   base: string;
   branch: string;
   ownedOid: string | null;
@@ -65,26 +82,48 @@ export type AppLoopBootstrapResult =
 
 export function resolveAppGateRefs(
   flowRefs: FlowRefs | undefined,
-  trustedBootstrap: AppLoopBootstrap | null,
+  trustedBootstrap: RunPickup | null,
 ): AppGateRefs {
+  if (trustedBootstrap !== null && isAdoptedPickup(trustedBootstrap)) {
+    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.primary.number, pickup: trustedBootstrap };
+  }
   if (trustedBootstrap !== null) {
-    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.issue, bootstrap: trustedBootstrap };
+    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.issue, pickup: trustedBootstrap };
   }
   return {
     pr: flowRefs?.pr ?? null,
     ticket: flowRefs?.ticket ?? null,
-    bootstrap: null,
+    pickup: null,
   };
 }
 
-/** §27.10 */
-export function resolvePickupBranch(record: PickupRecord, trustedBootstrap: AppLoopBootstrap | null, flowTicket: number | null): PickupBranch {
-  if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
-  if (trustedBootstrap !== null) return { kind: 'branch', branch: trustedBootstrap.branch };
-  return record.kind === 'complete' && record.bootstrap.issue === flowTicket ? { kind: 'branch', branch: record.bootstrap.branch } : { kind: 'none' };
+/** The run a recorded pickup must belong to: the flow's ticket and PR refs, and the in-progress run's Start. */
+export interface FlowIdentity {
+  ticket: number | null;
+  pr: number | null;
+  startedAt: number | null;
 }
 
-const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
+/** §27.10 */
+export function resolvePickupBranch(record: PickupRecord, trustedBootstrap: RunPickup | null, flow: FlowIdentity): PickupBranch {
+  if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
+  if (trustedBootstrap !== null) return heldTo(trustedBootstrap);
+  if (record.kind !== 'complete') return { kind: 'none' };
+  const recorded = record.bootstrap;
+  const forThisFlow = isAdoptedPickup(recorded) ? recorded.pr === flow.pr && recorded.startedAt === flow.startedAt : recorded.issue === flow.ticket;
+  return forThisFlow ? heldTo(recorded) : { kind: 'none' };
+}
+
+function heldTo(pickup: RecordedPickup): PickupBranch {
+  return isAdoptedPickup(pickup)
+    ? { kind: 'fix-branch', branch: pickup.fixBranch, pr: pickup.pr, primary: { ...pickup.primary } }
+    : { kind: 'branch', branch: pickup.branch };
+}
+
+/** The branch a run's turns are held to: the ticket run's pickup branch, or the adopted run's fix branch. */
+export function pickupBranchOf(pickup: RecordedPickup): string {
+  return isAdoptedPickup(pickup) ? pickup.fixBranch : pickup.branch;
+}
 
 async function bestEffort(op: () => Promise<void>): Promise<void> {
   try {
@@ -182,7 +221,7 @@ export async function runAppLoopBootstrap(
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
   if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
   const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
-  if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
+  if (!isPickupBranchName(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
   const confirmedWipe = req.confirmedWipe;
   // The policy that authorizes the deletion is re-read here, at the destructive operation, rather than
   // trusted from the prompt that produced this confirmation (§27.10).
@@ -249,7 +288,8 @@ export async function runAppLoopBootstrap(
       }
       throw createError;
     }
-    const identity = {
+    const identity: AppLoopBootstrap = {
+      kind: 'opened',
       pr: createdPr,
       branch,
       issue: req.issue,
@@ -261,6 +301,7 @@ export async function runAppLoopBootstrap(
       ok: true,
       identity,
       ownership: {
+        kind: 'opened',
         base,
         branch,
         ownedOid,
@@ -271,6 +312,7 @@ export async function runAppLoopBootstrap(
     const error = errMsg(e);
     if (createdBranch === null || createdBase === null) return fail(error);
     const recovery: AppLoopBootstrapOwnership = {
+      kind: 'opened',
       base: createdBase,
       branch: createdBranch,
       ownedOid,
@@ -388,21 +430,41 @@ export interface AppLoopBootstrapJob {
   // §28.4 D1 — the impl-slice this work turn is for (the flow's `currentSlice`, default 1). The engine keys
   // the turn's result artifact off it (`red-result.slice-N.json`) so a loop-back re-entry writes fresh.
   slice?: number;
-  bootstrap: AppLoopBootstrapSpec | null;
-  // §B.5 item 6 / AC10: present when the step's bound def declares a `pickup:` block AND carries a skill —
+  bootstrap: AppLoopBootstrapSpec | AdoptJobSpec | null;
+  // Present when the step's bound def declares a `pickup:` block AND carries a skill —
   // the coordinator injects it AFTER work entry is accepted so it is submitted ahead of the boundary
   // preamble (CWE-74). Absent when the def declares no `pickup:` block (the seam injects it) or has no skill.
   skill?: string;
 }
 
+/** Whether the flow's refs still name the input `job` was entered with: its ticket and, for a pickup that adopts
+ *  a pull request, its PR. */
+export function jobMatchesFlowRefs(job: AppLoopBootstrapJob, refs: FlowRefs | undefined): boolean {
+  if ((refs?.ticket ?? null) !== job.issue) return false;
+  return job.bootstrap === null || !isAdoptPickup(job.bootstrap) || (refs?.pr ?? null) === job.bootstrap.pr;
+}
+
+/** Whether the pickup this run trusts is `job`'s own, so re-entering the step reuses it: the adopted pickup of the
+ *  job's PR for an adopt-form job, or the opened pickup of the job's ticket. */
+export function trustedPickupServesJob(job: AppLoopBootstrapJob, trusted: RunPickup | undefined): boolean {
+  if (trusted === undefined) return false;
+  if (job.bootstrap !== null && isAdoptPickup(job.bootstrap)) return isAdoptedPickup(trusted) && trusted.pr === job.bootstrap.pr;
+  return !isAdoptedPickup(trusted) && trusted.issue === job.issue;
+}
+
+type PickupStartResult = AppLoopBootstrapResult | AdoptionStartResult;
+
 export interface AppLoopBootstrapCoordinatorDeps {
   run(repoDir: string, request: AppLoopBootstrapRequest): Promise<AppLoopBootstrapResult>;
-  compensateBootstrap(job: AppLoopBootstrapJob, ownership: AppLoopBootstrapOwnership): Promise<void>;
+  /** Starts the run on pull request `pr`, for a pickup that adopts one, with the operator's pick of its primary
+   *  ticket when they made one. */
+  adopt(repoDir: string, pr: number, pick?: TicketRef): Promise<AdoptionStartResult>;
+  compensateBootstrap(job: AppLoopBootstrapJob, ownership: AppLoopBootstrapOwnership | AdoptionOwnership): Promise<void>;
   finalizeBootstrap(job: AppLoopBootstrapJob, identity: AppLoopBootstrap): Promise<void>;
   hasBootstrapForJob(job: AppLoopBootstrapJob): boolean;
   isCurrentJob(job: AppLoopBootstrapJob): boolean;
   canEnterWork(job: AppLoopBootstrapJob): boolean;
-  acceptBootstrap(job: AppLoopBootstrapJob, identity: AppLoopBootstrap): void;
+  acceptBootstrap(job: AppLoopBootstrapJob, identity: RunPickup): void;
   rollbackStep(job: AppLoopBootstrapJob): boolean;
   enterWork(
     repoDir: string,
@@ -413,17 +475,17 @@ export interface AppLoopBootstrapCoordinatorDeps {
     slice?: number,
   ): AppLoopEnterResult;
   /** Inject the job's (already-collapsed) skill line, submitted, calling `onComplete` once its submit `\r`
-   *  has been written (§B.13c). The deferred work turn chains off that signal (§B.5 item 6, AC10). */
+   *  has been written. The deferred work turn chains off that signal (AC10). */
   inject(text: string, onComplete: () => void): void;
   /** True iff the shell is mid-command (§19.3): the skill is refused rather than typed into live stdin. */
   isShellBusy(): boolean;
   /** Surface a transient §19.3 notice on a later state push — distinct from `emitError`'s blocking dialog,
-   *  because a refusal on a step whose work turn is running fine is not an error (§B.5 item 6). */
+   *  because a refusal on a step whose work turn is running fine is not an error. */
   emitNotice(notice: { repoDir: string; stepId: string; notice: string }): void;
   /** Fire the work turn that `enterWork(…, true)` accepted but did not request — the engine requests it
-   *  now, chaining its boundary strictly after the skill's submit (§B.20a). */
+   *  now, chaining its boundary strictly after the skill's submit. */
   triggerWork(job: AppLoopBootstrapJob): void;
-  /** Abandon a deferred-but-never-triggered work turn, freeing the runner (§B.20a). */
+  /** Abandon a deferred-but-never-triggered work turn, freeing the runner. */
   cancelWork(job: AppLoopBootstrapJob): void;
   /** Arm the deferral deadline: `onLapse` fires if the injection never signals completion; the returned
    *  canceller is invoked when completion does arrive (CWE-755 — never leave a turn accepted-but-unrequested). */
@@ -432,6 +494,8 @@ export interface AppLoopBootstrapCoordinatorDeps {
   emitConflict(
     conflict: { repoDir: string; stepId: string } & AppBootstrapConflictTarget,
   ): void;
+  /** Asks the operator which of `tickets` is the primary of the run adopting PR `pr`; `choiceId` names this offer. */
+  emitTicketChoice(choice: { repoDir: string; stepId: string; pr: number; choiceId: string; tickets: TicketRef[] }): void;
   audit(repoDir: string, kind: AppBootstrapAuditKind, stepId: string, detail?: string): void;
 }
 
@@ -443,20 +507,24 @@ export interface AppLoopBootstrapCoordinator {
     wipe: boolean,
     target: AppBootstrapConflictTarget,
   ): void;
+  /** The operator's answer to ticket-choice offer `choiceId`: refused, with the job still held, unless it answers
+   *  the step's current offer with Cancel or one of the tickets it offered. */
+  resolveTicket(repoDir: string, stepId: string, choiceId: string, answer: AdoptTicketAnswer): ResolveAdoptTicketResult;
 }
+
+/** What a held start was answered with: a confirmed wipe of a ticket run's conflict, or an adopting run's pick. */
+type StartAnswer = { confirmedWipe?: AppBootstrapConflictTarget; pick?: TicketRef };
 
 export function createAppLoopBootstrapCoordinator(
   deps: AppLoopBootstrapCoordinatorDeps,
 ): AppLoopBootstrapCoordinator {
   let inFlight: { token: symbol; job: AppLoopBootstrapJob } | null = null;
-  const pending = new Map<
-    string,
-    { job: AppLoopBootstrapJob; confirmedWipe?: AppBootstrapConflictTarget }
-  >();
+  const pending = new Map<string, { job: AppLoopBootstrapJob; answer: StartAnswer }>();
   const held = new Map<
     string,
     { job: AppLoopBootstrapJob; target: AppBootstrapConflictTarget }
   >();
+  const heldChoices = new Map<string, { job: AppLoopBootstrapJob; choiceId: string; tickets: TicketRef[] }>();
   const heldKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
   const callEnterWork = (job: AppLoopBootstrapJob, deferRequest: boolean): AppLoopEnterResult =>
     deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry, deferRequest, job.slice);
@@ -474,6 +542,11 @@ export function createAppLoopBootstrapCoordinator(
   const emitNotice = (job: AppLoopBootstrapJob, notice: string): void => {
     try {
       deps.emitNotice({ repoDir: job.repoDir, stepId: job.stepId, notice });
+    } catch {}
+  };
+  const emitTicketChoice = (job: AppLoopBootstrapJob, pr: number, choiceId: string, tickets: TicketRef[]): void => {
+    try {
+      deps.emitTicketChoice({ repoDir: job.repoDir, stepId: job.stepId, pr, choiceId, tickets });
     } catch {}
   };
   const emitConflict = (
@@ -510,7 +583,7 @@ export function createAppLoopBootstrapCoordinator(
       emitError(job, combined);
     }
   };
-  // §B.5 item 6 / §B.20a: the turn was accepted-but-not-requested; inject the step's skill and chain its
+  // The turn was accepted-but-not-requested; inject the step's skill and chain its
   // request off the injection's completion, so the repo-authored skill line is submitted before any boundary
   // preamble (CWE-74). A deadline guards the gap: if completion never signals, revert rather than leave the
   // step in_progress with a turn that occupies the runner but is never requested (CWE-755).
@@ -558,7 +631,7 @@ export function createAppLoopBootstrapCoordinator(
       rollbackJob(job, reason);
     }
   };
-  // §B.5 item 6: a bound def declaring a `pickup:` block has its skill injected AFTER work entry is
+  // A bound def declaring a `pickup:` block has its skill injected AFTER work entry is
   // accepted, not at the seam — so no synchronous revert arm below the injection can roll back a step whose
   // agent turn is already live. Over a busy shell (§19.3) the skill is refused and BUSY_NOTICE surfaced, and
   // the turn starts on the synchronous arm instead (item 4's no-injection case).
@@ -623,14 +696,16 @@ export function createAppLoopBootstrapCoordinator(
     rollbackJob(job, reason);
     return false;
   };
-  const stale = async (job: AppLoopBootstrapJob, result: AppLoopBootstrapResult): Promise<void> => {
+  const stale = async (job: AppLoopBootstrapJob, result: PickupStartResult): Promise<void> => {
     audit(job, 'stale');
     if (result.ok) {
       try {
         await deps.compensateBootstrap(job, result.ownership);
         emitError(
           job,
-          `Bootstrap completed after step ${job.stepId} was no longer current; its draft PR and branch were removed.`,
+          isAdoptedPickup(result.identity)
+            ? `Adopting pull request #${result.identity.pr} completed after step ${job.stepId} was no longer current; its fix branch ${result.identity.fixBranch} was removed and the previous checkout restored.`
+            : `Bootstrap completed after step ${job.stepId} was no longer current; its draft PR and branch were removed.`,
         );
       } catch (e) {
         emitError(
@@ -669,14 +744,9 @@ export function createAppLoopBootstrapCoordinator(
     }
   };
 
-  let dispatchJob: (
-    job: AppLoopBootstrapJob,
-    confirmedWipe?: AppBootstrapConflictTarget,
-  ) => void;
-  const start = (
-    job: AppLoopBootstrapJob,
-    confirmedWipe?: AppBootstrapConflictTarget,
-  ): void => {
+  let dispatchJob: (job: AppLoopBootstrapJob, answer?: StartAnswer) => void;
+  const start = (job: AppLoopBootstrapJob, answer: StartAnswer = {}): void => {
+    const { confirmedWipe, pick } = answer;
     const bootstrap = job.bootstrap;
     if (bootstrap === null) {
       enterFastPath(job);
@@ -702,10 +772,10 @@ export function createAppLoopBootstrapCoordinator(
         if (nextEntry.done) return;
         const [repoDir, next] = nextEntry.value;
         pending.delete(repoDir);
-        dispatchJob(next.job, next.confirmedWipe);
+        dispatchJob(next.job, next.answer);
       }
     };
-    const resolve = async (result: AppLoopBootstrapResult): Promise<void> => {
+    const resolve = async (result: PickupStartResult): Promise<void> => {
       if (!owns(job, token)) return;
       try {
         const status = currentStatus(job);
@@ -757,8 +827,8 @@ export function createAppLoopBootstrapCoordinator(
             return;
           }
           deps.acceptBootstrap(job, result.identity);
-          await deps.finalizeBootstrap(job, result.identity);
-          audit(job, 'success', result.identity.branch);
+          if (!isAdoptedPickup(result.identity)) await deps.finalizeBootstrap(job, result.identity);
+          audit(job, 'success', pickupBranchOf(result.identity));
           return;
         }
         // Nothing destructive has happened yet: the step stays put and the operator decides. Releasing
@@ -767,6 +837,12 @@ export function createAppLoopBootstrapCoordinator(
           held.set(heldKey(job.repoDir, job.stepId), { job, target: result.conflict });
           audit(job, 'conflict', result.conflict.branch);
           emitConflict(job, result.conflict);
+          return;
+        }
+        if (result.kind === 'choose-ticket') {
+          const choiceId = randomUUID();
+          heldChoices.set(heldKey(job.repoDir, job.stepId), { job, choiceId, tickets: result.tickets });
+          emitTicketChoice(job, result.pr, choiceId, result.tickets);
           return;
         }
         audit(job, 'failure', result.error);
@@ -780,20 +856,27 @@ export function createAppLoopBootstrapCoordinator(
         finish();
       }
     };
-    let operation: Promise<AppLoopBootstrapResult>;
+    let operation: Promise<PickupStartResult>;
+    const refused = (error: string): Promise<PickupStartResult> => Promise.resolve({ ok: false, kind: 'error', error });
     try {
-      operation =
-        job.issue === null
-          ? Promise.resolve<AppLoopBootstrapResult>({
-              ok: false,
-              kind: 'error',
-              error: 'pickup requires a resolved GitHub ticket input',
-            })
-          : deps.run(job.repoDir, {
-              issue: job.issue,
-              spec: bootstrap,
-              ...(confirmedWipe === undefined ? {} : { confirmedWipe }),
-            });
+      if (isAdoptPickup(bootstrap)) {
+        const pr = bootstrap.pr;
+        operation =
+          pr === null
+            ? refused('adopting a pull request requires a resolved pr input')
+            : pick === undefined
+              ? deps.adopt(job.repoDir, pr)
+              : deps.adopt(job.repoDir, pr, pick);
+      } else {
+        operation =
+          job.issue === null
+            ? refused('pickup requires a resolved GitHub ticket input')
+            : deps.run(job.repoDir, {
+                issue: job.issue,
+                spec: bootstrap,
+                ...(confirmedWipe === undefined ? {} : { confirmedWipe }),
+              });
+      }
     } catch (e) {
       operation = Promise.resolve({ ok: false, kind: 'error', error: errMsg(e) });
     }
@@ -803,13 +886,14 @@ export function createAppLoopBootstrapCoordinator(
     );
   };
 
-  dispatchJob = (job, confirmedWipe) => {
+  dispatchJob = (job, answer = {}) => {
+    heldChoices.delete(heldKey(job.repoDir, job.stepId));
     if (inFlight !== null) {
       if (
         inFlight.job.repoDir !== job.repoDir ||
         inFlight.job.entryToken !== job.entryToken
       ) {
-        pending.set(job.repoDir, { job, confirmedWipe });
+        pending.set(job.repoDir, { job, answer });
       }
       return;
     }
@@ -826,22 +910,24 @@ export function createAppLoopBootstrapCoordinator(
       enterFastPath(job);
       return;
     }
-    if (confirmedWipe === undefined && job.issue !== null && deps.hasBootstrapForJob(job)) {
+    const hasInput = isAdoptPickup(job.bootstrap) ? job.bootstrap.pr !== null : job.issue !== null;
+    if (answer.confirmedWipe === undefined && hasInput && deps.hasBootstrapForJob(job)) {
       enterFastPath(job);
       return;
     }
-    start(job, confirmedWipe);
+    start(job, answer);
   };
 
-  const declineWipe = (job: AppLoopBootstrapJob): void => {
+  /** Rolls the step back with no error dialog, because the operator chose not to go on with the held start. */
+  const declineHeldStart = (job: AppLoopBootstrapJob, declined: { audited: string; after: string }): void => {
     try {
       if (!deps.rollbackStep(job)) {
         audit(job, 'stale');
         return;
       }
-      audit(job, 'rollback', 'operator declined branch wipe');
+      audit(job, 'rollback', declined.audited);
     } catch (e) {
-      const reason = `could not roll back step ${job.stepId} after a declined wipe: ${errMsg(e)}`;
+      const reason = `could not roll back step ${job.stepId} after ${declined.after}: ${errMsg(e)}`;
       audit(job, 'rollback-failed', reason);
       emitError(job, reason);
     }
@@ -866,11 +952,37 @@ export function createAppLoopBootstrapCoordinator(
       }
       if (wipe) {
         audit(conflict.job, 'wipe', conflict.target.branch);
-        dispatchJob(conflict.job, conflict.target);
+        dispatchJob(conflict.job, { confirmedWipe: conflict.target });
         return;
       }
       audit(conflict.job, 'decline', conflict.target.branch);
-      declineWipe(conflict.job);
+      declineHeldStart(conflict.job, { audited: 'operator declined branch wipe', after: 'a declined wipe' });
+    },
+    resolveTicket(repoDir, stepId, choiceId, answer) {
+      const key = heldKey(repoDir, stepId);
+      const choice = heldChoices.get(key);
+      if (choice === undefined || choice.choiceId !== choiceId) {
+        return { ok: false, reason: `step ${stepId} is not waiting for an answer to that ticket choice` };
+      }
+      if (answer.kind === 'ticket' && !choice.tickets.some((t) => sameTicketRef(t, answer.ticket))) {
+        return { ok: false, reason: `${answer.ticket.repo}#${answer.ticket.number} was not offered as the primary ticket` };
+      }
+      heldChoices.delete(key);
+      const status = currentStatus(choice.job);
+      if (status.kind === 'failed') {
+        rollbackUnverifiableJob(choice.job, status.reason);
+        return { ok: true };
+      }
+      if (status.kind === 'stale') {
+        audit(choice.job, 'stale');
+        return { ok: false, reason: `step ${stepId} is no longer current` };
+      }
+      if (answer.kind === 'cancel') {
+        declineHeldStart(choice.job, { audited: 'operator cancelled the ticket choice', after: 'a cancelled ticket choice' });
+        return { ok: true };
+      }
+      dispatchJob(choice.job, { pick: answer.ticket });
+      return { ok: true };
     },
   };
 }

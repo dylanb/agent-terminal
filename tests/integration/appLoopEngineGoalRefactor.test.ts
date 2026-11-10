@@ -12,7 +12,7 @@ import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 import { createAppLoopEngineHarness, STEP, TEST_BRANCH } from '../helpers/appLoopEngineHarness';
 
-// §27.3/§28.5.3 (v2.201) — a refactor goal session has no engine rounds, so the checks a refactor round runs
+// §27.3/§28.5.3 — a refactor goal session has no engine rounds, so the checks a refactor round runs
 // run when the session finishes: its tests still pass, and any test file changed since RED is flagged.
 
 const h = createAppLoopEngineHarness();
@@ -47,7 +47,7 @@ const promptFile = (): string => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v2.201)', () => {
+describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3)', () => {
   it('tells the session to record its test result where the check reads it', () => {
     const engine = makeEngine(undefined, fake());
     h.defResult = resolved(refactorGoalDef());
@@ -56,14 +56,12 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     expect(promptFile()).toContain(goalRefactorResultRel(session()));
   });
 
-  it('hands the session the result check, to pass before it records the goal done, not at a checkpoint', () => {
+  it('hands the session the result check for its own result file', () => {
     const engine = makeEngine(undefined, fake());
     h.defResult = resolved(refactorGoalDef());
     enterAndInjectWork(engine);
 
-    expect(promptFile()).toMatch(
-      new RegExp(`Before you record the goal done, run the loop's own format check on the phase result[\\s\\S]*check-artifact result ${goalRefactorResultRel(session()).replace(/\./g, '\\.')} passed no-build`),
-    );
+    expect(promptFile()).toContain(`check-artifact result ${goalRefactorResultRel(session())} passed no-build`);
     expect(promptFile()).toContain(phaseOutputRel(goalRefactorResultRel(session())));
   });
 

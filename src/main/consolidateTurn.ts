@@ -9,7 +9,7 @@ import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CLEAN_RULE_LINES, CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { checkerLines } from './artifactCheck';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
@@ -51,6 +51,8 @@ export interface ConsolidatePromptReq {
    *  consolidator judges the round against THIS ticket, never one re-derived from the branch/PR/cwd. Absent when
    *  the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
 }
 
 /** The verdict format rules (§27.6), from the shared consolidator-output vocabulary. */
@@ -111,7 +113,8 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
   const lines: string[] = [];
   lines.push(req.recipeBody.trimEnd());
   // §19.1 — bind the consolidator to the engine-resolved ticket it judges the round against (one shared source).
-  if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption));
+  else if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   lines.push(
     '',
     `This is the consolidator turn for round ${req.round}.`,

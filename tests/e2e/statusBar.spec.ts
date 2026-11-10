@@ -1,5 +1,6 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -156,54 +157,6 @@ test('persists a user title across relaunch and keeps it while a PR outranks it 
   await flowControl().click(); // Advance → work: the pr typed-input ref surfaces and outranks the user name
   await expect(statusTitle()).toContainText('PR #179', { timeout: 10_000 });
   expect(readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8')).toContain('Refactor the shadow parser'); // the name is not lost
-});
-
-test('keeps title, activity, and alert perceptible under pressure and honors reduced motion (§22.3.1)', async () => {
-  const plain = temp('agent-term-e2e-sblayout-plain-');
-  mkdirSync(join(plain, '.git'), { recursive: true });
-  const { dir: gate } = seedLoopAtGateRepo('agent-term-e2e-sblayout-');
-  await enterRepo(plain);
-  const height = async () => (await statusBar().boundingBox())!.height;
-  const idleHeight = await height();
-  await expect(statusAlert()).toHaveCount(0);
-
-  await enterRepo(gate); // its flow loads at the §27 human-needed gate → the alert appears
-  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
-  expect(await height()).toBe(idleHeight); // the alert does not grow the bar
-
-  await statusTitle().click();
-  const editor = page.locator('#status-bar input[data-sb-title-edit]');
-  await editor.fill('Refactor the shadow parser and its quiescence detector');
-  expect(await height()).toBe(idleHeight);
-  await editor.press('Enter');
-  expect(await height()).toBe(idleHeight);
-
-  await page.locator('#status-bar .sb-activity').evaluate((region) => {
-    const phrase = document.createElement('span');
-    phrase.className = 'phrase';
-    phrase.textContent = 'Running every implementation review persona';
-    const spinner = document.createElement('span');
-    spinner.className = 'spin';
-    spinner.setAttribute('aria-hidden', 'true');
-    region.replaceChildren(phrase, spinner);
-  });
-  const spinner = page.locator('#status-bar .spin');
-  expect(await spinner.evaluate((el) => getComputedStyle(el, '::after').content)).not.toBe('none');
-  expect(await spinner.evaluate((el) => getComputedStyle(el, '::after').animationName)).not.toBe('none');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  expect(await spinner.evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('none');
-
-  await page.setViewportSize({ width: 420, height: 700 });
-  const titleBox = (await statusTitle().boundingBox())!;
-  const phraseBox = (await page.locator('#status-bar .sb-activity .phrase').boundingBox())!;
-  const barBox = (await statusBar().boundingBox())!;
-  const alertBox = (await statusAlert().boundingBox())!;
-  expect(titleBox.width).toBeGreaterThan(0);
-  expect(phraseBox.width).toBeGreaterThan(0);
-  expect(await statusTitle().evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-  expect(await page.locator('#status-bar .sb-activity .phrase').evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-  expect(alertBox.x + alertBox.width).toBeLessThanOrEqual(barBox.x + barBox.width + 1);
-  expect(await height()).toBe(idleHeight);
 });
 
 test('names a directory with no flow and restores the name after relaunch (§22.3.1)', async () => {

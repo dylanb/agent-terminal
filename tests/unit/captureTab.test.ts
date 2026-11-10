@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, REVEAL_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
 import { createCaptureTab } from '../../src/renderer/src/captureTab';
 import { assertRendersFromHostDocument } from './relocatable';
+import { byRole } from '../helpers/byRole';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -300,6 +301,57 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(blocks().querySelector('[data-event-id="f2"]')).toBeTruthy();
   });
 
+  it('while an Add to todo is still being answered, the toolbar starts nothing else; Add to todo shows busy until it settles', async () => {
+    await withRepo();
+    let answer!: (list: TodoItem[]) => void;
+    monitor.todoAdd.mockImplementation(() => new Promise<TodoItem[]>((r) => (answer = r)));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    byRole(document, 'checkbox', 'Select for bulk action: alpha').click();
+    const add = byRole(document, 'button', 'Add to todo');
+
+    add.click();
+    add.click();
+    byRole(document, 'button', 'Dismiss all').click();
+    expect(monitor.todoAdd).toHaveBeenCalledTimes(1);
+    expect(monitor.dismissAll).not.toHaveBeenCalled();
+    expect(add.getAttribute('aria-busy')).toBe('true');
+
+    answer([{ id: 't1', repoKey: '/repoA', text: 'alpha', status: 'active', order: 1, createdAt: '2026-06-12T10:00:00.000Z' }]);
+    await tick();
+    expect(add.getAttribute('aria-busy')).toBeNull();
+    byRole(document, 'checkbox', 'Select for bulk action: beta').click();
+    add.click();
+    expect(monitor.todoAdd).toHaveBeenCalledTimes(2);
+  });
+
+  it('while an Undo is still being answered, a second press deletes nothing more; Undo shows busy until it settles', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    byRole(document, 'checkbox', 'Select for bulk action: alpha').click();
+    byRole(document, 'button', 'Add to todo').click();
+    await tick();
+    let answer!: () => void;
+    monitor.todoDelete.mockImplementation(() => new Promise<TodoItem[]>((r) => (answer = () => r([]))));
+    const undo = byRole(document, 'button', 'Undo');
+
+    undo.click();
+    undo.click();
+    byRole(document, 'button', 'Dismiss all').click();
+    expect(monitor.todoDelete).toHaveBeenCalledTimes(1);
+    expect(monitor.dismissAll).not.toHaveBeenCalled();
+    expect(undo.getAttribute('aria-busy')).toBe('true');
+
+    answer();
+    await tick();
+    byRole(document, 'checkbox', 'Select for bulk action: beta').click();
+    byRole(document, 'button', 'Add to todo').click();
+    await tick();
+    byRole(document, 'button', 'Undo').click();
+    expect(monitor.todoDelete).toHaveBeenCalledTimes(2);
+  });
+
   it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
     await withRepo();
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'unbounded scrollback re-scan' }));
@@ -308,7 +360,7 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
   });
 });
 
-// §21.1 / v2.27: capture is manual + single-slot — clicking "Capture last report" runs
+// §21.1: capture is manual + single-slot — clicking "Capture last report" runs
 // detection on demand (capture:last) and the pane shows the one returned report's findings,
 // replacing whatever it showed before. Nothing auto-emits.
 describe('Capture last report button (§21.1 — manual single-slot)', () => {
@@ -414,6 +466,25 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
     button().click();
     await flush();
     expect(findings().map(text)).toEqual(['kept finding']);
+  });
+
+  it('while a capture is still being answered, a second press runs nothing more; the button shows busy until it settles', async () => {
+    let answer!: (events: MonitorEvent[]) => void;
+    monitor.captureLast.mockImplementation(() => new Promise<MonitorEvent[]>((r) => (answer = r)));
+    wireMonitorPane();
+    await flush();
+    const capture = byRole(document, 'button', 'Capture last report');
+
+    capture.click();
+    capture.click();
+    expect(monitor.captureLast).toHaveBeenCalledTimes(1);
+    expect(capture.getAttribute('aria-busy')).toBe('true');
+
+    answer([report('f1', 'first finding')]);
+    await flush();
+    expect(capture.getAttribute('aria-busy')).toBeNull();
+    capture.click();
+    expect(monitor.captureLast).toHaveBeenCalledTimes(2);
   });
 
   it('a rejected capture:last is handled, not an unhandled rejection', async () => {

@@ -1,32 +1,31 @@
 import { readFile } from 'node:fs/promises';
+import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { errMsg } from './errno';
+import { GH_ACTION, TICKET_RUN_EFFECTS } from './gateEffects';
 import type { AppLoopBootstrap } from './appLoopState';
+import type { RunPickup } from './trustedPickups';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import { runAppCommand } from './appCommand';
-import {
-  createGitHubRepositorySource,
-  matchesGitHubRepositoryUrl,
-  type GitHubRepositoryIdentity,
-} from './githubRepository';
-import { isRecord } from './yamlRecord';
+import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
+import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
+import { createRealPublishPrReviewPorts, publishPrReview, type PublishPrReviewRequest } from './publishPrReview';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
   ticket: number | null;
   bodyFile: string | null;
-  bootstrap: AppLoopBootstrap | null;
+  pickup: RunPickup | null;
 }
+
+/** §27.13 — `no-target` when the run has no PR or issue for the action to act on. */
+export type AppGateSideEffectResult = { outcome: 'done' } | { outcome: 'no-target'; reason: string };
 
 export type RunAppGateSideEffect = (
   action: string,
   ctx: AppGateSideEffectCtx,
-) => Promise<void>;
+) => Promise<AppGateSideEffectResult>;
 
-export interface AppGatePullRequest {
-  number: number;
-  branch: string;
-  state: 'OPEN' | 'CLOSED' | 'MERGED';
-  closingIssues: number[];
-}
+export type AppGatePullRequest = PullRequest;
 
 export interface AppGateGitHubOperations {
   pullRequest(number: number): Promise<AppGatePullRequest>;
@@ -37,13 +36,15 @@ export interface AppGateGitHubOperations {
     bodyFile: string,
     closingIssue: number | null,
   ): Promise<void>;
+  /** §27.13 `publish-pr-review`: publishes an adopting run's review into the PR it adopted, or throws having
+   *  written nothing. */
+  publishPullRequestReview(request: PublishPrReviewRequest): Promise<void>;
 }
 
 export function createAppGateGitHub(
   github: AppGateGitHubOperations,
 ): RunAppGateSideEffect {
-  const verifyBootstrap = async (ctx: AppGateSideEffectCtx): Promise<void> => {
-    const bootstrap = ctx.bootstrap;
+  const verifyBootstrap = async (ctx: AppGateSideEffectCtx, bootstrap: AppLoopBootstrap | null): Promise<void> => {
     if (bootstrap === null) return;
     if (ctx.pr !== bootstrap.pr || ctx.ticket !== bootstrap.issue) {
       throw new Error('bootstrap PR identity does not match the gate refs');
@@ -56,97 +57,52 @@ export function createAppGateGitHub(
         `bootstrap PR identity could not be verified: ${errMsg(e)}`,
       );
     }
-    if (
-      pullRequest.number !== bootstrap.pr ||
-      pullRequest.branch !== bootstrap.branch ||
-      pullRequest.state !== 'OPEN' ||
-      !pullRequest.closingIssues.includes(bootstrap.issue)
-    ) {
-      throw new Error('bootstrap PR identity does not match GitHub');
-    }
+    const mismatch = pickupMismatch(pullRequest, bootstrap);
+    if (mismatch !== null) throw new Error(`bootstrap PR identity does not match GitHub: ${mismatch}`);
   };
 
   return async (action, ctx) => {
+    if (ctx.pickup !== null && isAdoptedPickup(ctx.pickup) && TICKET_RUN_EFFECTS.has(action)) {
+      throw new Error(
+        `${action} acts on a ticket run's own PR and ticket, and this run adopted PR #${ctx.pickup.pr}; it wrote nothing — remove ${action} from this gate, or terminate the run`,
+      );
+    }
+    const bootstrap = ctx.pickup === null || isAdoptedPickup(ctx.pickup) ? null : ctx.pickup;
     switch (action) {
-      case 'mark-ready':
-        if (ctx.pr === null) throw new Error('no PR to mark ready');
-        await verifyBootstrap(ctx);
+      case GH_ACTION.markReady:
+        if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
+        await verifyBootstrap(ctx, bootstrap);
         await github.markPullRequestReady(ctx.pr);
-        return;
-      case 'update-issue-body':
+        return { outcome: 'done' };
+      case GH_ACTION.updateIssueBody:
         if (ctx.ticket === null) {
-          throw new Error('no issue to publish the body to');
+          return { outcome: 'no-target', reason: 'no issue to publish the body to' };
         }
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
-        return;
-      case 'publish-pr-body':
+        return { outcome: 'done' };
+      case GH_ACTION.publishPrBody:
         if (ctx.pr === null) {
-          throw new Error('no PR to publish the body to');
+          return { outcome: 'no-target', reason: 'no PR to publish the body to' };
         }
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
-        await verifyBootstrap(ctx);
+        await verifyBootstrap(ctx, bootstrap);
         await github.publishPullRequestBody(
           ctx.pr,
           ctx.bodyFile,
-          ctx.bootstrap?.issue ?? null,
+          bootstrap?.issue ?? null,
         );
-        return;
+        return { outcome: 'done' };
+      case GH_ACTION.publishPrReview:
+        await github.publishPullRequestReview({ pickup: ctx.pickup, pr: ctx.pr, report: ctx.bodyFile });
+        return { outcome: 'done' };
       default:
         throw new Error(`unknown approve side-effect action: ${action}`);
     }
-  };
-}
-
-function parsePullRequest(
-  value: unknown,
-  expectedNumber: number,
-  repository: GitHubRepositoryIdentity,
-): AppGatePullRequest {
-  if (
-    !isRecord(value) ||
-    value.number !== expectedNumber ||
-    typeof value.url !== 'string' ||
-    !matchesGitHubRepositoryUrl(
-      value.url,
-      repository,
-      'pull',
-      expectedNumber,
-    ) ||
-    typeof value.headRefName !== 'string' ||
-    (value.state !== 'OPEN' &&
-      value.state !== 'CLOSED' &&
-      value.state !== 'MERGED') ||
-    !Array.isArray(value.closingIssuesReferences)
-  ) {
-    throw new Error('invalid GitHub pull request identity');
-  }
-  const closingIssues = value.closingIssuesReferences.map((entry) => {
-    if (
-      !isRecord(entry) ||
-      !Number.isSafeInteger(entry.number) ||
-      (entry.number as number) <= 0 ||
-      typeof entry.url !== 'string' ||
-      !matchesGitHubRepositoryUrl(
-        entry.url,
-        repository,
-        'issues',
-        entry.number as number,
-      )
-    ) {
-      throw new Error('invalid GitHub closing issue identity');
-    }
-    return entry.number as number;
-  });
-  return {
-    number: expectedNumber,
-    branch: value.headRefName,
-    state: value.state,
-    closingIssues,
   };
 }
 
@@ -154,32 +110,12 @@ export function createRealAppGateGitHub(
   repoDir: string,
 ): RunAppGateSideEffect {
   const repositorySource = createGitHubRepositorySource(repoDir);
+  const pullRequests = createRealPullRequestLookup(repoDir);
+  const bodies = createGitHubPullRequestBodies(repoDir);
   const repository = (): Promise<GitHubRepositoryIdentity> =>
     repositorySource.resolve();
   const github: AppGateGitHubOperations = {
-    pullRequest: async (number) => {
-      const identity = await repository();
-      const viewed = await runAppCommand(
-        'gh',
-        [
-          'pr',
-          'view',
-          String(number),
-          '--repo',
-          identity.selector,
-          '--json',
-          'number,url,headRefName,state,closingIssuesReferences',
-        ],
-        repoDir,
-      );
-      let raw: unknown;
-      try {
-        raw = JSON.parse(viewed);
-      } catch {
-        throw new Error('invalid GitHub pull request identity');
-      }
-      return parsePullRequest(raw, number, identity);
-    },
+    pullRequest: (number) => pullRequests.pullRequest(number),
     markPullRequestReady: async (number) => {
       const identity = await repository();
       await runAppCommand(
@@ -225,7 +161,6 @@ export function createRealAppGateGitHub(
       bodyFile,
       closingIssue,
     ) => {
-      const identity = await repository();
       let body: string;
       try {
         body = await readFile(bodyFile, 'utf8');
@@ -235,39 +170,12 @@ export function createRealAppGateGitHub(
       if (body.trim().length === 0) {
         throw new Error('refused to publish an empty PR body artifact');
       }
-      if (closingIssue === null) {
-        await runAppCommand(
-          'gh',
-          [
-            'pr',
-            'edit',
-            String(pullRequest),
-            '--body-file',
-            '-',
-            '--repo',
-            identity.selector,
-          ],
-          repoDir,
-          body,
-        );
-        return;
-      }
-      const artifact = body.trimEnd();
-      const closingLine = `closes #${closingIssue}`;
-      await runAppCommand(
-        'gh',
-        [
-          'pr',
-          'edit',
-          String(pullRequest),
-          '--body-file',
-          '-',
-          '--repo',
-          identity.selector,
-        ],
-        repoDir,
-        `${artifact}\n\n${closingLine}\n`,
-      );
+      await bodies.replaceBody(pullRequest, closingIssue === null
+        ? body
+        : `${body.trimEnd()}\n\ncloses #${closingIssue}\n`);
+    },
+    publishPullRequestReview: async (request) => {
+      await publishPrReview(createRealPublishPrReviewPorts(repoDir), request);
     },
   };
   return createAppGateGitHub(github);

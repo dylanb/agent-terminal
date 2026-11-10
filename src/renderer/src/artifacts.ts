@@ -5,6 +5,7 @@
 import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
 import { setShown, setCollapsed } from './visibility';
 import { FOCUS_VIEW_EVENT } from './paneActions';
+import { createPressGroup, onPress } from './pressable';
 
 /** The artifact viewer is view 2 in the converged shell (§22.4 / §24.1C). */
 const ARTIFACTS_VIEW = '2';
@@ -325,11 +326,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     prevBtn.disabled = s.prevTo === null;
     nextBtn.disabled = s.nextTo === null;
   }
-  prevBtn.addEventListener('click', () => {
+  onPress(prevBtn, () => {
     const { prevTo } = navState();
     if (prevTo !== null) codeView?.revealLine(prevTo);
   });
-  nextBtn.addEventListener('click', () => {
+  onPress(nextBtn, () => {
     const { nextTo } = navState();
     if (nextTo !== null) codeView?.revealLine(nextTo);
   });
@@ -337,7 +338,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   // Full-screen viewer (§20.2): the button requests the chrome change through the contract and
   // the shell calls setFullscreen back. State lives on .artsplit so the styling is placement-agnostic.
   let fullscreen = false;
-  fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
+  onPress(fsBtn, () => deps.onRequestFullscreen?.(!fullscreen));
   // .is-collapsed on the panel itself keeps a slid-off header/tree inert — no tab stops inside
   // hidden content (§22.2).
   const setHeaderOpen = (open: boolean): void => {
@@ -348,8 +349,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     setCollapsed(tree, !open);
     leftStrip.setAttribute('aria-expanded', String(open));
   };
-  topStrip.addEventListener('click', () => setHeaderOpen(bar.classList.contains('is-collapsed')));
-  leftStrip.addEventListener('click', () => setTreeOpen(tree.classList.contains('is-collapsed')));
+  onPress(topStrip, () => setHeaderOpen(bar.classList.contains('is-collapsed')));
+  onPress(leftStrip, () => setTreeOpen(tree.classList.contains('is-collapsed')));
   function setFullscreen(on: boolean): void {
     if (on === fullscreen) return;
     fullscreen = on;
@@ -378,7 +379,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         head.setAttribute('role', 'treeitem');
         head.setAttribute('aria-expanded', 'true');
         head.tabIndex = -1;
-        head.addEventListener('click', () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
+        onPress(head, () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
         const children = el('div', 'dchildren');
         children.setAttribute('role', 'group'); // WAI-ARIA tree: dir treeitem owns a group
         renderNodes(node.children ?? [], children);
@@ -393,7 +394,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         row.tabIndex = -1;
         row.append(el('span', 'ic', node.relPath.endsWith('.md') ? 'md' : 'ƒ'), el('span', 'fn', node.name));
         for (const p of node.provenance ?? []) row.appendChild(el('span', `tag tag-${p}`, PROV_LABEL[p] ?? p));
-        row.addEventListener('click', () => void open(node.relPath));
+        onPress(row, () => {
+          void open(node.relPath);
+        });
         fileRows.set(node.relPath, row);
         into.appendChild(row);
       }
@@ -594,15 +597,17 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     }
   }
 
-  function routeSelection(sink: (text: string) => void | Promise<void>): void {
-    const text = readSelection(body) || lastSelection;
-    if (!text) return;
-    // addToTodo crosses IPC; a rejected invoke (main restart) must not escape as an unhandled rejection.
-    Promise.resolve(sink(text)).catch(() => {});
-  }
-
-  sendBtn.addEventListener('click', () => routeSelection(deps.send));
-  todoBtn.addEventListener('click', () => routeSelection(deps.addToTodo));
+  const selectionText = (): string => readSelection(body) || lastSelection;
+  const selectionActions = createPressGroup();
+  selectionActions.bind(sendBtn, () => {
+    const text = selectionText();
+    if (text) deps.send(text);
+  });
+  selectionActions.bind(todoBtn, () => {
+    const text = selectionText();
+    // addToTodo crosses IPC; a rejected invoke (main restart) is swallowed, as the todo list is left unchanged.
+    return text ? Promise.resolve(deps.addToTodo(text)).catch(() => {}) : undefined;
+  });
   search.addEventListener('input', renderTree);
   scopeBox.addEventListener('change', () => {
     scope = scopeBox.checked ? 'repo' : 'curated';

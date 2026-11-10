@@ -7,6 +7,7 @@
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
     />
     <title>Agent Terminal</title>
+    <link rel="stylesheet" href="./src/tokens.css" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
@@ -19,7 +20,23 @@
         <circle cx="13.5" cy="5.1" r="1.6" fill="currentColor" />
       </symbol>
     </svg>
-    <div id="app" class="app">
+    <section id="startup-waiting" class="startup-waiting">
+      <div class="startup-card">
+        <p class="startup-label">Startup paused</p>
+        <h1 class="startup-heading">Waiting for the controller</h1>
+        <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If the controller is already running, restart it. If this terminal still waits, update both apps to their latest builds.</p>
+        <ul class="startup-steps">
+          <li>macOS: Open Agent Terminal Controller (<code>agent-terminal-controller.app</code>) from your Applications folder.</li>
+          <li>Linux: Open Agent Terminal Controller (<code>agent-terminal-controller</code>) from your applications menu, or run its AppImage.</li>
+        </ul>
+        <p>No controller command yet? Install the <code>agent-terminal</code> command here, then run <code>agent-terminal --controller</code> in a shell.</p>
+        <div id="startup-cli-install" class="startup-cli-install"></div>
+        <p>You can close this window while waiting.</p>
+        <p id="startup-incompatible" role="status"></p>
+        <p class="startup-status" role="status"><span class="startup-dot" aria-hidden="true"></span>Not connected yet. This terminal will start on its own once the controller confirms.</p>
+      </div>
+    </section>
+    <div id="app" class="app" hidden>
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
         <nav class="blk" aria-label="Views">
@@ -33,6 +50,8 @@
              The strip owns the whole block (header carries the step position), §24.2.2. -->
         <div class="blk flowstrip" id="flow-strip" role="status" aria-live="polite" aria-atomic="false"></div>
         <div class="blk flowpicker" id="flow-picker"></div>
+        <!-- §27.13: a held run's ticket-and-PR confirm (createPickupConfirm). Empty unless a run is held. -->
+        <div class="blk pickupconfirm" id="pickup-confirm"></div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
@@ -57,7 +76,10 @@
       <!-- FULL-BLEED MAIN -->
       <main class="main">
         <!-- §22.3.1 -->
-        <div id="status-bar" class="status-bar"></div>
+        <div class="status-bar">
+          <span id="setup-needed" class="sb-setup-slot"></span>
+          <div id="status-bar" class="sb-body"></div>
+        </div>
         <div class="viewport">
           <!-- VIEW 1 — Terminal (real xterm + selection, §7) -->
           <div data-viewpane="1" class="on">
@@ -115,6 +137,10 @@
     <!-- Destructive confirmation host (#26): createConfirmDialog renders the flow Terminate
          confirmation here, overlaying the app via fixed positioning. Empty until activated. -->
     <div id="flow-confirm-host"></div>
+    <!-- §27.13: the held run's ticket-and-PR dialog, raised by the app on its own. -->
+    <div id="pickup-confirm-modal-host"></div>
+    <div id="adopt-ticket-choice-modal-host"></div>
+    <div id="setup-check-host"></div>
     <!-- Bootstrap-failure error-alert host (§27.10): createErrorDialog renders the blocking pickup-failure
          alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
     <div id="flow-error-host"></div>

@@ -20,6 +20,13 @@ describe('cli install view organism (§23.4)', () => {
   const button = (): HTMLButtonElement => host.querySelector('button') as HTMLButtonElement;
   const status = (): HTMLElement => host.querySelector('[role="status"]') as HTMLElement;
   const alert = (): HTMLElement | null => host.querySelector('[role="alert"]');
+  const buttonNamed = (name: string): HTMLElement => {
+    const found = [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].filter(
+      (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name,
+    );
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
 
   it('renders an install button and a status live region', () => {
     createCliInstall(host, deps());
@@ -96,9 +103,9 @@ describe('cli install view organism (§23.4)', () => {
     const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
     createCliInstall(host, deps({ install }));
     button().click();
-    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    await vi.waitFor(() => expect(button().getAttribute('aria-disabled')).toBe('true'));
     resolveInstall({ ok: true, path: '/p/agent-terminal' });
-    await vi.waitFor(() => expect(button().disabled).toBe(false));
+    await vi.waitFor(() => expect(button().getAttribute('aria-disabled')).not.toBe('true'));
   });
 
   it('does not yank focus back to the button if the user moved focus away during install', async () => {
@@ -109,10 +116,10 @@ describe('cli install view organism (§23.4)', () => {
     document.body.appendChild(other);
     button().focus();
     button().click();
-    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    await vi.waitFor(() => expect(button().getAttribute('aria-disabled')).toBe('true'));
     other.focus(); // user tabs elsewhere while the async install runs
     resolveInstall({ ok: true, path: '/p/agent-terminal' });
-    await vi.waitFor(() => expect(button().disabled).toBe(false));
+    await vi.waitFor(() => expect(button().getAttribute('aria-disabled')).not.toBe('true'));
     expect(host.ownerDocument.activeElement).toBe(other);
   });
 
@@ -121,10 +128,27 @@ describe('cli install view organism (§23.4)', () => {
     const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
     createCliInstall(host, deps({ install }));
     button().click();
-    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    await vi.waitFor(() => expect(button().getAttribute('aria-disabled')).toBe('true'));
     button().click(); // second activation while busy
     expect(install).toHaveBeenCalledTimes(1);
     resolveInstall({ ok: true, path: '/p/agent-terminal' });
+  });
+
+  it('ignores a second press while an install is answered, shows it busy, and takes a press again after', async () => {
+    const answers: Array<(r: CliInstallResult) => void> = [];
+    const install = vi.fn(() => new Promise<CliInstallResult>((r) => answers.push(r)));
+    createCliInstall(host, deps({ install }));
+    const press = buttonNamed('Install the agent-terminal command-line launcher');
+    press.click();
+    press.click();
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(press.getAttribute('aria-busy')).toBe('true');
+    expect(press.getAttribute('aria-disabled')).toBe('true');
+    answers[0]({ ok: true, path: '/p/agent-terminal' });
+    await vi.waitFor(() => expect(status().textContent).toContain('/p/agent-terminal'));
+    await vi.waitFor(() => expect(press.getAttribute('aria-busy')).not.toBe('true'));
+    press.click();
+    expect(install).toHaveBeenCalledTimes(2);
   });
 
   it('dispose() clears the view from its host', () => {

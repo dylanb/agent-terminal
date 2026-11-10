@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { LifecycleTerminateResult } from '../../src/main/flowLifecycle';
 import type { FlowStateView } from '../../src/shared/ipc';
-import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
+import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry, type WorkRefs } from '../../src/main/appLoopEngine';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import {
   clearBaselineCommit,
@@ -32,6 +32,8 @@ import { roundReportWithStatuses } from './roundReports';
 import { verdictOutput } from './consolidatorOutputs';
 
 export const STEP = 'plan';
+/** The command the harness hands a work turn for the capabilities self-check. */
+export const CAPABILITIES_CHECK_COMMAND = 'check-artifact capabilities';
 // §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
 // step, so a baseline the RED step recorded is found by the GREEN step (different step, same branch). This
 // fake branch differs from STEP so a lingering step-match would fail these branch-keyed tests.
@@ -93,9 +95,11 @@ export class AppLoopEngineHarness {
   clearBaselineError!: string | null;
   /** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null. */
   refactorResultLocationNull!: boolean;
-  workRefsResult!: { ticket: number | null; pr: number | null };
+  workRefsResult!: WorkRefs;
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
+  /** The step the engine's `reopenStep` dep names as the back-to-red return step. */
+  reopenStepResult!: string | null;
   /** §28.4 D1 */
   currentSliceResult!: number;
   defResult!: LoopDefV2Result;
@@ -186,6 +190,7 @@ export class AppLoopEngineHarness {
     this.injected = [];
     this.workRefsResult = { ticket: null, pr: null };
     this.sliceBriefResult = null;
+    this.reopenStepResult = null;
     this.currentSliceResult = 1;
     this.polishStep = null;
     this.clearPolishError = null;
@@ -209,6 +214,8 @@ export class AppLoopEngineHarness {
       hostedAgent: () => this.hosted,
       armTimer: this.armTimer,
       cancelTimer: this.cancelTimer,
+      armAgentWait: () => {},
+      cancelAgentWait: () => {},
       noteSettle: () => {},
       resolveDef: () => this.defResult,
       readRecipe: () => '# work turn\nProduce the plan.',
@@ -249,6 +256,7 @@ export class AppLoopEngineHarness {
       hostedAgentKind: () => 'claude-code',
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
+      reopenStep: () => this.reopenStepResult,
       currentSlice: () => this.currentSliceResult,
       artifactCheckCommand: (check) =>
         check.kind === 'report'
@@ -257,7 +265,9 @@ export class AppLoopEngineHarness {
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
             : check.kind === 'progress'
               ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
-              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}`,
+              : check.kind === 'capabilities'
+                ? CAPABILITIES_CHECK_COMMAND
+                : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);

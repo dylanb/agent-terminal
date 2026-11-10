@@ -4,18 +4,19 @@
 // completion marker the work prompt instructs and the completion check reads (ONE definition, so the
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
-import type { SliceBrief } from './appLoopState';
+import type { SliceBriefDelivery } from './sliceBriefReader';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
+import type { BoundaryPolicy, LoopDefV2, SelfCheck } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
-import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
+import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
+import { RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
 import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
+import { exampleLoopCapabilities, LOOP_CAPABILITIES_FILENAME } from '../shared/loopCapabilities';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -23,7 +24,7 @@ import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
 export function boundaryCommand(policy: BoundaryPolicy): string {
   // policy.message is repo-authored (loopDefV2 applies requireString only) and this command is submitted as
   // one line, so collapse every CR/LF before interpolating — a newline would otherwise inject a second
-  // command line into the agent's instruction channel (CWE-74, §B.13d).
+  // command line into the agent's instruction channel (CWE-74).
   return policy.mode === 'compact' ? `/compact ${(policy.message ?? '').replace(/[\r\n]+/g, ' ')}` : '/clear';
 }
 
@@ -101,8 +102,10 @@ export interface AppWorkPromptReq {
    *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
    *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
-  sliceBrief?: SliceBrief;
+  sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
   loopBrief?: string;
   /** §27.3 */
@@ -111,6 +114,8 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  /** §29 */
+  selfCheck?: { kind: SelfCheck; checkCommand: string };
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
@@ -205,14 +210,20 @@ export function goalProgressLines(req: { progressRel: string; notesRel: string; 
 }
 
 /** §28.4.2 — the back-to-RED brief as the work turn states it. */
-export function sliceBriefLines(brief: SliceBrief, audience: 'work' | 'fixer'): string[] {
-  const lead =
-    audience === 'work'
+export function sliceBriefLines({ brief, reader }: SliceBriefDelivery, audience: 'work' | 'fixer'): string[] {
+  const head =
+    reader.kind === 'phase'
+      ? `REDO of impl-slice ${brief.slice} — the operator sent this slice back to RED from the ${brief.fromStep} gate with this brief.`
+      : `REDO — the operator sent this work back to the ${reader.step} step from the ${brief.fromStep} gate with this brief.`;
+  const workLead =
+    reader.kind === 'phase'
       ? 'The RED, GREEN and refactor phases of this slice must each satisfy it — do this phase\'s part:'
-      : 'Judge this round against it as well as the ticket, and record in the round report how the round serves it:';
+      : 'This step redoes the whole of the work, so it must satisfy all of it:';
+  const lead =
+    audience === 'work' ? workLead : 'Judge this round against it as well as the ticket, and record in the round report how the round serves it:';
   return [
     '',
-    `REDO of impl-slice ${brief.slice} — the operator sent this slice back to RED from the ${brief.fromStep} gate with this brief.`,
+    head,
     lead,
     '',
     brief.text,
@@ -248,6 +259,29 @@ export function designCheckLines(): string[] {
   ];
 }
 
+/** §29 — the app's own capabilities reader, run over a `loop-capabilities.yaml` this run creates. The loop does
+ *  not gate on it: a file the repository already had is left untouched even when the reader rejects it. */
+function capabilitiesSelfCheckLines(checkCommand: string): string[] {
+  return [
+    '',
+    `SELF-CHECK — if this run creates \`${LOOP_CAPABILITIES_FILENAME}\` (including one an earlier attempt of this run`,
+    `created), check it with the app's own reader from the repo root and fix the file until the check prints`,
+    `\`${ARTIFACT_CHECK_PASSED}\`, before you write the done-signal:`,
+    '',
+    `    ${checkCommand}`,
+    '',
+    `The check applies only to a \`${LOOP_CAPABILITIES_FILENAME}\` this run creates. Never edit one the repository`,
+    'already had before this run, even when the check rejects it. A well-formed file, for shape only (describe the',
+    'real repository):',
+    '',
+    exampleLoopCapabilities().trimEnd(),
+  ];
+}
+
+const SELF_CHECK_LINES: Record<SelfCheck, (checkCommand: string) => string[]> = {
+  'loop-capabilities': capabilitiesSelfCheckLines,
+};
+
 /** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
 const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
 
@@ -262,8 +296,9 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
-  if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
-  parts.push(...flowDocumentLines(), ...designCheckLines());
+  if (req.adoption !== undefined) parts.push(...adoptedRunLines(req.adoption));
+  else parts.push(...(req.ticket !== undefined ? ticketPromptLines(req.ticket) : []), ...flowDocumentLines());
+  parts.push(...designCheckLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
@@ -290,6 +325,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   if (req.sliceBrief !== undefined) parts.push(...sliceBriefLines(req.sliceBrief, 'work'));
   if (req.goalReview !== undefined) parts.push(...req.goalReview);
   if (req.goalProgress !== undefined) parts.push(...req.goalProgress);
+  if (req.selfCheck !== undefined) parts.push(...SELF_CHECK_LINES[req.selfCheck.kind](req.selfCheck.checkCommand));
   if (req.completion?.kind === 'file') {
     parts.push(
       '',
@@ -308,6 +344,10 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
           `This turn is a valid RED only when a test you ADDED fails by assertion (\`"${PHASE_RESULT_FIELDS.outcome}": "${RED_COMPLETING_OUTCOME}"\`).`,
           'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
           'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+          'The one exception is a slice whose behavior an earlier slice already built, so every test you added passes',
+          'against the existing code: when your instructions let you record it as verification-only, write instead',
+          '',
+          examplePhaseResult(RED_VERIFICATION_OUTCOME, { verificationOnly: true }).trimEnd(),
           ...checkerLines(req.completion.checkCommand, 'phase result', resultCheckMoment(req)),
         ],
       }),

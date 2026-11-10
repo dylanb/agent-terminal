@@ -272,7 +272,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(card.querySelector('.m')!.textContent).toContain('mystery-type');
   });
 
-  it('shows top-level cards newest-first (v2.6)', async () => {
+  it('shows top-level cards newest-first', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'a', text: 'first' }));
@@ -356,6 +356,16 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('shows session, agent and full-screen status but not paste mode', () => {
+    wireMonitorPane();
+    handlers.update!({ sessionId: 's1', altScreen: true, bracketedPaste: true, agentState: 'active', quietSince: null });
+    const shown = announcedText(status());
+    expect(shown).toContain('session: alive');
+    expect(shown).toContain('agent: working');
+    expect(shown).toContain('full-screen: yes');
+    expect(shown).not.toMatch(/paste/i);
   });
 
   it('renders HTML metacharacters inert (textContent only, never innerHTML)', async () => {

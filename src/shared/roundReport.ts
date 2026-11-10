@@ -185,9 +185,8 @@ export function unloadedReviewers(report: string, roster: readonly string[]): st
   return reviewersWith(report, NOT_LOADED_STATUS, roster);
 }
 
-/** The single canonical example the predicate test, the fake-agent e2e output and the prompt few-shot all
- *  reference (§27.5). The first roster persona demonstrates a fixed issue with every field; the rest ran and
- *  found nothing. */
+/** The single canonical example the fake-agent e2e output and the prompt few-shot both reference (§27.5).
+ *  The first roster persona demonstrates a fixed issue with every field; the rest ran and found nothing. */
 export function exampleRoundReport(spec: RoundReportSpec): string {
   const f = REPORT_FIELDS;
   return `${JSON.stringify(

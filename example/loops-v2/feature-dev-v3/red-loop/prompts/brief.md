@@ -26,6 +26,14 @@ restructure the test so its own check is the one that fails, by splitting it, by
 check reports, or by making the stub do enough to get there. Never leave GREEN an instruction to see that check
 fail later; the RED is not done until it has been seen failing here.
 
+Before the first review, ask two questions of each test you wrote or changed, and fix what they turn up: what
+wrong implementation would still pass it, and what correct implementation would fail it? A wrong implementation
+that passes means the check is too weak: check inside the element that owns the fact, give the fixture values
+that tell the cases apart, add the boundary case and the opposite direction. A correct implementation that fails
+means the test pins one way of building it: check the behaviour its acceptance criterion names, not a DOM shape,
+an update strategy or the moment a measurement lands. For renderer UI, the repository's `UI-STANDARDS.md` §3.4
+(UI §3.4), where it has one, lists the rules these questions most often turn up.
+
 No acceptance criterion may be deferred or left without an authored failing test. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the
 ticket or plan, or a split into an already-filed sub-ticket of the same epic. There is no excuse for
@@ -50,8 +58,9 @@ Edit only the `## Impl-slices` block of the `plan` input:
 - Number every later entry up by the same amount, and update the slice numbers in their text, such as "depends
   on slice 5". Never renumber or edit an impl-slice before this one: it has already run, and its results and
   report sections are filed under its number.
-- Keep the plan at 10 impl-slices or fewer. A split that would take it past 10 is a decision for the operator:
-  record it under Needs your call and stop as blocked, as your progress instructions say.
+- The limit of 10 impl-slices applies to the initial plan; split here as often as the dependencies need. The app
+  runs no more than 50 impl-slices, so a split that would take the plan past 50 impl-slices is a decision for the
+  operator: record it under Needs your call and stop as blocked, as your progress instructions say.
 
 Then finish this RED for the new slice `<n>` alone. Any tests that belong to a later entry leave this change,
 because they are that entry's RED to write, against the production code its earlier entries build: say in that
@@ -59,6 +68,24 @@ entry what they must cover, so its RED writes them. Record the split under Decis
 and the acceptance criteria each one carries. When this step is approved, the app reads the slice count from the
 plan again, so the new entries run. It ignores a block that is malformed, or that has fewer entries than this
 slice's number, and keeps the old count, so keep the heading and `Acceptance criteria:` forms exactly.
+
+## When this slice's behavior is already built
+
+An earlier slice's GREEN can build more than its own slice, so a later slice's behavior may already exist. You find
+it when every test you add for this slice's acceptance criteria passes against the existing code. Do not weaken a
+test, and do not remove or break production code, to make one fail: a manufactured failure is not RED evidence.
+And do not stop for the operator: record the slice as verification-only and continue.
+
+- Write the tests the slice's acceptance criteria need, exactly as for any RED, and see them all pass.
+- Show that each check can fail. In a scratch copy of the repository, never this working tree, break the behavior
+  the check guards, run the test there, and see it fail by assertion at that check. A check that still passes
+  with its behavior broken is not a test: fix it. Record each break and its failing run under `### Test evidence`.
+- Write the result as verification-only: `"outcome": "passed", "verificationOnly": true`, with no
+  `"intendedFailures"`, and the passing run in its captured-run file.
+- Record under Decisions which earlier slice built the behavior, and how you know.
+
+When only some of the slice's tests pass, this is an ordinary RED: the passing ones are pins of behavior that
+already holds, and the RED is the tests that fail.
 
 Do not add a TODO or FIXME comment for any work in scope of the current ticket — do the work. Such a comment
 is allowed ONLY when it references an already-filed future ticket of the same epic and the work is

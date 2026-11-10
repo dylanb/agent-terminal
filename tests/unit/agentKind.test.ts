@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { agentKindOfCommand, hostedAgentKind } from '../../src/main/agentKind';
 
-// §27.4 (v2.201) — the engine names each reviewer the way the agent in the terminal installs it, so it reads
+// §27.4 — the engine names each reviewer the way the agent in the terminal installs it, so it reads
 // which agent is running from the command the terminal is running.
 
-describe('which agent a terminal command runs (§27.4 v2.201)', () => {
+describe('which agent a terminal command runs (§27.4)', () => {
   it.each([
     ['codex', 'codex'],
     ['codex --yolo', 'codex'],
@@ -50,7 +50,7 @@ describe('which agent a terminal command runs (§27.4 v2.201)', () => {
   });
 });
 
-describe('which agent the terminal is hosting (§27.4 v2.201)', () => {
+describe('which agent the terminal is hosting (§27.4)', () => {
   const span = (command: string, running: boolean) => ({ command, running });
 
   it('is the agent of the command that is running', () => {

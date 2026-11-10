@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GOAL_CONDITION_MAX_CHARS, resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
 
-// §27.3/§27.8 (v2.200) — whether a loop runs engine review rounds is decided by its def: a consolidator means
+// §27.3/§27.8 — whether a loop runs engine review rounds is decided by its def: a consolidator means
 // review-and-fix rounds judged by it; no consolidator means the work turn goes straight to the gate. A goal
 // work turn (`work.goal`) runs its declared reviewers itself, so it never has engine rounds.
 
@@ -55,7 +55,7 @@ afterEach(() => {
   for (const d of [appDir, repoDir]) rmSync(d, { recursive: true, force: true });
 });
 
-describe('a loop def decides whether the engine runs review rounds (§27.8 v2.200)', () => {
+describe('a loop def decides whether the engine runs review rounds (§27.8)', () => {
   it('a def with reviewers and a consolidator runs engine rounds judged by that consolidator', () => {
     const r = resolve(def({ reviewers: REVIEWER, consolidator: true, gate: ['approve', 'request-changes'] }));
     expect(r.ok, reason(r)).toBe(true);
@@ -83,7 +83,7 @@ describe('a loop def decides whether the engine runs review rounds (§27.8 v2.20
   });
 });
 
-describe('a goal work turn (§27.3 v2.200)', () => {
+describe('a goal work turn (§27.3)', () => {
   const GOAL = 'the latest review pass on the groomed ticket returned no findings';
 
   it('carries its condition and its reviewers, and runs no engine rounds', () => {

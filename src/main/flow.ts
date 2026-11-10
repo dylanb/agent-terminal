@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, ScreenWaiting, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
@@ -29,11 +29,12 @@ import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
  * passes through untouched. Pure — the input view is never mutated.
  */
-export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity: AgentState): FlowStateView {
+export function deriveFlowView(view: FlowStateView, todos: TodoItem[], screen: ScreenWaiting): FlowStateView {
   if (view.status !== 'in_progress') return view;
   const todosTotal = todos.length;
   const todosDone = todos.filter((t) => t.status === 'done').length;
-  return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
+  const live = screen.agentState === 'active' ? { activity: screen.agentState, waiting: null } : { activity: screen.agentState, waiting: screen.waiting };
+  return { ...view, derived: { ...live, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3). A `required` input must be resolved on step
@@ -54,7 +55,7 @@ export interface FlowStepDef {
   /** The bound agent-loop LoopDef name; `loop` steps only. */
   loop?: string;
   /** Which def namespace the loop binding names (§27.15): the surviving `app` (§27) member, or the retired
-   *  `legacy` marker the loader still recognizes (§H.5). Present on every `loop` step, defaulting to the
+   *  `legacy` marker the loader still recognizes. Present on every `loop` step, defaulting to the
    *  surviving engine when the flow file names none (AC 4) — so engine choice is a property of the reviewed
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
@@ -224,7 +225,7 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
         loopNamespace = raw.loop_namespace;
       }
       // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
-      // (§B.3): an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
+      //: an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
       // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
       // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
       // per-step confinement is unchanged — only the file-level abort narrows.
@@ -279,7 +280,7 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
-  // exists do we report the local (absent) error, so a bad value is never reported as a missing flow (§B.3).
+  // exists do we report the local (absent) error, so a bad value is never reported as a missing flow.
   if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
@@ -346,7 +347,7 @@ export interface FlowMachine {
  *  `notice` (the §19.3 busy refusal, or AC 5's migration notice) and/or a `prompt` for an unsatisfied
  *  required input. One-shot: carried on a transition response (and, when an asynchronous producer has one
  *  pending, on a state response); the strip holds it across passive re-pulls and clears it on the next
- *  transition (§B.5 carrier). */
+ *  transition. */
 export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) => { notice?: string; prompt?: FlowPrompt } | void;
 
 /** The §27 loop-view provider: resolve the bound app-def by name and produce its whole loop view — a
@@ -373,7 +374,7 @@ export function createFlowMachine(
         status: 'error',
         // CWE-117/CWE-1007 (§16.3, §18.7.6): the load-error message interpolates repo-authored content (a step
         // id, a kind:, a js-yaml snippet), so it is made display-safe and bounded ONCE over the whole composed
-        // message at the single place MachineView.error is populated (§B.3).
+        // message at the single place MachineView.error is populated.
         error: displaySafeEcho(load.error, MAX_ECHOED_LOAD_ERROR_LENGTH),
         ...(named !== null ? { userTitle: named } : {}),
       };
@@ -401,6 +402,7 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
+  const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
   const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
@@ -469,7 +471,7 @@ export function createFlowMachine(
   };
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
-    // linkedIssues/pr went with the bridge (§B.3; recorded as a removed capability in §F).
+    // linkedIssues/pr went with the bridge.
     const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
     const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
@@ -505,7 +507,7 @@ export function createFlowMachine(
       // AC 4 marked-binding arm: a `legacy`-bound step names no surviving engine. Surface an error loop view
       // on the existing loop-error surface (human-needed so the cue/notifier fire, no round) with a reason
       // naming the real cause; the rest of the flow stays operable, and the gate-decision seam refuses a
-      // marked binding at the operation (§B.3). Replaces the deleted legacy deriveLoopView fall-through, stated
+      // marked binding at the operation. Replaces the deleted legacy deriveLoopView fall-through, stated
       // as an affirmative test on the marking rather than the residue of a deleted branch.
       return {
         ...withRefs,
@@ -525,7 +527,9 @@ export function createFlowMachine(
     const loopName = mostRecentLoopStep.loop;
     if (loopName === undefined) return withRefs;
     const appLoop = readAppLoopView?.(loopName);
-    return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
+    if (!appLoop) return withRefs;
+    const offersReopen = returnStep !== null && (appLoop.gateOptions ?? []).includes('back-to-red');
+    return { ...withRefs, loop: offersReopen ? { ...appLoop, reopenStep: returnStep } : appLoop };
   };
 
   const persist = (): void => {
@@ -569,7 +573,7 @@ export function createFlowMachine(
       const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
-    sliceStartStep: () => steps.find((s) => s.repeat)?.repeat?.backTo ?? null,
+    sliceStartStep: () => returnStep,
     start: (at) => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -621,7 +625,7 @@ export function createFlowMachine(
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
       else {
-        // §18.7.4 (v2.161)
+        // §18.7.4
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
@@ -635,8 +639,7 @@ export function createFlowMachine(
       // Guard, don't throw: a stale click after the flow moved is inert, and the target is never ahead of
       // the current step (a reopen is backward-or-self, never a skip).
       if (status !== 'in_progress') return view();
-      const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
-      const target = backTo ? names.indexOf(backTo) : -1;
+      const target = returnStep !== null ? names.indexOf(returnStep) : -1;
       if (target < 0 || target > index) return view();
       index = target;
       persist();
@@ -830,7 +833,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
     sliceStartStep: (k) => machineFor(k).machine.sliceStartStep(),
     revertStep: (k, fromStepId) => {
-      // §18.7.4 (v2.161) — a first-step rollback resets the run to never-started, so its record goes too, and first:
+      // §18.7.4 — a first-step rollback resets the run to never-started, so its record goes too, and first:
       // a failed removal leaves the run in_progress, where Terminate is offered and retries it. `machine` is taken
       // before the removal: without its record a begun catalog run resolves as held, so re-resolving afterwards
       // would reset a different machine.

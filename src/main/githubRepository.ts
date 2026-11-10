@@ -1,11 +1,14 @@
 import { runAppCommand } from './appCommand';
 import { run } from './appBootstrapCommand';
 import { isRecord } from './yamlRecord';
+import { isPickupBranchName, isRepositoryPart } from '../shared/appBootstrap';
 import {
   createOriginConfigReader,
-  originUrls,
-  type OriginConfigReader,
+  createRemoteConfigReader,
+  remoteUrls,
+  type RemoteConfigReader,
 } from './originUrl';
+import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
 
 export interface GitHubRepositoryIdentity {
   selector: string;
@@ -41,8 +44,6 @@ export function createGitHubRepositorySource(
   };
 }
 
-const REPOSITORY_PART = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
-const BRANCH_NAME = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
 function repositoryFromRemote(
   value: string,
@@ -80,10 +81,7 @@ function repositoryFromRemote(
   const parts = repositoryPath.split('/');
   if (
     parts.length !== 2 ||
-    !REPOSITORY_PART.test(host) ||
-    !REPOSITORY_PART.test(parts[0] ?? '') ||
-    !REPOSITORY_PART.test(parts[1] ?? '') ||
-    [host, ...parts].some((part) => part === '.' || part === '..')
+    ![host, ...parts].every((part) => isRepositoryPart(part ?? ''))
   ) {
     return null;
   }
@@ -96,14 +94,15 @@ function repositoryFromRemote(
   };
 }
 
+export function repositoryHost(repository: Pick<GitHubRepositoryIdentity, 'selector'>): string {
+  return repository.selector.split('/')[0] ?? '';
+}
+
 export function validGitHubRepositorySelector(value: string): boolean {
   const parts = value.split('/');
   return (
     parts.length === 3 &&
-    parts.every(
-      (part) =>
-        REPOSITORY_PART.test(part) && part !== '.' && part !== '..',
-    )
+    parts.every(isRepositoryPart)
   );
 }
 
@@ -123,7 +122,7 @@ export function matchesGitHubRepositoryUrl(
       parsed.port === '' &&
       parsed.search === '' &&
       parsed.hash === '' &&
-      parsed.hostname.toLowerCase() === repository.selector.split('/')[0] &&
+      parsed.hostname.toLowerCase() === repositoryHost(repository) &&
       parts.length === 4 &&
       (parts[0] ?? '').toLowerCase() === repository.owner &&
       (parts[1] ?? '').toLowerCase() === repository.name &&
@@ -135,20 +134,21 @@ export function matchesGitHubRepositoryUrl(
   }
 }
 
-function originConfigReader(repoDir: string): OriginConfigReader {
+function originConfigReader(repoDir: string): RemoteConfigReader {
   return createOriginConfigReader((args) =>
+    // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
     run('git', args, repoDir, 'origin resolution failed'),
   );
 }
 
-export async function resolveGitHubRepository(
+export async function originGitHubRepository(
   repoDir: string,
-): Promise<ResolvedGitHubRepository> {
+): Promise<Omit<ResolvedGitHubRepository, 'defaultBranch'>> {
   const reader = originConfigReader(repoDir);
-  const fetchUrls = await originUrls(reader, 'fetch');
+  const fetchUrls = await remoteUrls(reader, 'fetch');
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
   if (expected === null) throw new Error('invalid origin repository');
-  const pushUrls = await originUrls(reader, 'push');
+  const pushUrls = await remoteUrls(reader, 'push');
   if (
     fetchUrls.length !== 1 ||
     pushUrls.length !== 1 ||
@@ -159,6 +159,48 @@ export async function resolveGitHubRepository(
   ) {
     throw new Error('origin repository targets do not match');
   }
+  return { ...expected, fetchUrl: (fetchUrls[0] ?? '').trim(), pushUrl: (pushUrls[0] ?? '').trim() };
+}
+
+/** Origin's repository as its fetch URL names it: the one a read reaches, whatever origin pushes to. */
+export async function originFetchGitHubRepository(
+  repoDir: string,
+): Promise<Omit<GitHubRepositoryIdentity, 'defaultBranch'>> {
+  const fetchUrls = await remoteUrls(originConfigReader(repoDir), 'fetch');
+  const repository = fetchUrls.length === 1 ? repositoryFromRemote(fetchUrls[0] ?? '') : null;
+  if (repository === null) throw new Error('invalid origin repository');
+  return repository;
+}
+
+/** The repository a display-only read asks, as gh picks its default: `upstream`'s when that remote fetches from
+ *  one GitHub repository, else origin's fetch repository. */
+export async function displayGitHubRepository(
+  repoDir: string,
+): Promise<Omit<GitHubRepositoryIdentity, 'defaultBranch'>> {
+  const hardening = coreExecHardeningArgs(freshDisabledHooksDir());
+  const upstream = await remoteUrls(
+    createRemoteConfigReader((args) => run('git', [...hardening, ...args], repoDir, 'upstream resolution failed'), 'upstream'),
+    'fetch',
+  );
+  const repository = upstream.length === 1 ? repositoryFromRemote(upstream[0] ?? '') : null;
+  return repository ?? originFetchGitHubRepository(repoDir);
+}
+
+/** The GitHub repository origin pushes to when it is not the one origin fetches from (a fork), else null. */
+export async function originPushForkRepository(
+  repoDir: string,
+): Promise<Omit<GitHubRepositoryIdentity, 'defaultBranch'> | null> {
+  const reader = originConfigReader(repoDir);
+  const [fetchUrls, pushUrls] = [await remoteUrls(reader, 'fetch'), await remoteUrls(reader, 'push')];
+  const fetched = fetchUrls.length === 1 ? repositoryFromRemote(fetchUrls[0] ?? '') : null;
+  const pushed = pushUrls.length === 1 ? repositoryFromRemote(pushUrls[0] ?? '') : null;
+  return pushed !== null && fetched !== null && pushed.selector !== fetched.selector ? pushed : null;
+}
+
+export async function resolveGitHubRepository(
+  repoDir: string,
+): Promise<ResolvedGitHubRepository> {
+  const expected = await originGitHubRepository(repoDir);
   const viewedRepository = await runAppCommand(
     'gh',
     [
@@ -182,7 +224,7 @@ export async function resolveGitHubRepository(
     typeof raw.url !== 'string' ||
     !isRecord(raw.defaultBranchRef) ||
     typeof raw.defaultBranchRef.name !== 'string' ||
-    !BRANCH_NAME.test(raw.defaultBranchRef.name)
+    !isPickupBranchName(raw.defaultBranchRef.name)
   ) {
     throw new Error('invalid repository identity');
   }
@@ -198,7 +240,5 @@ export async function resolveGitHubRepository(
   return {
     ...expected,
     defaultBranch: raw.defaultBranchRef.name,
-    fetchUrl: (fetchUrls[0] ?? '').trim(),
-    pushUrl: (pushUrls[0] ?? '').trim(),
   };
 }

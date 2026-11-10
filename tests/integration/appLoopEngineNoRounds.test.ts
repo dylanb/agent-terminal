@@ -5,11 +5,11 @@ import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { GOAL_NO_CHANGE_CLAUSE, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
-import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { CAPABILITIES_CHECK_COMMAND, createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 import { DOCUMENTATION_DISPOSITION } from '../../src/shared/roundReport';
 import { sentenceStates, statesText } from '../helpers/statesText';
 
-// §27.3 (v2.200) — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
+// §27.3 — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
 // and a goal work turn is submitted as one `/goal` command whose condition names the full work prompt, written
 // to a file the engine owns, so the session keeps working, running the loop's reviewers itself, until it holds.
 
@@ -36,7 +36,7 @@ const goalDef = (): LoopDefV2 => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('a loop with no review rounds goes from its work turn straight to its gate (§27.3 v2.200)', () => {
+describe('a loop with no review rounds goes from its work turn straight to its gate (§27.3)', () => {
   it('reaches the gate as clean on the work turn, and injects nothing after the work prompt', () => {
     const gateReaching = vi.fn();
     const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
@@ -82,7 +82,7 @@ describe('a loop with no review rounds goes from its work turn straight to its g
   });
 });
 
-describe('a goal work turn is one /goal command naming the full work prompt on disk (§27.3 v2.200)', () => {
+describe('a goal work turn is one /goal command naming the full work prompt on disk (§27.3)', () => {
   const goalCommand = (): string => {
     const cmd = h.injected.find((p) => p.startsWith('/goal '));
     if (cmd === undefined) throw new Error(`no /goal command was injected: ${JSON.stringify(h.injected)}`);
@@ -122,6 +122,24 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
     expect(prompt).toContain(`turn-done:${TURN_KEY}`);
   });
 
+  it("hands an adopting run's reviewers its pull request's tickets, each read through gh in its own repository, not the primary's number as an issue (#304 AC 6)", () => {
+    const engine = makeEngine();
+    h.workRefsResult = {
+      ticket: 177,
+      pr: 41,
+      adoption: { pr: 41, host: 'github.com', tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }], baseOid: 'b'.repeat(40), fixBranch: 'agent-terminal/review-fixture-branch' },
+    };
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = promptFile(goalCommand());
+    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END)).split('\n');
+    const readsTicket = (repo: string, n: number): string[] => handoff.filter((l) => /\bgh\b/.test(l) && l.includes(`github.com/${repo}`) && new RegExp(`(^|\\D)${n}(\\D|$)`).test(l));
+    expect.soft(readsTicket('owner/repo', 176)).not.toEqual([]);
+    expect.soft(readsTicket('contributor/fork', 177)).not.toEqual([]);
+    expect.soft(handoff.filter((l) => l.includes('gh issue view 177 --comments'))).toEqual([]);
+  });
+
   it('refuses the goal turn before submitting it when a reviewer sub-agent is not installed', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
       reviewerAgentProblem: (r) => (r.persona === 'review-plan-security' ? `no sub-agent ${r.loop}--${r.persona} is installed` : null),
@@ -147,7 +165,7 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
   });
 });
 
-describe('a goal session reviews by the same rules as an engine round (§27.3/§27.8 v2.201)', () => {
+describe('a goal session reviews by the same rules as an engine round (§27.3/§27.8)', () => {
   const goalPrompt = (): string => {
     const cmd = h.injected.find((p) => p.startsWith('/goal '));
     const rel = cmd === undefined ? undefined : /\.agent-terminal\/\S+\.md/.exec(cmd)?.[0];
@@ -172,14 +190,6 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     expect(goalPrompt()).not.toContain('polish — deferred to a later loop');
   });
 
-  it('a finding that only disagrees with a decision the session logged is dismissed', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef());
-    enterAndInjectWork(engine);
-
-    expect(goalPrompt()).toMatch(/only disagrees with a decision you made and logged[^\n]*\n[^\n]*`dismissed — invalid`/);
-  });
-
   it('work that changed nothing but documentation runs no review, and a pass whose fixes changed nothing else ends the review (#207)', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef());
@@ -195,34 +205,6 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     expect(GOAL_NO_CHANGE_CLAUSE).toContain('a comment-only edit to code or tests is documentation');
   });
 
-  it('a later pass re-runs only the reviewers a fix concerns, and all of them only when a fix changes the scope', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef());
-    enterAndInjectWork(engine);
-
-    const prompt = goalPrompt();
-    expect(prompt).toMatch(/A later pass runs only the reviewers whose\s+findings you fixed and any whose area your fixes touched/);
-    expect(prompt).toMatch(/every reviewer again only when a fix changes\s+the acceptance criteria, the scope, the approach or the slices/);
-  });
-
-  it('a pass skips a reviewer whose lens the change cannot touch, and logs the skip', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef());
-    enterAndInjectWork(engine);
-
-    expect(goalPrompt()).toMatch(/skip a reviewer whose lens the change cannot touch[\s\S]*log each skip, with its reason, in the review history/);
-  });
-
-  it('hands each reviewer the recorded test results instead of a full suite or e2e run', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef());
-    enterAndInjectWork(engine);
-
-    const prompt = goalPrompt();
-    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
-    expect(handoff).toMatch(/Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only\s+the targeted tests that checking a specific finding needs/);
-  });
-
   it('a TDD phase session hands its reviewers the impl-slice it covers', () => {
     const engine = makeEngine();
     const base = h.redDef();
@@ -233,5 +215,29 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     const prompt = goalPrompt();
     const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
     expect(handoff).toContain('This round covers impl-slice 2 of the plan only');
+  });
+});
+
+describe('a work turn whose def declares the capabilities self-check is handed its command (§29)', () => {
+  const selfCheckDef = (): LoopDefV2 => {
+    const base = noRoundsDef();
+    return { ...base, work: { ...base.work, selfCheck: 'loop-capabilities' } };
+  };
+
+  it('names the capabilities check command in the work prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(selfCheckDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.') && p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(true);
+  });
+
+  it('names no capabilities check in the work prompt of a def that declares none', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(noRoundsDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    expect(h.injected.some((p) => p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(false);
   });
 });

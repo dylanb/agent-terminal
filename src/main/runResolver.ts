@@ -16,11 +16,22 @@ import { resolveCatalogEntry } from './flowCatalog';
 import { worktreeStartedness } from './startedness';
 import { readRunBinding } from './runDisposition';
 import { heldRunOf } from './runHoldRead';
+import { resolveLoopDefV2, type LoopDefV2Result, type LoopDefV2Tiers } from './loopDefV2';
+import { adoptionLoadProblem } from './adoptionFlowCheck';
+
+/** A flow load, refused when its steps break the adoption rules. Defs resolve for the flow being loaded, never
+ *  through the active-flow pointer. */
+function checkedLoad(load: FlowLoad, repoDir: string, tiers: LoopDefV2Tiers): FlowLoad {
+  if (!load.ok) return load;
+  const flow = load.definition.name;
+  const problem = adoptionLoadProblem(load.definition, (loop): LoopDefV2Result => resolveLoopDefV2(loop, { tiers, repoDir, flow }));
+  return problem === null ? load : { ok: false, error: `flow ${flow}: ${problem}` };
+}
 
 /** §18.7.3 / §18.7.4 AC9 (CWE-841) */
-export function createRunResolver(globalDir: string): (repoKey: string) => ResolvedRunDefinition {
-  return (repoKey) =>
-    createResolveRunDefinition({
+export function createRunResolver(globalDir: string, defTiers: LoopDefV2Tiers): (repoKey: string) => ResolvedRunDefinition {
+  return (repoKey) => {
+    const resolved = createResolveRunDefinition({
       pointer: () => readActiveFlow(repoKey),
       catalogEntry: catalogEntryFor(repoKey, globalDir),
       runBinding: () => {
@@ -32,6 +43,8 @@ export function createRunResolver(globalDir: string): (repoKey: string) => Resol
         return { started: heldRunOf(repoKey).hold === 'not-held' ? 'never-started' : 'indeterminate' };
       },
     })(repoKey, globalDir);
+    return { ...resolved, load: checkedLoad(resolved.load, repoKey, defTiers) };
+  };
 }
 
 const catalogEntryFor =
@@ -41,6 +54,6 @@ const catalogEntryFor =
 
 /** §18.7.3 — the definition a recorded binding loads, through the same seams the begun-run leg of
  *  createRunResolver uses, so a rebind's load and the next flow.state load cannot disagree. */
-export function createBoundSourceLoader(globalDir: string): (worktree: string, binding: DispositionRead) => FlowLoad {
-  return (worktree, binding) => resolveBoundSource(binding, catalogEntryFor(worktree, globalDir), worktree, globalDir).load;
+export function createBoundSourceLoader(globalDir: string, defTiers: LoopDefV2Tiers): (worktree: string, binding: DispositionRead) => FlowLoad {
+  return (worktree, binding) => checkedLoad(resolveBoundSource(binding, catalogEntryFor(worktree, globalDir), worktree, globalDir).load, worktree, defTiers);
 }

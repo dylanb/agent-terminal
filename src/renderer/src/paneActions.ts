@@ -3,6 +3,8 @@
 // importing each other's modules — the coupling no type can catch, so each names the breakage it
 // prevents. Kept out of monitor.ts to avoid an import cycle; monitor.ts re-exports them.
 
+import { onPress, type PressAction } from './pressable';
+
 export const FOCUS_TERMINAL_EVENT = 'app:focus-terminal';
 
 // Fired when a todo is added from the terminal pane; the action window must re-pull its repo-scoped
@@ -58,11 +60,11 @@ export const doInject: DoInject = (text, submit) => {
   if (!submit) requestTerminalFocus();
 };
 
-export function dismissButton(label: string, onClick: () => void): HTMLButtonElement {
+export function dismissButton(label: string, onClick: PressAction): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className = 'dismiss';
   btn.textContent = '×';
   btn.setAttribute('aria-label', label);
-  btn.addEventListener('click', onClick);
+  onPress(btn, onClick);
   return btn;
 }

@@ -14,6 +14,9 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupDismiss,
+  isValidSetupAgentState,
+  isValidSetupStatus,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -22,6 +25,7 @@ import {
   isValidFlowAppBackToRed,
   isValidFlowArmInterrupt,
   isValidFlowResolveAppBootstrapConflict,
+  isValidFlowResolveAdoptTicket,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -185,6 +189,59 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowSetActiveFlow({ sessionId: 'other', repoKey: '/repo', id: 'feature-dev' })).toBe(false);
   });
 
+  it('accepts a setup:status for a safe repoKey on the live session, and rejects a missing session or repoKey', () => {
+    expect.soft(isValidSetupStatus({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect({
+      noSession: isValidSetupStatus({ repoKey: '/repo' }),
+      otherSession: isValidSetupStatus({ sessionId: 'other', repoKey: '/repo' }),
+      noRepoKey: isValidSetupStatus({ sessionId: sid }),
+      numberRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 7 }),
+      relativeRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 'relative' }),
+      notAnObject: isValidSetupStatus('/repo'),
+    }).toEqual({ noSession: false, otherSession: false, noRepoKey: false, numberRepoKey: false, relativeRepoKey: false, notAnObject: false });
+  });
+
+  it('accepts a setup:agentState on the live session only', () => {
+    expect({
+      live: isValidSetupAgentState({ sessionId: sid }),
+      noSession: isValidSetupAgentState({}),
+      otherSession: isValidSetupAgentState({ sessionId: 'other' }),
+      notAnObject: isValidSetupAgentState(sid),
+    }).toEqual({ live: true, noSession: false, otherSession: false, notAnObject: false });
+  });
+
+  it('accepts a setup:dismiss of either kind on the live session, and rejects a malformed one', () => {
+    expect.soft({
+      repo: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      examples: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples', appVersion: '1.2.3' } }),
+    }).toEqual({ repo: true, examples: true });
+    expect({
+      noSession: isValidSetupDismiss({ dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      otherSession: isValidSetupDismiss({ sessionId: 'other', dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      noDismissal: isValidSetupDismiss({ sessionId: sid }),
+      numberRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: 7 } }),
+      noRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo' } }),
+      relativeRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: 'relative' } }),
+      unknownKind: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'forever', repoKey: '/repo' } }),
+      unknownKindWithVersion: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'forever', appVersion: '1.2.3' } }),
+      examplesNoVersion: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples' } }),
+      examplesNumberVersion: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples', appVersion: 3 } }),
+      notAnObject: isValidSetupDismiss('/repo'),
+    }).toEqual({
+      noSession: false,
+      otherSession: false,
+      noDismissal: false,
+      numberRepoKey: false,
+      noRepoKey: false,
+      relativeRepoKey: false,
+      unknownKind: false,
+      unknownKindWithVersion: false,
+      examplesNoVersion: false,
+      examplesNumberVersion: false,
+      notAnObject: false,
+    });
+  });
+
   it('accepts a flow:clearActiveFlow for a safe repoKey on the live session (§18.7.2/§18.7.4)', () => {
     expect(isValidFlowClearActiveFlow({ sessionId: sid, repoKey: '/repo' })).toBe(true);
     expect(isValidFlowClearActiveFlow({ sessionId: sid, repoKey: 'relative' })).toBe(false);
@@ -308,7 +365,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   });
 
   it('the shared GATE_DECISION_OPTIONS set carries the §28.4.2 back-to-red control, so the wire accepts it (§27.9)', () => {
-    // §28.4.2 — back-to-red rides the existing one-way flow:appGateDecision channel (no operator note), so the
+    // §28.4.2 — back-to-red rides the existing flow:appGateDecision channel (no operator note), so the
     // only wire change is the shared set gaining the option. Single-sourced, so type + validator cannot drift.
     expect(GATE_DECISION_OPTIONS).toContain('back-to-red');
     const base = { sessionId: sid, repoKey: '/repo', step: 'green', turnKey: 'consolidate-green' };
@@ -352,6 +409,24 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: [0] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: ['1'] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: 321 })).toBe(false);
+  });
+
+  it('accepts a ticket-choice answer naming a ticket or Cancel for one offer, and refuses any other shape (#304 AC 4)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'review', choiceId: 'offer-1', answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 177 } } };
+    expect.soft(isValidFlowResolveAdoptTicket(base)).toBe(true);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'cancel' } })).toBe(true);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, sessionId: 'other' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, repoKey: 'relative' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, step: '' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, choiceId: '' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, choiceId: 7 })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: undefined })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'wipe' } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket' } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 0 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 1.5 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor', number: 177 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork/extra', number: 177 } } })).toBe(false);
   });
 
   it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {

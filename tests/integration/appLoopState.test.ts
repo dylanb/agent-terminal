@@ -156,6 +156,7 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
   // lifecycle is independent of the per-turn run-state doc, so it lives in its OWN file (the polish/armed-
   // interrupt own-file pattern) — a wholesale run-state write can neither clobber nor resurrect it.
   const IDENTITY: AppLoopBootstrap = {
+    kind: 'opened',
     pr: 87,
     branch: 'plan-loop/issue-78',
     issue: 78,
@@ -186,10 +187,18 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
     );
 
     expect(readAppLoopBootstrap(repo)).toEqual({
+      kind: 'opened',
       pr: 87,
       branch: 'plan-loop/issue-78',
       issue: 78,
     });
+  });
+
+  it('reads a ticket pickup as the opened kind while its file stays without a kind (#304 AC 26)', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+
+    expect(readAppLoopBootstrap(repo)?.kind).toBe('opened');
+    expect(readFileSync(bootstrapFile(), 'utf8')).not.toMatch(/^kind:/m);
   });
 
   it('clears only the completed bootstrap journal after owned compensation', () => {
@@ -1063,7 +1072,7 @@ describe('§28.4.2 slice brief — persisted independently of the run-state docu
   });
 });
 
-describe('a goal session id (§27.3 v2.201)', () => {
+describe('a goal session id (§27.3)', () => {
   it('a new one is always one the run state keeps and reads back', async () => {
     const { newGoalSession, isGoalSession, serializeAppLoopState, parseAppLoopState } = await import('../../src/main/appLoopState');
     for (let i = 0; i < 20; i++) {

@@ -8,7 +8,7 @@ FROM mcr.microsoft.com/playwright:v1.61.0-noble
 # Xvfb provides the virtual display; python3/make/g++ rebuild node-pty (a native module)
 # against this container's Electron ABI — the host's macOS build is not ABI-compatible.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends xvfb python3 make g++ \
+ && apt-get install -y --no-install-recommends xvfb openbox x11-utils xdotool python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable

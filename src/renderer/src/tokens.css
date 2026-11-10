@@ -1,0 +1,48 @@
+:root {
+  --focus-ring-w:2px; --focus-ring-offset:2px; --focus-ring-extent:calc(var(--focus-ring-w) + var(--focus-ring-offset));
+  --board:#FBFCFE; --leaf:#FFFFFF; --rule:#E3E9F0; --rule-soft:#EEF2F7;
+  --ink:#11161D; --muted:#5E6B7A; --signal:#0098DB; --signal-wash:rgba(0,152,219,.12);
+  --attn:#E5484D; --pass:#1F9D6B;
+  /* destructive-action text: darker than --attn so it clears 4.5:1 on the light panel bg (WCAG 1.4.3). */
+  --danger:#B11F26;
+  /* foreground for the filled .pill.danger fill — clears 4.5:1 on --danger per theme (WCAG 1.4.3). */
+  --danger-on:#ffffff;
+  /* accessible small-text foregrounds: the bright accents above are kept for borders/dots/washes,
+     but status text on --card needs ≥4.5:1, so these darker tones carry it (WCAG 1.4.3). */
+  --signal-text:#006699; --pass-text:#157F54; --attn-text:#C02A2F;
+  --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);
+  --text:var(--ink); --dim:var(--muted);
+  --term-bg:#0E141B; --term-text:#D5DEE8; --term-dim:#6F7E8E;
+  --reveal:#F2A53C; --reveal-wash:rgba(242,165,60,.22);
+  /* changed-line markers in the code viewer (§20.2); tied to the "changed" provenance hue. */
+  --changed:var(--signal); --changed-wash:var(--signal-wash);
+  /* code-viewer syntax palette (§20.2). Every tone clears 4.5:1 on --bg AND on a changed line's
+     --changed-wash over it, in both themes (WCAG 1.4.3). */
+  --syn-keyword:#B3202B; --syn-string:#0A3069; --syn-comment:#59636E; --syn-number:#0550AE;
+  --syn-func:#6639BA; --syn-type:#116329; --syn-var:#953800; --syn-punct:#24292F;
+  --r:7px;
+  --status-error:var(--attn); --status-error-text:var(--danger);
+  --status-error-tint:rgba(229,72,77,.08); --status-error-border:rgba(229,72,77,.45);
+  --status-needs-human:#C97F14; --status-needs-human-text:#8A5300;
+  --status-needs-human-tint:rgba(242,165,60,.15); --status-needs-human-border:rgba(214,135,30,.50);
+  --status-working:var(--signal); --status-working-text:var(--signal-text); --status-working-tint:rgba(0,152,219,.10);
+  --status-completed:var(--pass); --status-completed-text:var(--pass-text); --status-completed-tint:rgba(31,157,107,.08);
+  --status-idle:var(--dim); --status-idle-text:var(--dim); --status-idle-tint:var(--hair2);
+}
+[data-theme="dark"] {
+  --bg:#0E141B; --card:#161E27; --hair:#26313C; --hair2:#1C2530;
+  --text:#E8EEF4; --dim:#8FA0B2; --signal:#22C7FF; --signal-wash:rgba(34,199,255,.14);
+  --attn:#FF6168; --pass:#3DDC97;
+  --danger:#FF8A8E; /* light red clears 4.5:1 on the dark panel bg */
+  --danger-on:var(--bg); /* dark ink on the light-salmon fill clears 4.5:1 (white would not) */
+  /* on the dark panel the bright accents already clear 4.5:1, so the text tokens reuse them. */
+  --signal-text:var(--signal); --pass-text:var(--pass); --attn-text:var(--attn);
+  --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
+  --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20);
+  --syn-keyword:#FF7B72; --syn-string:#A5D6FF; --syn-comment:#9AA6B2; --syn-number:#79C0FF;
+  --syn-func:#D2A8FF; --syn-type:#7EE787; --syn-var:#FFA657; --syn-punct:#C9D1D9;
+  --status-error-tint:rgba(255,97,104,.11); --status-error-border:rgba(255,97,104,.45);
+  --status-needs-human:#FFB454; --status-needs-human-text:#FFB454;
+  --status-needs-human-tint:rgba(255,180,84,.12); --status-needs-human-border:rgba(255,180,84,.45);
+  --status-working-tint:rgba(34,199,255,.12); --status-completed-tint:rgba(61,220,151,.10);
+}

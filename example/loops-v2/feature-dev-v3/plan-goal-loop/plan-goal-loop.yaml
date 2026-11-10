@@ -26,6 +26,8 @@ reviewers:
     charter: charter/determinism.md
   - persona: review-plan-tracer-slicer
     charter: charter/tracer-slicer.md
+  - persona: review-plan-ui
+    charter: charter/ui.md
 boundaries:
   - boundary: pre-work
     mode: clear

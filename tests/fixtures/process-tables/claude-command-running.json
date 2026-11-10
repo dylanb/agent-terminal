@@ -1,0 +1,24 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 32635,
+  "note": "Claude Code 2.1.319 (interactive, inside agent-terminal on macOS) running this capture as its Bash tool command, delayed 3 s so the command is old enough; caffeinate is Claude Code's same-group helper",
+  "rows": [
+    "25077 34407 25077    0       00:03 zsh             ",
+    "25078 25077 25077    0       00:03 node            ",
+    "25191 25078 25077    0       00:00 ps              ",
+    "24379 34407 34407 34407       01:40 caffeinate      ",
+    "32635 31901 32635 34407    07:21:55 zsh             ",
+    "34407 32635 34407 34407    07:21:40 2.1.319         "
+  ],
+  "expected": {
+    "waiting": {
+      "program": "node",
+      "others": 0
+    }
+  }
+}

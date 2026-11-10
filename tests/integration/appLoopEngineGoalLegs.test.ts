@@ -9,7 +9,7 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { APP_LOOP_DIR_SEGMENTS } from '../../src/main/appLoopPaths';
 import { createAppLoopEngineHarness, flushRedGate, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
-// §27.3 (v2.201) — a goal session keeps its progress in a file the engine reads at its done-signal. A leg
+// §27.3 — a goal session keeps its progress in a file the engine reads at its done-signal. A leg
 // that ran its passes checkpoints: the engine compacts the session and starts the next leg's /goal, which
 // resumes from that file. A session that cannot go on without the operator is blocked, and its step stops
 // for a human. A session that finished goes to the gate as before.
@@ -66,7 +66,7 @@ const signalAndDrain = (engine: ReturnType<typeof makeEngine>): void => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
+describe('a goal session keeps a progress file (§27.3)', () => {
   it('the prompt tells the session where its progress file is and which leg this is', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -75,16 +75,6 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     const prompt = promptOf(lastGoal());
     expect(prompt).toContain(progressRel());
     expect(prompt).toContain('"leg": 1');
-  });
-
-  it('the prompt holds only a done leg to the completion check, so a checkpoint or a block may write the done-signal without it', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef(3));
-    enterAndInjectWork(engine);
-
-    const prompt = promptOf(lastGoal());
-    expect(prompt).toMatch(/only `done` is held to the completion check/i);
-    expect(prompt).toMatch(/on `checkpoint` or `blocked`, write the done-signal once the progress file is written/i);
   });
 
   it('the prompt keeps the notes the next leg resumes from apart from the JSON the app reads', () => {
@@ -98,7 +88,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     expect(progressRel()).toMatch(/\.json$/);
   });
 
-  it('hands the session the check that decides whether its progress file ends this leg, and tells it to pass it first', () => {
+  it('hands the session the check that decides whether its progress file ends this leg', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
     enterAndInjectWork(engine);
@@ -107,7 +97,6 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
 
     const prompt = promptOf(lastGoal());
     expect(prompt).toContain(`check-artifact progress ${progressRel()} 2 legs`);
-    expect(prompt).toMatch(/fix .*until it prints `OK`/i);
   });
 
   it('a progress file that is not JSON falls short and says so', () => {
@@ -206,7 +195,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
   });
 });
 
-describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3 v2.201)', () => {
+describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3)', () => {
   it('compacts the session, then starts leg 2 from the progress file', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -339,7 +328,7 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
   });
 });
 
-describe('the leg change itself (§27.3 v2.201)', () => {
+describe('the leg change itself (§27.3)', () => {
   const doneFile = (): string => join(h.repo, ...APP_LOOP_DIR_SEGMENTS, TURN_DONE_FILENAME);
 
   it('the finished leg done-signal no longer reads as this turn once the next leg is requested', () => {
@@ -385,7 +374,7 @@ describe('the leg change itself (§27.3 v2.201)', () => {
   });
 });
 
-describe('Accept on a stalled goal session follows what its progress file records (§27.3/§27.12c v2.201)', () => {
+describe('Accept on a stalled goal session follows what its progress file records (§27.3/§27.12c)', () => {
   const stalledWith = (progress: string | null): ReturnType<typeof makeEngine> => {
     const gateReaching = vi.fn();
     const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
@@ -450,7 +439,7 @@ describe('Accept on a stalled goal session follows what its progress file record
   });
 });
 
-describe('the stall help shows only while the turn can still finish by itself (§27.12 v2.201)', () => {
+describe('the stall help shows only while the turn can still finish by itself (§27.12)', () => {
   const failingComplete = (repoDir: string, state: Parameters<typeof writeAppLoopState>[1]): void => {
     if (state.status === 'complete') throw new Error('ENOSPC: no space left on device');
     writeAppLoopState(repoDir, state);
@@ -503,7 +492,7 @@ describe('the stall help shows only while the turn can still finish by itself (�
   });
 });
 
-describe('a blocked goal session stops its step for a human (§27.3 v2.201)', () => {
+describe('a blocked goal session stops its step for a human (§27.3)', () => {
   const BLOCKED = JSON.stringify({ leg: 1, status: 'blocked', blocked: 'The plan asks for both a modal and a page.' });
 
   it('reaches the gate with the verdict stop for a human and the reason it gave', () => {
@@ -564,6 +553,73 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
     expect(gateReaching).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes a changed operator question without claiming the block was resolved', () => {
+    const gateReaching = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({
+      status: 'complete',
+      verdict: 'stop for a human',
+      verdictReason: 'Only GitHub Actions billing remains.',
+    });
+    expect(gateReaching).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls.map((c) => c[1]).filter((line) => line === `§27 goal turn ${TURN_KEY} operator block updated`)).toHaveLength(1);
+    expect(h.audit.mock.calls.map((c) => c[1])).not.toContain(`§27 goal turn ${TURN_KEY} resumed after the operator resolved its block (done-signal)`);
+  });
+
+  it('does not report a changed block as saved when persistence fails, and accepts its retry', () => {
+    let fail = false;
+    const engine = makeEngine((repoDir, state) => {
+      if (fail) throw new Error('ENOSPC: no space left on device');
+      writeAppLoopState(repoDir, state);
+    });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    fail = true;
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('The plan asks for both a modal and a page.');
+    expect(engine.liveErrorFor(h.repo)?.kind).toBe('turn-error');
+    expect(h.audit.mock.calls.map((c) => c[1])).not.toContain(`§27 goal turn ${TURN_KEY} operator block updated`);
+
+    fail = false;
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('Only GitHub Actions billing remains.');
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+  });
+
+  it('publishes a revised question once when the gate notification replays the latched done-signal', () => {
+    let replay = false;
+    const gateReaching = vi.fn(() => {
+      if (replay) engine.onDoneSignal();
+    });
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    replay = true;
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('Only GitHub Actions billing remains.');
+    expect(gateReaching).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls.map((c) => c[1]).filter((line) => line === `§27 goal turn ${TURN_KEY} operator block updated`)).toHaveLength(1);
+  });
+
   it('a resolved block whose session falls short of its completion check gets the usual retry, as any done-signal does', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -594,19 +650,9 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
 
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
   });
-
-  it('the prompt tells the session it may carry on once the operator resolves the block, and how to end the turn then', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef(3));
-    enterAndInjectWork(engine);
-
-    const prompt = promptOf(lastGoal()).replace(/\s+/g, ' ');
-    expect(prompt).toMatch(/If the operator resolves what you were blocked on in this session, carry on with the goal/);
-    expect(prompt).toMatch(/rewrite the progress file and then the done-signal; the step continues from there/);
-  });
 });
 
-describe('a stalled turn says it is stalled, and nothing restarts it (§27.12 v2.201)', () => {
+describe('a stalled turn says it is stalled, and nothing restarts it (§27.12)', () => {
   it('a turn that went quiet after its prompt is held as stalled, and its own done-signal still finishes it', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));

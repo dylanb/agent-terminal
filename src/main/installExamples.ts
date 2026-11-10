@@ -1,6 +1,6 @@
 // §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
 
-import { lstatSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync, isWritableContainer } from './atomicFile';
@@ -15,12 +15,14 @@ import {
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
 } from './exampleAssets';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
 import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
+import { retiredCatalogEntries, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -31,6 +33,7 @@ import {
   type InstallExamplesPreview,
   type InstallExamplesResult,
   type InstallPreviewId,
+  type RetiredExample,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -154,7 +157,7 @@ function flowFiles(bundleDir: string): Plan {
 const unsafeCatalogId = (p: string, name: string): Error =>
   new Error(`the bundled examples are damaged: the catalog entry ${JSON.stringify(name)} at ${p} is not a valid flow id`);
 
-/** An existing-but-empty catalog root (CWE-754): the shipped catalog always carries feature-dev-v2 and at least
+/** An existing-but-empty catalog root (CWE-754): the shipped catalog always carries feature-dev-v3 and at least
  *  one more (§18.1/§18.7.1), so a zero-flow tree is a mispackaged bundle. It is a named refusal — never
  *  resolved as zero files and reported as a successful install of nothing (§18.1). `null` stays reserved for
  *  an ABSENT tree (the `Plan` contract), so present-but-empty gets its own reason rather than "missing". */
@@ -192,8 +195,10 @@ export interface InstallDestination {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   /** Set only on a destination that installs where its tool is: when this directory does not exist, the
-   *  destination is skipped rather than created (§18.1 v2.199). Unset, the destination always installs. */
+   *  destination is skipped rather than created (§18.1). Unset, the destination always installs. */
   toolHome?: string;
+  /** §18.1. Unset on a destination no retired flow ever wrote to. */
+  retired?: RetiredLister;
 }
 
 export interface InstallRoots {
@@ -209,6 +214,7 @@ interface DestinationSpec {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   overwrite: InstallDestination['overwrite'];
+  retired?: RetiredLister;
 }
 
 /** §27.4. */
@@ -243,6 +249,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: HOME_ROOT_FIX,
     plan: catalogFiles,
     overwrite: { mode: 'confirm-overwrite' },
+    retired: retiredCatalogEntries,
   },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -250,6 +257,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
+    retired: retiredLoopFolders,
   },
   commands: {
     bundle: resolveExampleCommandsDir,
@@ -264,6 +272,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CONFIG_ROOT_FIX,
     plan: reviewerAgentFiles(CLAUDE_REVIEWER_AGENT),
     overwrite: { mode: 'confirm-overwrite' },
+    retired: retiredReviewerAgents(CLAUDE_REVIEWER_AGENT),
   },
   codexLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -271,6 +280,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CODEX_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
+    retired: retiredLoopFolders,
   },
   codexAgents: {
     bundle: resolveExampleLoopsV2Dir,
@@ -278,6 +288,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CODEX_ROOT_FIX,
     plan: reviewerAgentFiles(CODEX_REVIEWER_AGENT),
     overwrite: { mode: 'confirm-overwrite' },
+    retired: retiredReviewerAgents(CODEX_REVIEWER_AGENT),
   },
   codexSkills: {
     bundle: resolveExampleCodexSkillsDir,
@@ -302,6 +313,7 @@ export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): In
       plan: d.plan,
       overwrite: d.overwrite,
       ...(toolHome != null ? { toolHome } : {}),
+      ...(d.retired !== undefined ? { retired: d.retired } : {}),
     };
   });
 }
@@ -345,12 +357,13 @@ interface ResolvedDestination {
   jail: string;
   files: ResolvedFile[];
   overwrite: InstallDestination['overwrite'];
+  retired: DestRelativePath[];
 }
 type Resolution =
   | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
   | { ok: false; error: string };
 
-/** §18.1 v2.199. */
+/** §18.1. */
 function toolPresent(root: string): boolean {
   let isDir: boolean;
   try {
@@ -404,6 +417,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       jail,
       files: resolved,
       overwrite: dest.overwrite,
+      retired: (dest.retired?.(jail) ?? []).map(destRelative),
     });
   }
   return { ok: true, destinations: out, notInstalled };
@@ -436,6 +450,24 @@ interface InstallFileSnapshot {
 interface InstallAuthorization {
   files: InstallFileSnapshot[];
   conflicts: Set<InstallDestinationId>;
+  retired: RetiredExample[];
+}
+
+/** What installing would do to one planned file, the one verdict the consent preview and the setup warning share. */
+function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | 'identical' {
+  if (file.targetHash === null) return 'create';
+  return file.targetHash === file.sourceHash ? 'identical' : 'replace';
+}
+
+const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
+  destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
+
+/** The retired flow the installed fallback flow.yaml still is, read by the loader that runs it (§18.7.3). */
+function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
+  const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
+  if (file === undefined) return null;
+  const load = loadFlowDefinitionFromFile(file.real);
+  return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
 }
 
 function hash(bytes: Buffer): string {
@@ -519,6 +551,8 @@ function verifyAuthorization(
 
 interface PreparedInstallExamples {
   destinations: InstallDestinationPreview[];
+  retired: RetiredExample[];
+  retiredFallback: string | null;
   authorization: InstallAuthorization;
 }
 
@@ -545,12 +579,7 @@ function prepareInstallExamples(
     const conflicts = new Set<InstallDestinationId>();
     const previews = resolution.destinations.map((destination) => {
       const differing = files
-        .filter(
-          (file) =>
-            file.destination === destination.id &&
-            file.targetHash !== null &&
-            file.targetHash !== file.sourceHash,
-        )
+        .filter((file) => file.destination === destination.id && installFileVerdict(file) === 'replace')
         .map((file) => file.rel);
       if (differing.length === 0) {
         return {
@@ -570,11 +599,14 @@ function prepareInstallExamples(
         files: differing,
       };
     });
+    const retired = retiredOf(resolution.destinations);
     return {
       ok: true,
       prepared: {
         destinations: previews,
-        authorization: { files, conflicts },
+        retired,
+        retiredFallback: retiredFallbackOf(resolution.destinations),
+        authorization: { files, conflicts, retired },
       },
     };
   } catch (error) {
@@ -586,7 +618,7 @@ function prepareInstallExamples(
 }
 
 export type InstallExamplesInspection =
-  | { ok: true; destinations: InstallDestinationPreview[] }
+  | { ok: true; destinations: InstallDestinationPreview[]; retired: RetiredExample[]; retiredFallback: string | null }
   | { ok: false; error: string };
 
 export function previewInstallExamples(
@@ -597,15 +629,40 @@ export function previewInstallExamples(
   return {
     ok: true,
     destinations: preparation.prepared.destinations,
+    retired: preparation.prepared.retired,
+    retiredFallback: preparation.prepared.retiredFallback,
   };
+}
+
+export type ExamplesCurrency = { ok: true; current: boolean } | { ok: false; error: string };
+
+/** Whether installing the bundled examples would change anything: create or replace a file, or offer to remove a
+ *  retired example. */
+export function inspectExamplesCurrency(destinations: InstallDestination[]): ExamplesCurrency {
+  const fail = (error: unknown): ExamplesCurrency => ({ ok: false, error: `Could not check the installed examples: ${errMsg(error)}` });
+  try {
+    const resolution = resolveAll(destinations);
+    if (!resolution.ok) return resolution;
+    const files = captureInstallSnapshot(resolution.destinations);
+    const current =
+      files.every((file) => installFileVerdict(file) === 'identical') && retiredOf(resolution.destinations).length === 0;
+    return { ok: true, current };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+export interface ApplyOptions {
+  removeRetired: boolean;
 }
 
 function applyInstallExamplesWithAuthorization(
   destinations: InstallDestination[],
   replace: InstallDestinationId[],
+  options: ApplyOptions,
   authorization?: InstallAuthorization,
 ): InstallExamplesResult {
-  const empty = { created: [], overwritten: [], skipped: [], notInstalled: [] };
+  const empty = { created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] };
   let resolution: Resolution;
   try {
     resolution = resolveAll(destinations);
@@ -677,6 +734,7 @@ function applyInstallExamplesWithAuthorization(
   const created: Groups = new Map();
   const overwritten: Groups = new Map();
   const skipped: Groups = new Map();
+  const removed: RetiredExample[] = [];
   const fail = (error: string): InstallExamplesResult => ({
     ok: false,
     error,
@@ -684,6 +742,7 @@ function applyInstallExamplesWithAuthorization(
     overwritten: report(overwritten),
     skipped: report(skipped),
     notInstalled: resolution.notInstalled,
+    removed,
   });
 
   for (const dest of plan) {
@@ -717,20 +776,38 @@ function applyInstallExamplesWithAuthorization(
       }
     }
   }
+
+  if (options.removeRetired) {
+    const offered = authorization === undefined ? null : new Set(authorization.retired.map((r) => snapshotKey(r.destination, r.rel)));
+    for (const dest of resolution.destinations) {
+      for (const rel of dest.retired) {
+        if (offered !== null && !offered.has(snapshotKey(dest.id, rel))) continue;
+        try {
+          // `rm` removes a symbolic link itself, never what it points at.
+          rmSync(path.join(dest.jail, rel), { recursive: true, force: true });
+        } catch (e) {
+          return fail(`Could not remove the retired ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
+        }
+        removed.push({ destination: dest.id, rel });
+      }
+    }
+  }
   return {
     ok: true,
     created: report(created),
     overwritten: report(overwritten),
     skipped: report(skipped),
     notInstalled: resolution.notInstalled,
+    removed,
   };
 }
 
 export function applyInstallExamples(
   destinations: InstallDestination[],
   replace: InstallDestinationId[],
+  options: ApplyOptions = { removeRetired: false },
 ): InstallExamplesResult {
-  return applyInstallExamplesWithAuthorization(destinations, replace);
+  return applyInstallExamplesWithAuthorization(destinations, replace, options);
 }
 
 function failedInstall(error: string): InstallExamplesResult {
@@ -741,6 +818,7 @@ function failedInstall(error: string): InstallExamplesResult {
     overwritten: [],
     skipped: [],
     notInstalled: [],
+    removed: [],
   };
 }
 
@@ -773,6 +851,8 @@ export function createInstallExamplesCoordinator(
         ok: true,
         previewId,
         destinations: preparation.prepared.destinations,
+        retired: preparation.prepared.retired,
+        retiredFallback: preparation.prepared.retiredFallback,
       };
     },
     apply(message) {
@@ -799,9 +879,13 @@ export function createInstallExamplesCoordinator(
           'install request names a replacement that was not offered in its preview',
         );
       }
+      if (message.removeRetired && confirmation.authorization.retired.length === 0) {
+        return failedInstall('install request asks to remove retired examples its preview did not offer');
+      }
       return applyInstallExamplesWithAuthorization(
         dirs(),
         message.replace,
+        { removeRetired: message.removeRetired },
         confirmation.authorization,
       );
     },

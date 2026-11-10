@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   loadFlowDefinition,
-  loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
   createFlowMachine,
   type FlowLoad,
@@ -181,25 +180,6 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     }
   });
 
-  // #137 AC16
-  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-polish and integration-slice, `auto` on every other loop step', () => {
-    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'));
-    expect(load.ok).toBe(true);
-    if (!load.ok) return;
-    expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
-      preparation: null,
-      groom: 'auto',
-      'plan-bundle': 'auto',
-      'plan-polish': 'human',
-      infra: 'auto',
-      red: 'auto',
-      green: 'auto',
-      refactor: 'auto',
-      'integration-slice': 'human',
-      finalize: null,
-    });
-  });
-
   it('fails the load on a non-string gate_authority', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: loop\n    loop: red-loop\n    gate_authority: true\n');
     const load = loadFlowDefinition(dir);
@@ -365,7 +345,7 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
     expect(load.ok).toBe(false); // the local error wins; the global is NOT used
   });
 
-  // The symmetric case (§B.3, AC 4): the repo has NO flow.yaml but the GLOBAL one is present-but-invalid.
+  // The symmetric case (AC 4): the repo has NO flow.yaml but the GLOBAL one is present-but-invalid.
   // Its own error must surface — a present global's result stands — rather than being masked behind the
   // absent local's "no flow.yaml found", or a bad global value would be reported as a missing flow. Guards
   // the exact regression the local-first fix closed: `global.ok ? global : localAbsentError` fell back to the

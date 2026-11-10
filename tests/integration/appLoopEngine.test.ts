@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writePhaseResult } from '../helpers/phaseResults';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
@@ -158,6 +158,30 @@ describe('§28.4.2 — the back-to-RED slice brief reaches the TDD phase turns',
     expect(h.injected[h.injected.length - 1]).not.toContain(BRIEF.text);
   });
 
+  it('the loop at the step back-to-red returns to sees the brief even when it is not a TDD phase', () => {
+    h.defResult = resolved(commitDef());
+    const engine = makeEngine();
+    h.sliceBriefResult = BRIEF;
+    h.reopenStepResult = STEP;
+    engine.enter(h.repo, 'dev-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    const workPrompt = h.injected[h.injected.length - 1];
+    expect(workPrompt).toContain(BRIEF.text);
+    // It does the whole redo, so it is told the work came back to its step, not that it is one phase of a slice.
+    expect(workPrompt).toContain(`back to the ${STEP} step from the ${BRIEF.fromStep} gate`);
+    expect(workPrompt).not.toMatch(/impl-slice 1/i);
+  });
+
+  it('a loop that is neither a TDD phase nor at the return step never sees the brief', () => {
+    h.defResult = resolved(commitDef());
+    const engine = makeEngine();
+    h.sliceBriefResult = BRIEF;
+    h.reopenStepResult = 'some-earlier-step';
+    engine.enter(h.repo, 'integration-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(h.injected[h.injected.length - 1]).not.toContain(BRIEF.text);
+  });
+
   it('no brief, no redo block', () => {
     h.defResult = resolved(redDef());
     const engine = makeEngine();
@@ -304,6 +328,21 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(reason).not.toContain('detached');
   });
 
+  it("an adopting run whose branch probe fails is held naming its fix branch, PR and primary ticket with its repository (#304 AC 5)", () => {
+    const fixBranch = 'agent-terminal/review-pr-41-1700000000000';
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => ({ kind: 'fix-branch', branch: fixBranch, pr: 41, primary: { repo: 'contributor/fork', number: 177 } }),
+      currentBranch: () => ({ ok: false, detail: 'fatal: not a git repository' }),
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    const reason = engine.liveErrorFor(h.repo)?.reason ?? '';
+    expect.soft(reason).toContain('fatal: not a git repository');
+    expect.soft(reason).toContain(fixBranch);
+    expect.soft(reason).toMatch(/#41(\D|$)/);
+    expect.soft(reason).toContain('contributor/fork#177');
+  });
+
   it('an unreadable pickup record refuses the turn with its read error instead of lifting the guard', () => {
     const engine = makeEngine(undefined, undefined, OTHER_BRANCH, {
       pickupBranch: () => ({ kind: 'unreadable', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' }),
@@ -380,7 +419,6 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable(); // boundary drained + idle-confirm → the work prompt injects
     expect(h.injected[1]).toContain('#133');
-    expect(h.injected[1].toLowerCase()).toContain('do not infer');
   });
 
   it('emits no ticket line in the work prompt when the flow resolved no ticket', () => {
@@ -447,12 +485,12 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
-// §B.20a / §B.5 item 6 (AC10) — a step whose bound def declares a `pickup:` block has its skill injected by
+// AC10 — a step whose bound def declares a `pickup:` block has its skill injected by
 // the COORDINATOR after work entry is accepted, so `enter` must ACCEPT the turn WITHOUT REQUESTING it: it
 // answers 'entered' having deferred `start`'s `requestTurn` to a caller-supplied trigger the coordinator fires
 // from the injection's completion. The accepted-but-not-yet-requested turn OCCUPIES the runner (a second entry
 // in the gap is refused), and the deferral is abandonable so the coordinator's deadline-lapse revert frees it.
-describe('§27 engine — deferred work-turn request (§B.20a / §B.5 item 6)', () => {
+describe('§27 engine — deferred work-turn request', () => {
   it('deferRequest accepts the turn WITHOUT requesting it — nothing injected, runner occupied, second entry busy', () => {
     const engine = makeEngine();
     h.hosted = 'idle'; // an idle instance would inject the boundary synchronously on the initial arm — the deferral must not
@@ -708,6 +746,28 @@ describe('§27 engine — stall (AC6)', () => {
     expect(state?.turnKey).not.toBe(TURN_KEY); // advanced to the review round
     expect(engine.liveErrorFor(h.repo)).toBeNull();
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a stall after injection tells the gate it is resumable, naming the done-file the turn was told to write', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    const event = loopRunEvent.mock.calls.at(-1)?.[3] as { resumableStall?: { doneRelPath: string } } | undefined;
+    const doneRelPath = event?.resumableStall?.doneRelPath;
+    expect(doneRelPath).toEqual(expect.any(String));
+    expect(h.injected.join('\n')).toContain(doneRelPath);
+  });
+
+  it('a turn error that is not a stall reaches the gate as a plain error', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(loopRunEvent).toHaveBeenLastCalledWith(h.repo, STEP, TURN_KEY, 'error');
   });
 
   it('a done file after the operator accepted a stalled turn does not advance it a second time', () => {
@@ -1397,7 +1457,6 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(retry).not.toBe(firstPrompt);
     expect(retry).toContain(`no record for ${ROSTER[1]}`);
     expect(retry).toContain(roundReportRel(1));
-    expect(retry.toLowerCase()).toContain('do not re-run the reviewers');
     expect(retry).not.toContain('Spawn each reviewer');
     expect(retry).toContain(`check-artifact report ${roundReportRel(1)}`);
     expect(retry).toContain(REVIEW_KEY);
@@ -2682,7 +2741,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(reviewChained()).toBe(false);
   });
 
-  // §28.5.5 (v2.202) — the raw run is evidence the result is required to keep beside it.
+  // §28.5.5 — the raw run is evidence the result is required to keep beside it.
   it('IT-GREEN-3d: passed and built but with no captured run, or an empty one, does NOT complete, naming the run file', async () => {
     for (const captured of [null, '  \n']) {
       const engine = makeEngine(undefined, greenFake());

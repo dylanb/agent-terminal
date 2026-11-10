@@ -1,19 +1,21 @@
 # Runs the vitest suites — the `node` project (tests/unit + tests/integration) and the `browser`
-# project (tests/browser), which grades painted colour and focus rings in real Chromium. Both are
-# fast; neither needs a display server, so this job stays separate from the Electron e2e workflow.
+# project (tests/browser), which runs in real Chromium. Both are fast; neither needs a display server,
+# so this job stays separate from the Electron e2e workflow.
+# A PR merges on its local test proof (docs/test-proof.md), so this runs only on the push to main that
+# the merge creates: the check that the proofs were honest. Lint and typecheck gate PRs in lint.yml.
 # The authoritative pass tally is this job's live run, not a number pinned here that drifts on the
 # next test added.
 name: test
 
 on:
   push:
-  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.event.pull_request.head.sha || github.sha }}
+  group: test-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -21,9 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # Full history, not the default shallow single-branch fetch: tests/unit/n8SweepGuards.test.ts AC8 reads
-      # the pre-sweep changelog at `git merge-base HEAD origin/main`, which needs origin/main and a common
-      # ancestor to exist (§D.4). Pinned by tests/unit/ciTestWorkflowFullHistory.test.ts.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -36,10 +35,6 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-
-      # Fails the build on any code TODO/FIXME comment (local/no-todo-comments), catching a --no-verify
-      # bypass of the husky pre-commit hook before a deferral marker reaches the default branch.
-      - run: pnpm lint
 
       # The `browser` project launches Chromium through the playwright provider; without the binary
       # and its shared libraries the whole `pnpm test` run aborts before the node project reports.

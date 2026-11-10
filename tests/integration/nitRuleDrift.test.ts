@@ -142,7 +142,7 @@ describe('every bundled goal loop ends its review on the shared no-change clause
 });
 
 // The two kept texts are not materiality rules: a decision-authority rule and the §28.8.1 altitude rule.
-const KEPT_NOT_A_FINDING = ['is not a finding because you would have chosen differently', 'is not a finding about that defect'];
+const KEPT_NOT_A_FINDING = ['is not a finding because you would have chosen differently', 'is not a finding about that defect', 'is not a finding for this lens'];
 const MATERIALITY_MARKERS = ['raise a finding only where', 'is not a finding'];
 
 /** Each materiality marker `text` states more often than the kept texts that contain it account for. */
@@ -162,7 +162,7 @@ describe('the charter materiality check itself', () => {
 
   it.each([
     ["groom-goal-loop's intent charter", join('feature-dev-v3', 'groom-goal-loop', 'charter', 'intent.md')],
-    ...['principal', 'intent', 'tracer-slicer'].map((p) => [`the plan-bundle-loop ${p} charter`, join('feature-dev-v2', 'plan-bundle-loop', 'charter', `${p}.md`)]),
+    ...['tests', 'red-authenticity'].map((p) => [`the red-loop ${p} charter`, join('feature-dev-v3', 'red-loop', 'charter', `${p}.md`)]),
   ])('passes the kept text in %s', (_name, rel) => {
     const charter = readFileSync(join(BUNDLED_LOOPS_ROOT, rel), 'utf8');
     const sentences = sentencesOf(charter);

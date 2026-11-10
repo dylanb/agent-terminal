@@ -26,11 +26,6 @@ export function bundledLoopDir(loop: string): string {
   return join(BUNDLED_LOOPS_ROOT, bundledFlowOf(loop), loop);
 }
 
-export function bundledPath(rel: string): string {
-  const [loop, ...rest] = rel.split('/');
-  return join(bundledLoopDir(loop), ...rest);
-}
-
 export function resolveBundledLoop(loop: string): LoopDefV2Result {
   return resolveLoopDefV2(loop, {
     tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null },

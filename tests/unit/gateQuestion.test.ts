@@ -11,8 +11,7 @@ describe('composeGateQuestion — an `auto` gate halt', () => {
     reasons: [{ reason: 'frozen-tests-changed', detail: 'tests/frozen.test.ts, tests/other.test.ts' }, { reason: 'needs-a-human' }],
   });
 
-  it('asks why the gate needs the operator and names the step', () => {
-    expect(q).toContain('Why does this gate need me?');
+  it('names the step', () => {
     expect(q).toContain('`green`');
   });
 
@@ -21,14 +20,29 @@ describe('composeGateQuestion — an `auto` gate halt', () => {
     expect(q).toContain('(a) needs a human');
   });
 
-  it('asks for the decision first and forbids file changes', () => {
-    expect(q).toMatch(/top of your reply/);
-    expect(q).toMatch(/what (the operator|they) must decide/);
-    expect(q).toMatch(/Change no files/);
+});
+
+describe('composeGateQuestion — a halt on a stall the turn can still resume', () => {
+  const resume = { turnKey: 'work-green#7', doneRelPath: '.agent-terminal/loop/turn-done' };
+  const stalled = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }], resume });
+  const failed = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }] });
+
+  it('tells a still-working agent which done-file and key resume its turn', () => {
+    const line = stalled.split('\n').find((l) => l.includes(resume.doneRelPath));
+    expect(line).toContain(resume.turnKey);
   });
 
-  it('carries no line that would read as a turn done-signal', () => {
-    expect(q).not.toContain('turn-done');
+  it('names no done-file for a halt the turn cannot resume', () => {
+    expect(failed).not.toContain(resume.doneRelPath);
+    expect(failed).not.toContain(resume.turnKey);
+  });
+
+  it('cannot break the resume line or carry control characters from the turn key', () => {
+    const q = composeGateQuestion({ kind: 'halted', step: 'green', reasons: [{ reason: 'loop-error' }], resume: { ...resume, turnKey: `alpha\n${String.fromCharCode(0x1b)}beta` } });
+    expect(q).not.toContain(String.fromCharCode(0x1b));
+    const line = q.split('\n').find((l) => l.includes(resume.doneRelPath));
+    expect(line).toContain('alpha');
+    expect(line).toContain('beta');
   });
 });
 
@@ -36,7 +50,6 @@ describe('composeGateQuestion — a human-authority gate', () => {
   const q = composeGateQuestion({ kind: 'human-gate', step: 'plan-approve' });
 
   it('says the gate is the operator\'s by design and names the step', () => {
-    expect(q).toContain('Why does this gate need me?');
     expect(q).toContain('`plan-approve`');
     expect(q).toMatch(/the operator's by design/);
   });

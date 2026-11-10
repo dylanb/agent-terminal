@@ -46,7 +46,8 @@ import { MAX_CAPABILITIES_BYTES } from '../../src/shared/loopCapabilities';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
 import { migrateBundledLoopDefOnEntry } from '../../src/main/migrateLoopDef';
 import { createGitRepoFixture } from '../helpers/gitRepo';
-import { createLoopNotifier, type LoopNotifyOpts } from '../../src/main/loopNotifier';
+import type { NotificationCondition } from '../../src/shared/controllerProtocol';
+import { createLoopNotifier } from '../../src/main/loopNotifier';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 import type { ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
 import type { FlowStepDef } from '../../src/main/flow';
@@ -121,7 +122,7 @@ interface Rig {
   errors: { repoDir: string; reason: string }[];
   approvals: Approval[];
   views: FlowLoopView[];
-  notify: ReturnType<typeof vi.fn<(o: LoopNotifyOpts) => () => void>>;
+  notify: ReturnType<typeof vi.fn<(notification: NotificationCondition) => void>>;
   outcome: (o: GateApproveOutcome | 'throw' | 'reject') => void;
   hold: () => () => void;
   view: (repoDir?: string) => FlowLoopView;
@@ -185,8 +186,9 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
   const views: FlowLoopView[] = [];
   const asked: string[] = [];
   let withdrawn = 0;
-  const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
-  const notifier = createLoopNotifier({ isFocused: () => false, onFocusChanged: () => {}, notify, focusWindow: () => {}, reveal: () => {} });
+  const notify = vi.fn<(notification: NotificationCondition) => void>();
+  const notifier = createLoopNotifier();
+  notifier.subscribe(notify);
   let nextOutcome: GateApproveOutcome | 'throw' | 'reject' = { kind: 'advanced', effectFailures: [] };
   let held: Promise<void> | null = null;
   let engineLike: EngineLike = { activeRepoDir: () => repoDir, resume: () => {}, liveErrorFor: () => null };
@@ -730,7 +732,6 @@ describe('autoGate — a gate that stops for the operator asks the agent why (N9
     rig.view();
     rig.view();
     expect(rig.asked).toHaveLength(1);
-    expect(rig.asked[0]).toContain('Why does this gate need me?');
     expect(rig.asked[0]).toContain(`\`${STEP}\``);
     expect(rig.asked[0]).toContain('stop for a human');
   });
@@ -797,6 +798,24 @@ describe('autoGate — a gate that stops for the operator asks the agent why (N9
     const before = rig.withdrawn();
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'retried');
     expect(rig.withdrawn()).toBe(before + 1);
+  });
+
+  it('a halt on a resumable stall asks the agent to finish its turn by writing its done-file', () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, { resumableStall: { doneRelPath: '.agent-terminal/loop/turn-done' } });
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toContain('(b) loop error or accepted failed turn');
+    const line = rig.asked[0]!.split('\n').find((l) => l.includes('.agent-terminal/loop/turn-done'));
+    expect(line).toContain(TURN);
+  });
+
+  it('a halt on a turn error that is not a stall names no done-file', () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).not.toContain('turn-done');
   });
 
   it('an agent question that throws never aborts the halt', async () => {
@@ -911,7 +930,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
   });
 
-  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included (v2.184 (9)).
+  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included.
   it('a def only in the repo tier: the clean gate is engine-decided with no halt', async () => {
     rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
     plantDef(DEF_YAML, join(repoDir, 'loops'));
@@ -1662,9 +1681,11 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
   return {
     readRunState: () => GATE_RUN,
     resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
-    runSideEffect: async () => {},
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
+    runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),
+    runPushSideEffect: async () => {},
+    failureHoldsGate: () => false,
     recordBaseline: () => {},
     persistAccept: () => {},
     assembleReport: () => {},
@@ -1680,6 +1701,7 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
     reopenSlice: () => true,
     recordSliceBrief: () => {},
     clearSliceBrief: () => {},
+    reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
@@ -1817,7 +1839,7 @@ describe('autoGate — the engine approve\'s advance is step-scoped (#137 S1)', 
 });
 
 // Plan row "Engine shares the human approve's deps and guard" (S1): the engine approve goes through
-// `composeEngineApprove`, so the §B.3 marked-binding refusal and the per-worktree deps factory are the human path's own.
+// `composeEngineApprove`, so the marked-binding refusal and the per-worktree deps factory are the human path's own.
 describe('autoGate — the engine approve shares the human approve\'s deps and guard (#137 S1)', () => {
   let git: ReturnType<typeof createGitRepoFixture>;
   beforeEach(() => {
@@ -1832,7 +1854,10 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
       composeEngineApprove(
         () =>
           plantedApproveDeps({
-            runSideEffect: async (action) => void effects.push(action),
+            runSideEffect: async (action) => {
+              effects.push(action);
+              return { outcome: 'done' };
+            },
             runCommitSideEffect: async () => {
               effects.push('commit');
               return { outcome: 'committed', sha: SHA, branch: 'main' };
@@ -2792,7 +2817,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(lines.filter((l) => !l.startsWith('0 '))).toEqual([]);
   });
 
-  it('every git read of the check runs under the repo\'s own git config: no hooks-path or fsmonitor override (v2.184 (10))', async () => {
+  it('every git read of the check runs under the repo\'s own git config: no hooks-path or fsmonitor override', async () => {
     const log = join(scratch('autogate-config-'), 'git.log');
     const stub = installPathGitStub([{ argvPrefix: [], script: `printf '%s\\n' "$*" >> ${shellQuote(log)}` }]);
     disposers.push(stub.dispose);

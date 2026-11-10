@@ -117,6 +117,19 @@ describe('scripts/red-check.mjs selecting the tests a RED changed in a spec (§2
     }
   });
 
+  it('selects a test declared by a loop, not the test above it', () => {
+    const repo = seedRepo();
+    try {
+      const looped = (check: string) => `for (const n of [1, 2]) test(\`looped \${n}\`, () => {\n  ${check}\n});`;
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(1);'), looped('expect(n).toBe(n);')]));
+      git(repo, 'commit', '-q', '-am', 'loop');
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(1);'), looped('expect(n).toBe(0);')]));
+      expect(selection(repo, ['tests/e2e/a.spec.ts']).selected).toEqual(['tests/e2e/a.spec.ts:7']);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it('selects the test a RED only deleted a line from', () => {
     const repo = seedRepo();
     try {
@@ -277,11 +290,9 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
       });
       expect(r.status, r.stderr).toBe(0);
       const runLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('podman [run]')) ?? '';
+      expect(runLine).toContain('[--tmpfs] [/work/out:rw,exec]');
       const mounts = [...runLine.matchAll(/\[-v\] \[([^\]]*)\]/g)].map((m) => m[1]);
-      const outMount = mounts.find((m) => m.split(':')[1] === '/work/out' || m === '/work/out');
-      expect(outMount, runLine).toBeDefined();
-      const source = outMount!.includes(':') ? outMount!.split(':')[0] : '';
-      expect(source.startsWith('/'), `out/ is bind-mounted from the host: ${outMount}`).toBe(false);
+      expect(mounts.filter((m) => m.split(':')[1] === '/work/out')).toEqual([]);
     } finally {
       rmSync(bin.dir, { recursive: true, force: true });
     }
@@ -292,7 +303,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
   });
 
   it('runs exactly the selected tests once each, with no retries, and a JSON report into the I/O directory', () => {
-    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
+    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep', 'node']);
     const io = mkdtempSync(join(tmpdir(), 'red-check-io-'));
     try {
       writeFileSync(join(io, 'select.txt'), 'tests/e2e/a.spec.ts:3\ntests/e2e/a.spec.ts:11\n');
@@ -311,7 +322,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
   });
 
   it('still runs the whole suite with the list reporter and an optional -g filter when no red-check run is asked for', () => {
-    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
+    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep', 'node']);
     try {
       const r = spawnSync('bash', ['e2e/entrypoint.sh'], {
         cwd: ROOT,

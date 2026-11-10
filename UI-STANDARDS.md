@@ -24,7 +24,7 @@ The smallest indivisible units. Pure presentation: given inputs, they produce DO
 no app/domain state and know nothing about IPC, the session, or where they sit.
 
 - Examples: pill button, badge, status dot, hairline divider, `kbd` hint, eyebrow label.
-- Styled **only** through `tokens.css` custom properties (§22.4) — no hard-coded color, no
+- Styled **only** through `src/renderer/src/tokens.css` custom properties (§22.4) — no hard-coded color, no
   layout assumptions, both themes for free.
 - No timers, no subscriptions, no `window.*` access.
 
@@ -47,6 +47,28 @@ units §22.4 moves between frames. Their interface is a contract (UI §2).
   `window.monitor.*`), but only through its explicit interface.
 - **Organisms never import from sibling organisms.** Cross-organism behavior goes through the
   contract (UI §2.2), never DOM reach-across.
+
+### 1.4 Every control runs its action through `pressable`
+A control's press runs through `createPressGroup()` / `onPress()` in `src/renderer/src/pressable.ts`, never a
+hand-written click listener. Otherwise a control keeps accepting presses while the app is still answering the
+first one, and a second press starts the same action, or a related one, again.
+
+- **The action returns the promise for the work it starts** (an IPC `invoke`, an async handler). While it is
+  pending, every control in the group ignores presses and reports `aria-disabled="true"`, and the pressed one
+  reports `aria-busy="true"` and shows the `.spin` spinner. An action that returns no promise finishes at once.
+- **Related controls share one group**: one dialog's footer, one gate's options, one row's actions. Create the
+  group once per component instance, not inside a render, so controls rebuilt mid-action join it already busy.
+- **The busy display follows a rebuild**: a control rebuilt while its press is pending shows busy again when it
+  is bound under the same `key`; when the press itself rebuilt the pressed control away, busy shows on the group
+  control focus moved to. A dialog's controls bind to the `presses` group `createModalShell` hands its build, so
+  Escape and the scrim wait for them too.
+- **Other triggers share the guard**: `bind` returns the guarded press for Enter in a field; `within` serves
+  controls that other components add to a container later; `run(control, action)` runs work a press starts
+  only after a confirmation as a press of the control that asked for it.
+- Busy controls are never `disabled`: that would blur the pressed control to `<body>` for the whole round-trip
+  (WCAG 2.4.3).
+- The `local/pressable` lint rule in `eslint.config.mjs` fails any click listener or `onclick` in
+  `src/renderer/` outside `pressable.ts`.
 
 ---
 
@@ -86,10 +108,41 @@ required services (injected `deps`) are all named. Nothing reaches outside it.
    terminal and capture is a `reveal(id)` call / event on each organism's interface — not one
    organism poking the other's DOM. Both can be visible at once *because* neither depends on
    the other's placement.
-5. **Theming via tokens only.** All color/spacing from `tokens.css`; light + dark must both
-   work with no per-placement override.
+5. **Theming via tokens only.** All color/spacing from `src/renderer/src/tokens.css`; light + dark must both
+   work with no per-placement override. A new colour value is defined only as a token in
+   `src/renderer/src/tokens.css`, never in a component rule, and a controller pane-status colour uses the
+   `--status-*` tokens. Colours already hard-coded in component rules stay as they are; this
+   governs new work. `tests/browser/colourLiterals.test.ts` enforces it: it fails on a colour written in
+   any renderer stylesheet other than `tokens.css`, apart from an exact list of the existing ones, and
+   fails on a listed one that has gone, so the list only shrinks.
 6. **Clean teardown.** `dispose()` removes every listener, timer, and node it created, so an
    organism can be unmounted from frame A and mounted in frame B without leaks.
+7. **A component that composes live child components updates them in place, through an interface that
+   takes data only.** A child that stays on screen across a live update (a card on each snapshot) is kept
+   and given the new model, never rebuilt, so the focus, selection, pending press and anything the user
+   expanded or showed in full stay with it without a handover. The child's interface keeps three things
+   apart. `update(model)` takes data only. Callbacks are fixed when the child is built and receive the
+   current model, so a press always reports what the child shows now. Every other value the parent sets
+   (a layout default, a label) has exactly one setter. `update` throws when the model names a different
+   identity from the one the child was built for (another launch directory), because a kept child that
+   silently became another one carries the wrong state. `createControllerCard` (`update`,
+   `setExpandedByDefault`, `setTimeText`, `setHeld`) is the shape to copy. Where a child truly must be
+   replaced, whatever must survive passes from the old child to its replacement as a state value only the
+   child can read. Either way the parent never reads a child's markup to find that state, and never keeps
+   its own copy of state the child owns. Rule 4 keeps organisms out of each other's DOM; this keeps a
+   parent out of its children's. Otherwise renaming a child's element or attribute breaks the parent, and
+   the parent's copy drifts from the child's. The parent still owns what is its own, such as a layout
+   default it passes in.
+8. **State a component's own event handlers read stays consistent while it changes its DOM.** Moving or
+   removing a focused or hovered node fires `focusout`, `focusin` and pointer events synchronously, in the
+   middle of the change, and the component's own handlers run then. So a component swaps any state those
+   handlers read (the map from a child to its model, the set of held children) only after the DOM change
+   is complete, and moves focus to its fallback before it removes the node holding it (§4 rule 5). A flag
+   that makes the handlers ignore events during a render hides the inconsistency rather than removing it,
+   and is not a fix. `controllerPanes` once swapped its card map before reconciling its list, so a
+   `focusout` mid-render found no held card, ended the hold and re-rendered inside the render;
+   "keeps a card held by keyboard focus alone through a group change" in
+   `tests/browser/controllerHold.test.ts` pins it in real Chromium.
 
 ### 2.3 Frames are dumb
 A layout/frame's job is to hand each organism a container and wire the declared contract. A
@@ -104,7 +157,10 @@ Per `CLAUDE.md`: **RED-first, no exceptions**, and tests assert **observable beh
 implementation**. The litmus stays the same — a teammate must be able to rewrite a component's
 internals and keep your tests green. For UI that means asserting rendered DOM the user can see,
 attributes/ARIA, emitted events, and bytes/IPC on the contract — never private method calls,
-internal structure, or class-name spelling that a refactor would change.
+internal structure, or class-name spelling that a refactor would change. What a stylesheet or static
+markup alone determines — colour, contrast, a focus ring's paint, geometry, token values, static copy —
+gets no dedicated test (CLAUDE.md § Test-driven development); colours, styles and text that renderer code
+sets are behaviour and are tested like any other.
 
 ### 3.1 Atoms & Molecules — DOM-level unit tests
 - vitest + `// @vitest-environment jsdom`, driving the **real** DOM (no shadow/PTY mocks; that
@@ -114,18 +170,7 @@ internal structure, or class-name spelling that a refactor would change.
   exactly the shape of the existing `statusStrip` / `captureTab` tests.
 
 ### 3.2 Organisms — DOM unit **plus** e2e
-- Everything in §3.1, **and** a Playwright `_electron` test that mounts the organism for real
-  (real rendering, both themes), since pixel/layout truth isn't observable in jsdom.
-
-### 3.2b Anything about a painted pixel — the `browser` project, never a CSS parser
-Colour, contrast, the focus ring, scrolling, clipping, reflow at a zoom or a small viewport: jsdom
-computes none of it, and a regex over `styles.css` re-implements the cascade (specificity, document
-order, `var()`, `color-mix()`, group `opacity`) — the same class of error as mocking the VT parser,
-and CLAUDE.md bans it outright. These assertions go in the **`browser` vitest project**
-(`tests/browser/`, real Chromium), which mounts the **real component** and reads `getComputedStyle`
-/ real box metrics; the test does the WCAG arithmetic (`tests/helpers/wcag.ts`) and nothing else.
-The Playwright e2e is the other valid home. A pin that cannot fail for its own regression is worse
-than none — mutation-probe it: reintroduce the defect and watch it go red.
+- Everything in §3.1, **and** a Playwright `_electron` test that mounts the organism for real.
 
 ### 3.3 The relocation test (mandatory for organisms)
 An organism's relocatability is only true when a test proves it. Mount the **same** organism,
@@ -139,6 +184,45 @@ mount(createArtifactExplorer, frameB-host)  → same assertions pass, zero impl 
 
 If the assertions need different setup per placement beyond "a different host element + the
 same wired contract," the contract has leaked — fix the component, not the test.
+
+### 3.4 How a UI test reads the screen
+§3's litmus asks two questions of every UI test: **what wrong implementation would still pass it,
+and what correct implementation would fail it?** A test with an answer to either is not done. The
+rules below are the answers reviewers find most often. Each holds in jsdom, the `browser` project and
+the e2e alike.
+
+1. **Find elements by role and accessible name**, the way assistive technology does (the Testing
+   Library query priority): `getByRole('button', { name })`, a heading by its role, a status by its
+   text. Never by tag (`button`, `h1…h6`), class, `id`, a single naming attribute (`aria-label` alone),
+   or how the text is split into elements. Each component's tests go through **one** helper, and every
+   query in it shares one matcher, so a `role="button"` element is found everywhere or nowhere. For the
+   controller's cards that helper is `tests/helpers/controllerCards.ts`, and the `local/card-helper`
+   lint rule in `eslint.config.mjs` fails a controller test that spells the card element, the card
+   role or a card part's test id itself.
+2. **Check inside the element that owns the fact.** Read a card's status from that card's status row,
+   not the whole host or page, whenever the same word can appear elsewhere (a header count, a label,
+   an activity line). A pattern that a neighbouring element can satisfy proves nothing.
+3. **Read painted or measured state after it settles**: `expect.poll` or `vi.waitFor`, never in the
+   same task as the render, publish or click that changes it. When a component measures (at render, in
+   a `ResizeObserver`, on the next frame) is its own business. A state that must hold across time (still
+   hidden, still open after an update) is held for at least two animation frames before it is checked.
+4. **Choose test data that can tell the cases apart.** Every count and value a test compares is
+   different from the others, so two cannot be swapped unnoticed. Include the boundary itself (exactly
+   the limit, not only under and over it), the opposite direction (a connected card is *not* dashed), and
+   more than one item where the rule is per item (two reasons in one box).
+5. **A check fails when it finds nothing to check.** A walk over painted text or controls lists what it
+   must grade and reports each one it did not find; it never passes because nothing was rendered. Every
+   state a check grades actually renders in its fixture. A long reason is there if the "Show full reason"
+   control's contrast is graded.
+6. **When renderer code sets a colour, grade every pairing that is actually painted.** Each text against
+   each background it sits on, tints and controls included. Each non-text indicator (accent, border, focus
+   ring) against every colour it touches (WCAG 2.2 SC 1.4.3, 1.4.11). A colour the stylesheet alone sets
+   gets no test (§3).
+7. **No conditional assertions.** A fixture is deterministic, so an `if` around an `expect` only hides
+   the check when it should fail.
+8. **When a behaviour changes, rewrite the old test from the new requirement.** A carried-over test
+   that still checks the old behaviour (the full directory visible, when the new rule cuts it) fails a
+   correct implementation and passes only the old one.
 
 ---
 
@@ -166,23 +250,19 @@ announcement and can create a focus trap. The rules:
    whether focus was inside the rebuilt container *before* the rebuild and lands it on the freshly-built
    replacement *after* — but only if focus has not since moved away (it is on `<body>`, blurred there by
    the rebuild, or still inside the container), never pulling focus in when it was elsewhere and never
-   stealing focus the user redirected. Never hand-roll this capture/guard; the canonical implementation
-   is `captureSubtreeFocus` (`dom.ts`) — the subtree sibling of `captureFocusReturn` (§4.6) — which
-   `statusBar` (its in-place name editor and ref/alert swaps), `loopPanel`, and the shell's loop-panel
-   close compose rather than re-deriving. When a component empties its host with no replacement to land
-   on, focus must not strand on `<body>`: either it signals across its contract (an `onFocusLost`-style
-   callback) so the root re-places focus, or a caller contract guarantees focus is moved out *before* the
-   emptying call (the docked panel's close-before-clear order, `dockedPanelSync`) — whichever it is, the
-   emptying entry point states which in its own doc-comment. A component never reaches across organisms
-   to move focus itself (UI §2.2). Two hand-rolled copies *will* drift — the reason `createModalShell` is
-   a single implementation (§5.1).
+   stealing focus the user redirected. Compose `captureSubtreeFocus` (`dom.ts`); never hand-roll the
+   capture/guard. A component that updates a subtree in place instead composes `reconcileChildren` (`dom.ts`):
+   it keeps every control and element the component passes again, focused one included, reuses only nodes
+   marked `content(…)`, and moves focus to a named fallback before it removes the one holding it. When a component empties its host with no replacement to land on, focus must not
+   strand on `<body>`: either it signals across its contract (an `onFocusLost`-style callback) so the
+   root re-places focus, or a caller contract guarantees focus is moved out *before* the emptying call —
+   and the emptying entry point says which. A component never reaches across organisms to move focus
+   itself (UI §2.2).
 6. **A control that disables itself during an async action restores focus on completion (WCAG 2.4.3).**
    Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
    restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing
-   focus the user redirected mid-action. Never hand-roll this guard; the canonical implementation is
-   `captureFocusReturn` (`dom.ts`), which `cliInstall` and `installExamples` compose rather than
-   re-deriving it — any self-disabling async control that returns focus composes it too. Two hand-rolled
-   copies *will* drift — the same reason `createModalShell` is a single implementation (§5.1).
+   focus the user redirected mid-action. Compose `captureFocusReturn` (`dom.ts`); never hand-roll the
+   guard — two copies drift, the same reason `createModalShell` is a single implementation (UI §5).
 
 ## 5. Blocking dialogs — the modal focus-management pattern
 
@@ -209,7 +289,7 @@ across every dialog, so it is defined **once** and composed, never re-derived:
 4. **Restore focus to the opener on close (WCAG 2.4.3).** The shell records whatever was focused
    when the dialog opened and returns focus there on close — the user is put back where they were.
 5. **`dispose()` tears down WITHOUT restoring focus.** Closing (user dismissal) and disposing
-   (unmount / relocation, UI §2.2.1) are different contracts: `close()` restores focus to the
+   (unmount / relocation, UI §2.2 rule 6) are different contracts: `close()` restores focus to the
    opener; `dispose()` just clears the host subtree, because on relocation there is no opener to
    return to. An organism that owns a dialog must expose both.
 6. **Accept and dismiss are different doors.** `close` is the *dismiss* path and fires `onDismiss`;
@@ -221,27 +301,44 @@ across every dialog, so it is defined **once** and composed, never re-derived:
 7. **A long body scrolls in the card, and never pushes the footer off-screen.** The card is a flex
    column with a `max-height`. A card whose body can outgrow it returns `grow` (the chain that
    absorbs the leftover column height) and `scroll` (the one box that scrolls) **on its `ModalCard`**;
-   the shell applies them. Two things that box must never do, and neither is visible to a pin that
-   only checks the footer: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
+   the shell applies them. Two things that box must never do: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
    leaving controls focusable but unpainted — focus lands where nothing is drawn, WCAG 2.2 SC 2.4.11),
    and **clip the focus ring of a control it scrolled into view** (scroll-into-view aligns the border
-   box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell's stylesheet styles its OWN structural classes (`.card`, `.mfoot`, the slot attributes)
-   but must never reach for an ORGANISM's class names — that reach-across is what the slot attributes exist
-   to replace (UI §2.3).
+   box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell styles only its
+   own structural classes and slot attributes, never an organism's class names (UI §2.3).
 8. **Nothing switches the view while a dialog is open.** A view switch `display:none`s a whole
    viewpane — including one a dialog may be hosted in — tearing focus out of the open dialog; and a
    hidden dialog is still IN the document, so it can never be reached to close, wedging the app
-   behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the app shell's `setView` itself, not on
-   its callers, so a chord, the rail, and another organism calling `setView` are all covered. It and
-   the loop-panel's Escape deference share ONE predicate — an open `[aria-modal="true"]`. Two
-   hand-maintained copies is exactly how they came to disagree about `role="alertdialog"`.
+   behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the shell's `setView` itself, not on its
+   callers, so every caller is covered, and it shares ONE "a dialog is open" predicate with the
+   loop-panel's Escape deference — two copies disagree about which roles count.
+9. **A condition the app notices opens no dialog on its own.** A modal takes keyboard input from the
+   terminal beneath it, so the operator cannot answer the shell or the agent until it closes. The app
+   shows the condition as a control instead, and the dialog opens only when that control is pressed. The
+   setup check's **setup needed** button in the status bar is the reference implementation (§29.1). This
+   rule does not cover a system alert reporting the failure of something the operator just did
+   (errorDialog), which still shows at once.
+10. **A reason a dialog is rebuilt with is part of its description (WCAG 4.1.3).** Sometimes a dialog
+    renders its card again to report why an action failed or was refused, or returns to an earlier
+    step. The reason is then written into its error line as the card is built, and that line is named in the card's `describedById`, so it is read with the dialog when
+    focus moves in. A `role="alert"` line filled in the same task that mounts the rebuilt card and moves
+    focus into it can be dropped by a screen reader: the §4 Alert pattern's host is permanent, and a
+    rebuilt card's is not. A reason added to a card already showing still goes into its alert line. The
+    setup-check popup is the reference implementation.
+11. **Content shown in more than one dialog builds its whole card; each dialog supplies only its
+    footer.** A question or form that two dialogs show is one molecule (§1.2). It builds the card from
+    the dialog's `titleId` and the dialog's own footer, and returns a whole `ModalCard`: its title, its
+    `describedById`, its `grow`/`scroll` slots, and its initial focus, which falls back to a control
+    the dialog names. It also returns an accessor for the value the operator chose. It never returns
+    loose parts with instructions for wiring them, because every dialog then repeats that wiring and
+    the copies drift. Each dialog builds only its own controls, so its accept and dismiss doors stay its
+    own (item 6). `installConsent.ts`'s `card(foot, fallbackFocus)` and `choice()` are the reference
+    implementation.
 
-The canonical implementation is `createModalShell`. **Every** blocking dialog composes it — do not
-maintain a list here; the composer a list omits is the one that drifts (that is how `errorDialog`'s
-`role="alertdialog"` fell out of the shell's Escape predicate). A dialog is tested like any organism
-(§3.2–3.3) **plus** assertions for items 2–8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
-focus-restored-to-opener, accept-is-not-dismiss, and (if its body can overflow) the §3.2b painted
-pins for scroll and footer reachability.
+**Every** blocking dialog composes `createModalShell`; this doc keeps no list of them, because the
+composer a list omits is the one that drifts. A dialog is tested like any organism
+(§3.2–3.3) **plus** assertions for items 2–6 and 8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
+focus-restored-to-opener, and accept-is-not-dismiss.
 
 ## 6. Conventions
 
@@ -253,17 +350,29 @@ pins for scroll and footer reachability.
   invariant earns its place; a play-by-play does not.
 - **No new magic numbers.** Timings/dimensions that the spec names stay named and configurable
   (§7.1/§8.2/§9.3).
+- **A box that can outgrow its scroll container is centred so both its edges stay in scroll reach**
+  (WCAG 2.2 SC 1.4.10). When it overflows — a card at a narrow window or a high zoom — its leading and
+  trailing edges must both remain reachable by scrolling. Plain flex or grid centring
+  (`align-items`/`justify-content: center`) fails this, because it pushes an overflowing box's leading
+  edge out of reach; auto margins on the box inside a flex container (`margin:auto`) do not. This binds
+  all renderer UI, static `index.html` markup included, not only organisms.
 
 ## 7. Definition of done (per component)
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
-- [ ] Styled via `tokens.css`; light + dark both correct.
+- [ ] If it composes live child components: it updates them in place through a data-only `update` that refuses another identity, with fixed callbacks and one setter per other value; a child it must replace gets its state through the child's own interface, never by reading its markup or keeping a copy (UI §2.2 rule 7).
+- [ ] State its own event handlers read is swapped only after each DOM change completes, and focus moves to a fallback before the focused node is removed — no flag that ignores events mid-render (UI §2.2 rule 8).
+- [ ] Styled via `src/renderer/src/tokens.css`; light + dark both correct.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
-- [ ] Any claim about a painted pixel (colour, contrast, focus ring, scroll, clip, reflow) pinned in the `browser` project or the e2e — never by parsing CSS (UI §3.2b).
-- [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4.5–4.6).
+- [ ] A box that can outgrow its scroll container keeps both edges in scroll reach when it overflows — never plain flex or grid centring (UI §6, WCAG 2.2 SC 1.4.10).
+- [ ] Its tests read the screen by role and name through one helper, check inside the owning element, wait for painted state to settle, and use test data that tells the cases apart (UI §3.4).
+- [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4 items 5–6).
+- [ ] Every press runs through `pressable`; an action returns the promise for the work it starts, related controls share one group created per instance, a dialog's controls bind to the shell's `presses`, and a control rebuilt while its press is pending is bound under a `key` (UI §1.4).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
+- [ ] If it rebuilds its card to report a failure or refusal: the reason is written as the card is built and named in its `describedById`, not filled into a fresh alert line in the same task (UI §5 item 10).
+- [ ] If its content is shown in more than one dialog: it builds the whole `ModalCard` from the dialog's `titleId` and footer, and returns a value accessor; it never hands back parts for each dialog to wire (UI §5 item 11).
 - [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.

@@ -11,6 +11,8 @@ import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../sha
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
+import { createPressGroup } from './pressable';
+import { waitingLabel } from '../../shared/waiting';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -53,6 +55,9 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Starts `repoKey`'s selected flow exactly as a press of Start does; settles once that has finished, and never
+   *  rejects. */
+  start(repoKey: string): Promise<void>;
   /** Focus the loop read-out if one is shown, returning whether it did (so the root can fall back),
    *  so the root needn't reach into the strip's markup (WCAG 2.4.3). */
   focusLoopReadout(): boolean;
@@ -70,9 +75,10 @@ export type FlowStripDeps = Omit<
   FlowApi,
   | 'onRevealLoop'
   | 'onBootstrapError'
-  | 'onLoopError'
   | 'onAppBootstrapConflict'
   | 'resolveAppBootstrapConflict'
+  | 'onAdoptTicketChoice'
+  | 'resolveAdoptTicket'
   | 'onEpicPromotionPreview'
   | 'resolveEpicPromotion'
   | 'githubRef'
@@ -88,6 +94,7 @@ export type FlowStripDeps = Omit<
   | 'clearActiveFlow'
   | 'listCatalog'
   | 'rebindHeldRun'
+  | 'confirmRunPickup'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
@@ -102,7 +109,7 @@ export type FlowStripDeps = Omit<
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
-  onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void) => void;
+  onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void | Promise<unknown>) => void;
   /** Open the destructive Terminate confirmation (#26 AC3/AC4). The composition root surfaces the
    *  repo's current todo count and gates the IPC call; it invokes `confirm` only when the user
    *  confirms. The strip's `confirm` closure then drives `terminate(repoKey)` and repaints. Omitted →
@@ -122,7 +129,8 @@ function header(doc: Document, text: string): HTMLElement {
 function derivedText(state: FlowStateView): string | null {
   if (state.status === 'in_progress' && state.derived && !state.loop) {
     const d = state.derived;
-    return `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+    const activity = d.waiting ? `waiting · ${waitingLabel(d.waiting)}` : d.activity;
+    return `${d.todosDone} / ${d.todosTotal} done · ${activity}`;
   }
   return null;
 }
@@ -146,7 +154,7 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    // Keyed on the EFFECTIVE notices the strip holds (§B.10 carrier), NOT `state.notice`: a passive
+    // Keyed on the EFFECTIVE notices the strip holds, NOT `state.notice`: a passive
     // re-pull whose only delta is the absent transport notice leaves the effective set unchanged, so the
     // signature is unchanged, the held `.flow-notice` node stays, and the notice is not re-announced
     // into the role=status region (WCAG 4.1.3).
@@ -238,8 +246,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
   let refreshGeneration = 0;
-  // §B.10 carrier (AC 5): a transition-supplied notice — and the coordinator's asynchronous §19.3 refusal
-  // (§B.5 item 6) — is held here rather than in `state.notice`, because the ordinary success push drives a
+  // AC 5: a transition-supplied notice — and the coordinator's asynchronous §19.3 refusal
+  // — is held here rather than in `state.notice`, because the ordinary success push drives a
   // passive `flow:state` re-pull whose view carries no `notice`, which would otherwise wipe the migration
   // line before the operator reads it. Held across passive re-pulls, cleared by the next TRANSITION (or a
   // repo change). A re-pull carrying its OWN notice JOINS it — the two arrive on different responses, so the
@@ -266,33 +274,26 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           ? deps.restart(key)
           : deps.undo(key);
 
-  /** A lifecycle control button: fires its transition, disabling itself while in flight so a
-   *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
-   *  this keeps the UI honest), then re-renders from the returned state. */
+  const controls = createPressGroup();
+
+  const afterTransition = (key: string) => (view: FlowStateView): void => {
+    // The cwd may have moved while the transition was in flight; the awaited view belongs to
+    // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
+    if (repoKey !== key) return;
+    applyTransition(view);
+    // Signal the todo overlay to re-pull: its template picker is gated to the active step,
+    // which this transition may have changed (decoupled contract, §4.1/§9.1).
+    window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
+  };
+
   function controlButton(label: string, act: Act, step: string): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
     button.textContent = label;
-    button.addEventListener('click', () => {
+    controls.bind(button, () => {
       if (repoKey === null) return;
       const key = repoKey;
-      button.disabled = true;
-      runAct(act, key, step)
-        .then((view) => {
-          // The cwd may have moved while the transition was in flight; the awaited view belongs to
-          // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
-          if (repoKey !== key) return;
-          applyTransition(view);
-          // Signal the todo overlay to re-pull: its template picker is gated to the active step,
-          // which this transition may have changed (decoupled contract, §4.1/§9.1).
-          window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
-        })
-        .catch(onActFailed)
-        // Re-enable so retry is possible if both the action and refresh()'s state() reject (no
-        // repaint detached this button). Harmless on success: the repaint already replaced it.
-        .finally(() => {
-          button.disabled = false;
-        });
+      return runAct(act, key, step).then(afterTransition(key)).catch(onActFailed);
     });
     return button;
   }
@@ -310,23 +311,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     const button = doc.createElement('button');
     button.className = 'flow-terminate pill';
     button.textContent = 'Terminate';
-    button.addEventListener('click', () => {
+    controls.bind(button, () => {
       if (repoKey === null) return;
       const key = repoKey;
       deps.onTerminate?.(key, () => {
         if (repoKey !== key) return;
-        button.disabled = true;
-        deps
-          .terminate(key)
-          .then((view) => {
-            if (repoKey !== key) return;
-            applyTransition(view);
-            window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
-          })
-          .catch(onActFailed)
-          .finally(() => {
-            button.disabled = false;
-          });
+        controls.run(button, () => deps.terminate(key).then(afterTransition(key)).catch(onActFailed));
       });
     });
     return button;
@@ -405,11 +395,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
     // and pushed via flow:onStateChanged.
-    if (state.status === 'in_progress' && state.derived && !state.loop) {
-      const d = state.derived;
+    const dText = derivedText(state);
+    if (dText !== null) {
       const line = doc.createElement('div');
       line.className = 'flow-derived';
-      line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+      line.textContent = dText;
       host.append(line);
     }
 
@@ -427,7 +417,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(terminateButton());
     }
 
-    // §B.10 carrier (AC 5): a notice rides a transition response, OR a `state` response when an
+    // AC 5: a notice rides a transition response, OR a `state` response when an
     // asynchronous producer (the coordinator's §19.3 refusal) has one pending; the strip holds it across
     // passive re-pulls and clears it at the next transition. Each held notice renders its own line so a
     // migration notice and a later busy-refusal both show (neither drops the other).
@@ -449,7 +439,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
       // A stale submit (cwd moved while the modal was open) must not land on the now-current repo.
       if (boundRepo === null || repoKey !== boundRepo) return;
-      deps
+      return deps
         .provideInput(boundRepo, boundStep, values)
         .then((view) => {
           // The cwd may also move while provideInput is in flight (mirrors controlButton's guard).
@@ -464,7 +454,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  close if absent). Distinct from a plain render: a `state()` re-pull repaints without touching
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
-    // A TRANSITION resets the held notice set to whatever it carries (§B.10 carrier): the prior held
+    // A TRANSITION resets the held notice set to whatever it carries: the prior held
     // notices — a migration line, the coordinator's async refusal — clear here, never on a passive re-pull.
     heldNotices = view.notice ? [view.notice] : [];
     render(view);
@@ -518,7 +508,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return; // keep the last rendered UI
     }
     if (disposed || repoKey !== key || generation !== refreshGeneration) return;
-    // §B.10 carrier: a passive re-pull carrying its OWN notice (the coordinator's async §19.3 refusal)
+    // A passive re-pull carrying its OWN notice (the coordinator's async §19.3 refusal)
     // joins the held set before the signature is computed, so it forces a render and both lines show; a
     // re-pull with no notice leaves the set unchanged and self-clears nothing.
     absorbNotice(view.notice);
@@ -548,7 +538,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const changed = repoKey !== key;
       repoKey = key;
       lastSig = null; // force a full structural render for the new repo — never patch across repos
-      heldNotices = []; // §B.10 — a notice never survives a repo change (it belongs to the prior repo's step)
+      heldNotices = []; // a notice never survives a repo change (it belongs to the prior repo's step)
       if (changed) {
         host.replaceChildren();
         deps.onStatusBar(IDLE_STATUS_BAR, null);
@@ -557,6 +547,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       void refresh();
     },
+    start: (key) => runAct('start', key, '').then(afterTransition(key)).catch(onActFailed),
     focusLoopReadout() {
       const el = host.querySelector<HTMLElement>('.loopstat');
       el?.focus();
