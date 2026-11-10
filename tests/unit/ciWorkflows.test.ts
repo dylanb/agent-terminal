@@ -3,11 +3,6 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
-// A merge is gated by the local test proof (docs/test-proof.md), so CI runs the suites only on the push
-// to main that a merge creates. That run is still the honesty check on the proofs: a `browser` project
-// no CI job can launch is a pin nobody enforces, which is how a contrast test stayed green for six
-// iterations over a control that had lost its focus ring.
-
 type Step = { run?: string };
 type Job = { steps?: Step[] };
 type Workflow = { file: string; on?: unknown; jobs?: Record<string, Job> };
@@ -41,9 +36,9 @@ function triggerContract(wf: Workflow): { file: string; events: string[]; pushBr
     pushFilters: Object.keys(push ?? {}).filter((k) => k !== 'branches').sort(),
   };
 }
-const pushToMainOnly = (wf: Workflow) => ({ file: wf.file, events: ['push'], pushBranches: ['main'], pushFilters: [] });
+const pushToMainOrDispatch = (wf: Workflow) => ({ file: wf.file, events: ['push', 'workflow_dispatch'], pushBranches: ['main'], pushFilters: [] });
 
-describe('CI runs the test suites only after a merge into main', () => {
+describe('CI runs the test suites automatically only after a merge into main', () => {
   const runsVitest = (wf: Workflow): boolean =>
     commands(wf).some((c) => /(^|\s)pnpm\s+(run\s+)?test(\s|$)/.test(c) || /\bvitest\b/.test(c));
   const runsE2e = (wf: Workflow): boolean =>
@@ -53,18 +48,18 @@ describe('CI runs the test suites only after a merge into main', () => {
     expect(workflows().filter(runsVitest).map((wf) => wf.file)).not.toEqual([]);
   });
 
-  it('every workflow that runs the vitest suite triggers on pushes to main and on nothing else', () => {
+  it('every workflow that runs the vitest suite triggers on pushes to main and manual dispatch, and on nothing else', () => {
     const running = workflows().filter(runsVitest);
-    expect(running.map(triggerContract)).toEqual(running.map(pushToMainOnly));
+    expect(running.map(triggerContract)).toEqual(running.map(pushToMainOrDispatch));
   });
 
   it('a workflow runs the playwright e2e suite', () => {
     expect(workflows().filter(runsE2e).map((wf) => wf.file)).not.toEqual([]);
   });
 
-  it('every workflow that runs the playwright e2e suite triggers on pushes to main and on nothing else', () => {
+  it('every workflow that runs the playwright e2e suite triggers on pushes to main and manual dispatch, and on nothing else', () => {
     const running = workflows().filter(runsE2e);
-    expect(running.map(triggerContract)).toEqual(running.map(pushToMainOnly));
+    expect(running.map(triggerContract)).toEqual(running.map(pushToMainOrDispatch));
   });
 
   // The `browser` project launches real Chromium; without the binary the whole `pnpm test` run aborts.

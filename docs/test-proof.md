@@ -2,8 +2,11 @@
 
 A PR merges into `main` only when its exact head commit carries a passing test proof: two commit statuses that
 `pnpm run test:proof` publishes after a full local vitest run and a full Podman e2e run of that commit. GitHub
-Actions runs no tests while a PR is open. The vitest and e2e workflows run only on the push to `main` that a merge
-creates, as the check that the proofs were honest.
+Actions runs no tests automatically while a PR is open. The vitest and e2e workflows run automatically only on the
+push to `main` that a merge creates, as the check that the proofs were honest. To run either on a draft PR's branch
+at a point you choose, dispatch it by hand: `gh workflow run test.yml --ref <branch>` or
+`gh workflow run e2e.yml --ref <branch>`. A dispatched run publishes no `test-proof/*` status, so it never stands in
+for the proof.
 
 ## When to run it
 
