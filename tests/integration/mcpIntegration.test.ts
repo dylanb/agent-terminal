@@ -113,3 +113,17 @@ describe("the window's Claude Code integration actions", () => {
     expect(servers(m.config)['agent-terminal']).toBeUndefined();
   });
 });
+
+
+it('install and remove use the custom OAuth environment exported by the window shell', async () => {
+  const m = machine();
+  const state = join(m.config, '.claude-custom-oauth.json');
+  const shell = join(m.base, 'custom-oauth-shell');
+  writeFileSync(shell, `#!/bin/sh\nexport CLAUDE_CODE_CUSTOM_OAUTH_URL=https://claude.fedstart.com\nfor last; do :; done\neval "$last"\n`, { mode: 0o755 });
+  const ctx = { ...m.ctx, env: { ...m.ctx.env, SHELL: shell, FAKE_CLAUDE_STATE_FILE: state } };
+  expect(await changeClaudeCodeIntegration('install', ctx)).toEqual({ ok: true });
+  expect(await changeClaudeCodeIntegration('install', ctx)).toEqual({ ok: true });
+  expect(JSON.parse(readFileSync(state, 'utf8')).mcpServers['agent-terminal']).toBeDefined();
+  expect(await changeClaudeCodeIntegration('remove', ctx)).toEqual({ ok: true });
+  expect(JSON.parse(readFileSync(state, 'utf8')).mcpServers['agent-terminal']).toBeUndefined();
+});

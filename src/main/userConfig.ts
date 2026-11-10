@@ -3,7 +3,9 @@
 // CLAUDE_CONFIG_DIR redirect can never move one of them without the others.
 
 import os from 'node:os';
+import { statSync } from 'node:fs';
 import path from 'node:path';
+import { isErrno } from './errno';
 
 const trimmed = (v: string | undefined): string | undefined => {
   const t = v?.trim();
@@ -29,12 +31,28 @@ export function userConfigRootFrom(
   return path.isAbsolute(root) ? root : null;
 }
 
-/** Claude Code's own state file, where `claude mcp` keeps user-scope servers: inside the CLAUDE_CONFIG_DIR override
- *  when one is set, else `<home>/.claude.json`. `null` under the same absolute-path gate as the root. */
+/** Claude Code 2.1.319/2.1.321 selects a populated legacy file first, including under custom OAuth.
+ *  An empty writable legacy file is used only when the modern file does not exist. */
 export function userClaudeStateFileFrom(env: NodeJS.ProcessEnv, home: string): string | null {
-  const override = trimmed(env.CLAUDE_CONFIG_DIR);
-  const file = override ? path.join(override, '.claude.json') : path.join(home, '.claude.json');
-  return path.isAbsolute(file) ? file : null;
+  const root = userConfigRootFrom(env, home);
+  if (root === null) return null;
+  const suffix = env.CLAUDE_CODE_CUSTOM_OAUTH_URL ? '-custom-oauth' : '';
+  const file = path.join(trimmed(env.CLAUDE_CONFIG_DIR) ?? home, `.claude${suffix}.json`);
+  if (!path.isAbsolute(file)) return null;
+  const legacy = path.join(root, '.config.json');
+  try {
+    const info = statSync(legacy);
+    if (info.isFile()) {
+      if (info.size > 0) return legacy;
+      if ((info.mode & 0o222) !== 0) {
+        try { statSync(file); }
+        catch (error) { if (isErrno(error, 'ENOENT')) return legacy; throw error; }
+      }
+    }
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  return file;
 }
 
 export function userConfigRoot(configDir?: string): string | null {

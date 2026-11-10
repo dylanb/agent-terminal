@@ -397,6 +397,10 @@ submissions/drops. MCP actions are distinguishable from UI actions. Completed ru
 Terminate; nothing is recorded outside a run. Calls are attributed to the session's current turn, including
 background work, and nested terminals count as the window's terminal. See [the feature specification](docs/spec/30-claude-code-window-tools.md).
 
+**Do not put secrets in prompts.** Full prompt text is stored in the audit without secret detection or
+redaction. If a secret is entered accidentally, it can remain in the audit. This is an accepted limitation;
+keeping secrets out of prompts is the operator's responsibility.
+
 ## Settings (environment variables)
 
 | Variable | Default | Meaning |

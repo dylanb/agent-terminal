@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
+import { chromium } from '@playwright/test';
 import { availableParallelism } from 'node:os';
 import { maxWorkersForEnv } from './vitest.poolSizing';
 
@@ -17,6 +18,8 @@ export default defineConfig({
           name: 'node',
           include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
           environment: 'node',
+          setupFiles: ['tests/setup/claudeConfig.ts'],
+          env: { TEST_CHROMIUM_EXECUTABLE: chromium.executablePath() },
         },
       },
       {

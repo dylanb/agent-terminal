@@ -53,8 +53,8 @@ describe('finding the Claude Code the install action runs', () => {
       loginShell: await findClaude('darwin', { PATH: empty, SHELL: loginShellFinding(viaLogin, '/login/node/bin', '/login/claude-config') }),
       none: await findClaude('darwin', { PATH: empty, SHELL: loginShellFinding(null, '/login/node/bin') }),
     }).toEqual({
-      onPath: { claude: onPath, path: `${empty}:${join(root, 'path-bin')}:/login/node/bin`, claudeConfigDir: '' },
-      loginShell: { claude: viaLogin, path: `${empty}:/login/node/bin`, claudeConfigDir: '/login/claude-config' },
+      onPath: { claude: onPath, path: `${empty}:${join(root, 'path-bin')}:/login/node/bin`, claudeConfigDir: '', claudeCustomOauthUrl: '' },
+      loginShell: { claude: viaLogin, path: `${empty}:/login/node/bin`, claudeConfigDir: '/login/claude-config', claudeCustomOauthUrl: '' },
       none: null,
     });
   });
@@ -69,7 +69,7 @@ describe('finding the Claude Code the install action runs', () => {
       relativeOnPath: await findClaude('darwin', { PATH: relative(process.cwd(), join(root, 'relative-bin')), SHELL: loginShellFinding(viaLogin, '/login/node/bin') }),
       relativeFromLogin: await findClaude('darwin', { PATH: join(root, 'empty'), SHELL: aliasShell }),
     }).toEqual({
-      relativeOnPath: { claude: viaLogin, path: '/login/node/bin', claudeConfigDir: '' },
+      relativeOnPath: { claude: viaLogin, path: '/login/node/bin', claudeConfigDir: '', claudeCustomOauthUrl: '' },
       relativeFromLogin: null,
     });
   });

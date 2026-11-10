@@ -33,9 +33,9 @@ export interface ClaudeConfigPaths {
 
 export function claudeConfigPaths(env: NodeJS.ProcessEnv): ClaudeConfigPaths {
   const override = env.CLAUDE_CONFIG_DIR?.trim();
-  if (override) return { root: override, state: join(override, '.claude.json'), settings: join(override, 'settings.json') };
+  if (override) return { root: override, state: env.FAKE_CLAUDE_STATE_FILE ?? join(override, '.claude.json'), settings: join(override, 'settings.json') };
   const home = env.HOME ?? homedir();
-  return { root: join(home, '.claude'), state: join(home, '.claude.json'), settings: join(home, '.claude', 'settings.json') };
+  return { root: join(home, '.claude'), state: env.FAKE_CLAUDE_STATE_FILE ?? join(home, '.claude.json'), settings: join(home, '.claude', 'settings.json') };
 }
 
 // ---- transcript entries ----
@@ -324,7 +324,7 @@ type CliOutcome = { exit: number; stdout: string; stderr: string };
 
 function readJsonObject(file: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
-  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8') || '{}');
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error(`${file} does not hold a JSON object`);
   return parsed as Record<string, unknown>;
 }

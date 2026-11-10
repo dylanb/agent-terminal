@@ -485,3 +485,87 @@ describe.each(['install', 'remove'] as const)('%s with a non-regular configurati
     expect(eventsRunning(m.settings, LAUNCH.command)).toEqual(action === 'install' ? GUARD_HOOK_EVENTS : []);
   });
 });
+
+
+describe('alternate Claude state locations', () => {
+  it.each(['legacy', 'custom OAuth', 'legacy before custom OAuth'] as const)('%s supports repeated install and complete removal without touching the inactive state', async location => {
+    const m = machine();
+    seedUserConfig(m);
+    const inactive = m.state;
+    const before = bytes(inactive);
+    m.state = join(m.root, location === 'custom OAuth' ? '.claude-custom-oauth.json' : '.config.json');
+    if (location !== 'legacy') m.target.env.CLAUDE_CODE_CUSTOM_OAUTH_URL = 'https://claude.fedstart.com';
+    m.target.env.FAKE_CLAUDE_STATE_FILE = m.state;
+    writeFileSync(m.state, JSON.stringify(USER_STATE));
+    expect(await installMcpIntegration(m.target)).toEqual({ ok: true });
+    const installed = files(m);
+    expect(await installMcpIntegration(m.target)).toEqual({ ok: true });
+    expect(files(m)).toEqual(installed);
+    expect(servers(m.state)['agent-terminal']).toEqual({ type: 'stdio', ...LAUNCH });
+    expect(await removeMcpIntegration(m.target)).toEqual({ ok: true });
+    expect(readJson(m.state)).toEqual(USER_STATE);
+    expect(readJson(m.settings)).toEqual(USER_SETTINGS);
+    expect(bytes(inactive)).toBe(before);
+  });
+
+  it('removes an already installed legacy registration, preserving another server and unrelated settings', async () => {
+    const m = machine();
+    m.state = join(m.root, '.config.json');
+    m.target.env.FAKE_CLAUDE_STATE_FILE = m.state;
+    await seedInstalled(m);
+    expect(await removeMcpIntegration(m.target)).toEqual({ ok: true });
+    expect(readJson(m.state)).toEqual(USER_STATE);
+    expect(readJson(m.settings)).toEqual(USER_SETTINGS);
+  });
+
+  it('keeps a same-named foreign legacy server intact on install and remove', async () => {
+    const m = machine();
+    m.state = join(m.root, '.config.json');
+    m.target.env.FAKE_CLAUDE_STATE_FILE = m.state;
+    seedUserConfig(m);
+    writeFileSync(m.state, JSON.stringify({ mcpServers: { 'agent-terminal': { command: '/other/server' } } }));
+    const before = files(m);
+    expect(await installMcpIntegration(m.target)).toEqual({ ok: false, error: expect.stringContaining('/other/server') });
+    expect(await removeMcpIntegration(m.target)).toEqual({ ok: true });
+    expect(files(m)).toEqual(before);
+  });
+});
+
+it.each(['install', 'remove'] as const)('%s does not claim success when Claude exits zero without applying the registration change', async action => {
+  const m = machine();
+  if (action === 'remove') await seedInstalled(m);
+  else seedUserConfig(m);
+  const before = files(m);
+  const noop = join(dirname(m.log), 'claude-noop');
+  writeFileSync(noop, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const result = await (action === 'install' ? installMcpIntegration : removeMcpIntegration)({ ...m.target, claude: noop });
+  expect(result).toEqual({ ok: false, error: expect.stringContaining(m.state) });
+  expect(files(m)).toEqual(before);
+});
+
+
+it.each([false, true])('legacy registration under HOME works with CLAUDE_CONFIG_DIR unset (empty: %s)', async empty => {
+  const m = machine();
+  delete m.target.env.CLAUDE_CONFIG_DIR;
+  m.root = join(m.target.env.HOME!, '.claude');
+  m.settings = join(m.root, 'settings.json');
+  m.state = join(m.root, '.config.json');
+  m.target.env.FAKE_CLAUDE_STATE_FILE = m.state;
+  seedUserConfig(m);
+  if (empty) writeFileSync(m.state, '');
+  expect(await installMcpIntegration(m.target)).toEqual({ ok: true });
+  expect(servers(m.state)['agent-terminal']).toBeDefined();
+  expect(await removeMcpIntegration(m.target)).toEqual({ ok: true });
+  expect(servers(m.state)['agent-terminal']).toBeUndefined();
+  expect(existsSync(join(m.target.env.HOME!, '.claude.json'))).toBe(false);
+});
+
+it('uses modern state when the legacy file is empty and modern state exists', async () => {
+  const m = machine();
+  seedUserConfig(m);
+  const legacy = join(m.root, '.config.json');
+  writeFileSync(legacy, '');
+  expect(await installMcpIntegration(m.target)).toEqual({ ok: true });
+  expect(servers(m.state)['agent-terminal']).toBeDefined();
+  expect(bytes(legacy)).toBe('');
+});

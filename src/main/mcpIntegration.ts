@@ -20,7 +20,11 @@ export async function changeClaudeCodeIntegration(
   }
   const found = await findClaude(ctx.platform, ctx.env);
   if (found === null) return { ok: false, error: CLAUDE_NOT_FOUND };
-  const env = { ...ctx.env, PATH: found.path, ...(found.claudeConfigDir !== undefined ? { CLAUDE_CONFIG_DIR: found.claudeConfigDir } : {}) };
+  const env = {
+    ...ctx.env, PATH: found.path,
+    ...(found.claudeConfigDir !== undefined ? { CLAUDE_CONFIG_DIR: found.claudeConfigDir } : {}),
+    ...(found.claudeCustomOauthUrl !== undefined ? { CLAUDE_CODE_CUSTOM_OAUTH_URL: found.claudeCustomOauthUrl } : {}),
+  };
   const target = { claude: found.claude, env, launch };
   return change === 'install' ? installMcpIntegration(target) : removeMcpIntegration(target);
 }

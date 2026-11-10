@@ -90,9 +90,15 @@ Accepted operator boundaries (2026-11-07): calls are attributed to the session's
 issued them. Background work from an earlier turn can therefore act during a later human turn and is attributed
 to that prompt. A terminal nested inside the window, including tmux or script, counts as the window's terminal.
 These are inside the trusted-operator boundary of §27.9.1; the guard prevents a loop mistakenly deciding its
-own gate, not an adversarial agent or every action the operator did not request.
+own gate, not an adversarial agent or every action the operator did not request. The operator reaffirmed on
+2026-11-10 that human-turn eligibility is not per-action consent: untrusted content encountered during that
+turn may influence an action, and the guard does not distinguish it from an explicitly requested action.
 
 ### 30.5 Audit
+
+Accepted limitation (operator decision 2026-11-10): **secrets must not be entered into prompts**. The audit
+stores full prompt text without secret detection or redaction. A secret entered accidentally can therefore
+persist in the audit; preventing secrets from entering prompts is the operator's responsibility.
 
 While a §25 run is open, every human-started prompt is appended with its full text, identity and original
 submission time, including prompts with no tool calls. Transcript origin may arrive after the prompt hook;

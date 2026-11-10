@@ -41,7 +41,7 @@ function settingsFile(env: NodeJS.ProcessEnv): string {
   return path.join(root, 'settings.json');
 }
 
-async function readJsonFile(file: string, label: string): Promise<{ value: unknown } | null> {
+async function readJsonFile(file: string, label: string, emptyValue?: Record<string, never>): Promise<{ value: unknown } | null> {
   let bytes: string;
   try {
     const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
@@ -56,7 +56,7 @@ async function readJsonFile(file: string, label: string): Promise<{ value: unkno
     throw new IntegrationFailure(`Could not read ${label} ${file}: ${errMsg(error)}`);
   }
   try {
-    return { value: JSON.parse(bytes) as unknown };
+    return { value: bytes.length === 0 && emptyValue !== undefined ? emptyValue : JSON.parse(bytes) as unknown };
   } catch (error) {
     throw new IntegrationFailure(`${label.charAt(0).toUpperCase()}${label.slice(1)} ${file} is not valid JSON: ${errMsg(error)}`);
   }
@@ -178,7 +178,7 @@ function stateFile(env: NodeJS.ProcessEnv): string {
 /** Whether Claude Code has no server under the integration's name, has the integration's own (it runs the launch),
  *  or has one that is someone else's. */
 async function registeredServer(target: McpIntegrationTarget): Promise<{ kind: 'absent' } | { kind: 'ours' } | { kind: 'theirs'; command: string }> {
-  const read = await readJsonFile(stateFile(target.env), "Claude Code's state file");
+  const read = await readJsonFile(stateFile(target.env), "Claude Code's state file", {});
   if (read === null) return { kind: 'absent' };
   const state = read.value;
   const servers = isRecord(state) && isRecord(state.mcpServers) ? state.mcpServers : {};
@@ -224,6 +224,7 @@ export function installMcpIntegration(target: McpIntegrationTarget): Promise<Mcp
       case 'absent': {
         const added = await runClaude(target, ['mcp', 'add-json', '--scope', 'user', MCP_SERVER_NAME, JSON.stringify({ type: 'stdio', ...target.launch })]);
         if (added.exit !== 0) throw new IntegrationFailure(`Claude Code did not register the agent-terminal server: ${added.output || `claude mcp add-json exited ${added.exit}`}`);
+        if ((await registeredServer(target)).kind !== 'ours') throw new IntegrationFailure(`Claude Code reported registration success, but this app's server is not registered in ${stateFile(target.env)}. Its hooks were not changed.`);
         break;
       }
       case 'ours':
@@ -247,6 +248,7 @@ export function removeMcpIntegration(target: McpIntegrationTarget): Promise<McpI
       case 'ours': {
         const removed = await runClaude(target, ['mcp', 'remove', '--scope', 'user', MCP_SERVER_NAME]);
         if (removed.exit !== 0) throw new IntegrationFailure(`Claude Code did not remove the agent-terminal server: ${removed.output || `claude mcp remove exited ${removed.exit}`}`);
+        if ((await registeredServer(target)).kind === 'ours') throw new IntegrationFailure(`Claude Code reported removal success, but this app's server is still registered in ${stateFile(target.env)}. Its hooks were not changed.`);
         await afterServerChange('The agent-terminal server was removed from Claude Code, but its hooks were not removed', 'Remove', removeHooks);
         break;
       }
@@ -275,14 +277,15 @@ export interface FoundClaude {
   claude: string;
   path: string;
   claudeConfigDir?: string;
+  claudeCustomOauthUrl?: string;
 }
 
 const MARK = 'agent-terminal-claude-probe';
 
 /** Asks the user's shell the way the window's terminal starts it, and interactive, as the terminal's PTY makes it, so
  *  `.zshrc` or `.bashrc` is read too. Startup files may print anything, so only the marked lines are read. */
-function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ claude: string | null; path: string; claudeConfigDir?: string } | null> {
-  const script = `c=$(command -v claude 2>/dev/null); printf '\\n${MARK}:claude:%s\\n${MARK}:path:%s\\n${MARK}:config:%s\\n' "$c" "$PATH" "\${CLAUDE_CONFIG_DIR-}"`;
+function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ claude: string | null; path: string; claudeConfigDir?: string; claudeCustomOauthUrl?: string } | null> {
+  const script = `c=$(command -v claude 2>/dev/null); printf '\\n${MARK}:claude:%s\\n${MARK}:path:%s\\n${MARK}:config:%s\\n${MARK}:oauth:%s\\n' "$c" "$PATH" "\${CLAUDE_CONFIG_DIR-}" "\${CLAUDE_CODE_CUSTOM_OAUTH_URL-}"`;
   return new Promise((resolve) => {
     // An interactive shell ignores SIGTERM, so only SIGKILL makes the timeout end a startup file that never returns.
     const child = execFile(resolveShellPath(env), [...terminalShellArgs(platform), '-i', '-c', script], { env, timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8' }, (error, stdout) => {
@@ -291,10 +294,12 @@ function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutM
         stdout.split('\n').find((line) => line.startsWith(`${MARK}:${key}:`))?.slice(`${MARK}:${key}:`.length).trim();
       const found = marked('claude') ?? '';
       const configDir = marked('config');
+      const oauthUrl = marked('oauth');
       resolve({
         claude: path.isAbsolute(found) ? found : null,
         path: marked('path') ?? '',
         ...(configDir !== undefined ? { claudeConfigDir: configDir } : {}),
+        ...(oauthUrl !== undefined ? { claudeCustomOauthUrl: oauthUrl } : {}),
       });
     });
     child.stdin?.end();
@@ -310,7 +315,11 @@ export async function findClaude(platform: NodeJS.Platform, env: NodeJS.ProcessE
   const merged = shell === null ? current : mergePaths(current, shell.path);
   // A relative entry would resolve `node` (an npm install's interpreter) against the child's working directory.
   const absoluteOnly = merged.split(path.delimiter).filter((dir) => path.isAbsolute(dir)).join(path.delimiter);
-  const runWith = { path: absoluteOnly, ...(shell?.claudeConfigDir !== undefined ? { claudeConfigDir: shell.claudeConfigDir } : {}) };
+  const runWith = {
+    path: absoluteOnly,
+    ...(shell?.claudeConfigDir !== undefined ? { claudeConfigDir: shell.claudeConfigDir } : {}),
+    ...(shell?.claudeCustomOauthUrl !== undefined ? { claudeCustomOauthUrl: shell.claudeCustomOauthUrl } : {}),
+  };
   for (const dir of current.split(path.delimiter)) {
     if (!path.isAbsolute(dir)) continue;
     const candidate = path.join(dir, 'claude');

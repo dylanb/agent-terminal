@@ -22,6 +22,10 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 pnpm run test:proof # full vitest + Podman e2e on the clean, pushed PR head, then publishes the test-proof/* statuses a merge into main requires
 ```
 
+Vitest's `node` project gives every test file a temporary `HOME`, `CLAUDE_CONFIG_DIR` and `ZDOTDIR`,
+then removes that home after the file's tests finish. This also applies to direct, filtered Vitest runs.
+Explicit environment/path overrides in a test still need their own isolated fixtures.
+
 **Run `pnpm run test:proof` on the PR's final head commit, before the PR is marked ready for review — or, for a PR that is already ready (an agent loop flips its PR at plan approval, §27.13), before it merges.** GitHub Actions runs no tests on an open PR; the suites run there only after a merge into `main`. → [docs/test-proof.md](docs/test-proof.md)
 
 **Always run the e2e locally via the Podman harness (`docs/e2e-podman.md`) before claiming a change done — do not defer e2e to CI.**

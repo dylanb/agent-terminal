@@ -1,3 +1,10 @@
+## #322 — accepted prompt and audit security limits (2026-11-10)
+
+The operator reaffirmed §30.4's human-turn eligibility limit: it is not per-action consent and does not
+separate actions influenced by untrusted content. §30.5 and the README now state that secrets must not be
+entered into prompts. Full-prompt audits have no secret detection or redaction; accidental secrets can
+persist. This documents the accepted operator responsibility without adding a filtering guarantee.
+
 ## #322 — Claude Code can operate its own window through MCP
 
 §30 (new), v2.227: explicit user decision 1 extends the §27.9.1 human-decided gate to MCP calls during a
