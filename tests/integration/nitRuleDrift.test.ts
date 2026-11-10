@@ -141,8 +141,8 @@ describe('every bundled goal loop ends its review on the shared no-change clause
   });
 });
 
-// The two kept texts are not materiality rules: a decision-authority rule and the §28.8.1 altitude rule.
-const KEPT_NOT_A_FINDING = ['is not a finding because you would have chosen differently', 'is not a finding about that defect', 'is not a finding for this lens'];
+// These kept texts govern decision authority, document altitude, and which RED-test findings belong to GREEN; none is a materiality rule.
+const KEPT_NOT_A_FINDING = ['is not a finding because you would have chosen differently', 'is not a finding about that defect', 'is not a finding for this step when its own check still fails now and no wrong implementation passes it'];
 const MATERIALITY_MARKERS = ['raise a finding only where', 'is not a finding'];
 
 /** Each materiality marker `text` states more often than the kept texts that contain it account for. */
