@@ -79,7 +79,9 @@ This builds the terminal into `dist/` and the controller (`electron-builder.cont
 | `plan-only` | Groom a ticket and produce a reviewed implementation plan, then stop. |
 | `two-step-example-v1` | The smallest flow built from reusable step definitions: two manual steps, each advanced by you. |
 
-The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). A flow can also use a step defined once in `~/.agent-terminal/steps/` or `<repo>/.agent-terminal/steps/` by writing `- step: <name>`. A repo flow can use either folder; a global flow uses only the global one. See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
+[`docs/flows/`](docs/flows/README.md) has a page for each flow with a diagram of its steps, gates and loop-backs and what each step's loop does, plus a page on how the engine runs each kind of loop.
+
+The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
 
 ## Settings (environment variables)
 
