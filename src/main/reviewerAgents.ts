@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { confinedRealPathResult, resolveOwnedDirJail } from './confinedPath';
-import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
+import { listLoopFolders } from './loopFolders';
 import { resolveLoopDefV2, type ReviewerTools } from './loopDefV2';
 
 const NAME_SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -86,28 +86,25 @@ export interface PlannedReviewerAgent {
   bytes: () => Buffer;
 }
 
-/** Every reviewer of every loop def in a loops-v2 tree (`<root>/<flow>/<loop>/<loop>.yaml`), one file per
+/** Every reviewer of every loop def in a loops-v2 tree, one file per
  *  sub-agent name. Two flows shipping one loop's persona must ship the same charter and tools: one name
  *  cannot carry two charters. */
 export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentFormat): PlannedReviewerAgent[] {
   const byName = new Map<string, PlannedReviewerAgent & { rendered: string }>();
-  for (const flow of readDirEntries(loopsRoot)) {
-    if (!flow.isDirectory) continue;
-    for (const loop of readDirEntries(path.join(loopsRoot, flow.name))) {
-      if (!loop.isDirectory) continue;
-      const r = resolveLoopDefV2(loop.name, { tiers: { operator: null, appBundled: loopsRoot, retired: null }, repoDir: loopsRoot, flow: flow.name });
-      if (!r.ok) throw new Error(`the bundled loop ${flow.name}/${loop.name} does not resolve: ${r.reason}`);
-      for (const reviewer of r.def.reviewers) {
-        const render = (): string => format.render({ loop: loop.name, persona: reviewer.persona, tools: reviewer.tools, charter: readFileSync(reviewer.charter, 'utf8') });
-        const rendered = render();
-        const name = format.name(loop.name, reviewer.persona);
-        const prior = byName.get(name);
-        if (prior !== undefined) {
-          if (prior.rendered !== rendered) throw new Error(`the bundled flows disagree on the reviewer ${name}: two charters or tool lists cannot install as one sub-agent`);
-          continue;
-        }
-        byName.set(name, { rel: `${name}${format.extension}`, src: reviewer.charter, bytes: () => Buffer.from(render()), rendered });
+  for (const folder of listLoopFolders(loopsRoot)) {
+    const label = folder.flow === null ? folder.name : `${folder.flow}/${folder.name}`;
+    const r = resolveLoopDefV2(folder.name, { tiers: { operator: null, appBundled: loopsRoot, retired: null }, repoDir: loopsRoot, flow: folder.flow ?? undefined });
+    if (!r.ok) throw new Error(`the bundled loop ${label} does not resolve: ${r.reason}`);
+    for (const reviewer of r.def.reviewers) {
+      const render = (): string => format.render({ loop: folder.name, persona: reviewer.persona, tools: reviewer.tools, charter: readFileSync(reviewer.charter, 'utf8') });
+      const rendered = render();
+      const name = format.name(folder.name, reviewer.persona);
+      const prior = byName.get(name);
+      if (prior !== undefined) {
+        if (prior.rendered !== rendered) throw new Error(`the bundled flows disagree on the reviewer ${name}: two charters or tool lists cannot install as one sub-agent`);
+        continue;
       }
+      byName.set(name, { rel: `${name}${format.extension}`, src: reviewer.charter, bytes: () => Buffer.from(render()), rendered });
     }
   }
   return [...byName.values()].map(({ rel, src, bytes }) => ({ rel, src, bytes }));

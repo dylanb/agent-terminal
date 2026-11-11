@@ -15,7 +15,7 @@ Standards to apply: tracer bullets (The Pragmatic Programmer), the walking skele
 slicing (Cockburn), and vertical story-splitting patterns — plus the repository's own slicing rules (for
 example `TRACER-BULLET.md`).
 
-This flow, `simple-dev-v1`, built the whole ticket in one test-driven development loop: the approved plan's
+This flow built the whole ticket in one test-driven development loop: the approved plan's
 `## Increments` block lists its `### Increment` entries, and the branch carries their `RED:` and `GREEN:` commits
 as the impl-report's `### Increments` section records them; a verification-only increment has a `RED:` commit and
 no `GREEN:`. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change

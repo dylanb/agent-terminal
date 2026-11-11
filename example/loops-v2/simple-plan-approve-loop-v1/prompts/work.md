@@ -5,7 +5,7 @@ Present the plan for the operator's approval.
 Read the `groom-intent`, `plan` and `plan-report` inputs and the ticket. Write the `plan-summary` artifact and
 show it to the operator in this terminal, with these parts in this order:
 
-1. `## Fit for simple-dev` — when the plan's `Simple-dev fit:` is `no`, or the `## Fit` block is missing, open
+1. `## Fit for the light path` — when the plan's `Light-path fit:` is `no`, or the `## Fit` block is missing, open
    with a warning headed **Better suited to feature-dev-v3**: each rule that fails, its evidence in one line,
    what `feature-dev-v3` would do differently, and that the way to switch is to terminate this run and start the
    ticket under `feature-dev-v3`. When the verdict is `yes`, one line saying so with the size estimate. Check the

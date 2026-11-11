@@ -57,7 +57,7 @@ against the code, not the ticket's wording, and record the result in the `## Fit
    change or loop-capabilities setup. That is `feature-dev-v3`'s `infra` step, which this flow does not have.
 4. **Not an epic.** The ticket does not decompose into more than one independently shippable sub-ticket.
 
-`Simple-dev fit: yes` only when all four hold. Otherwise `Simple-dev fit: no`, naming each rule that fails and
+`Light-path fit: yes` only when all four hold. Otherwise `Light-path fit: no`, naming each rule that fails and
 the evidence. Never shade the verdict to keep the ticket in this flow: the operator decides at the next step
 whether to go on anyway, and a wrong `yes` costs them the review they would have chosen.
 

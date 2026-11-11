@@ -196,9 +196,16 @@ export interface LoopDefV2Context {
   flow?: string;
 }
 
+export interface LoopDefLocation {
+  defDir: string;
+  defPath: string;
+}
+
 /** §27.8. */
-function flowLoopsDir(loopsRoot: string, flow: string): string | null {
-  return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
+export function loopDefLocation(loopsRoot: string, name: string, flow: string | null): LoopDefLocation | null {
+  if (!isSafePathSegment(name) || (flow !== null && !isSafePathSegment(flow))) return null;
+  const defDir = flow === null ? path.join(loopsRoot, name) : path.join(loopsRoot, flow, name);
+  return { defDir, defPath: path.join(defDir, `${name}.yaml`) };
 }
 
 const ALLOWED_TOP_KEYS = new Set([
@@ -561,15 +568,12 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     const jail = resolveOwnedDirJail(root);
     return jail === null ? [] : [{ root, tierName, jail }];
   });
-  const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
-    const defDir = path.join(dir, name);
-    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+  const candidateIn = (tier: (typeof tierCandidates)[number], flow: string | null): DefCandidate[] => {
+    const at = loopDefLocation(tier.root, name, flow);
+    return at === null ? [] : [{ tierRoot: tier.root, ...at, tierName: tier.tierName, jail: tier.jail }];
   };
-  for (const tier of tierCandidates) {
-    const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);
-    if (flowDir !== null) candidates.push(candidateIn(tier, flowDir));
-  }
-  for (const tier of tierCandidates) candidates.push(candidateIn(tier, tier.root));
+  if (ctx.flow !== undefined) for (const tier of tierCandidates) candidates.push(...candidateIn(tier, ctx.flow));
+  for (const tier of tierCandidates) candidates.push(...candidateIn(tier, null));
 
   for (const { tierRoot, defDir, defPath, tierName, jail } of candidates) {
     const confinedDefPath = confinedRealPathResult(jail, defPath);

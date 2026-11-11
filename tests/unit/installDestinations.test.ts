@@ -68,8 +68,6 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
   });
 
   it('targets the user-config app loop definitions and commands directories (§24.2.3)', () => {
-    // The bundle holds only per-flow folders (§27.8), so seeding its tree here lands each flow's loops in
-    // that flow's own folder.
     const dirs = exampleInstallDirs(loc, ROOTS);
     expect(targetOf(dirs, 'appLoops')).toBe(userConfigLoopsV2Dir('/cfg'));
     expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));

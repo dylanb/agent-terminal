@@ -66,6 +66,14 @@ function summarize(report: Report): string {
   return `Installed examples — ${counts(report)}`;
 }
 
+export const MOVED_LOOPS_TEXT =
+  "Some loop definitions now ship once, in the shared folder. Older copies of them are still in a flow's own folder, where they are used instead of the shared copy.";
+export const MOVED_LOOPS_REMOVAL_TEXT = 'Removing an older copy makes its flow use the shared copy.';
+
+export const RETIRED_FLOW_STOPS_TEXT = 'A run using one of these flows stops until you choose another flow.';
+export const OLD_ITEM_WORD = 'old';
+export const RETIRED_ITEM_WORD = 'retired';
+
 export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDeps): InstallExamples {
   const doc = host.ownerDocument;
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -198,6 +206,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
       const describedById = `${titleId}-msg`;
+      const hasRetiredFlow = retired.some((r) => r.kind === 'retired-flow');
+      const hasMovedLoop = retired.some((r) => r.kind === 'moved-loop');
       const cardEl = d.createElement('div');
       cardEl.className = 'card';
       const h3 = d.createElement('h3');
@@ -212,7 +222,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           ? ['Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.']
           : []),
         ...(retired.length > 0
-          ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind. They are kept unless you choose to remove them.`]
+          ? [
+              ...(hasRetiredFlow ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind.`] : []),
+              ...(hasMovedLoop ? [MOVED_LOOPS_TEXT] : []),
+              'They are kept unless you choose to remove them.',
+            ]
           : []),
         ...(conflicts.length === 0 ? ['The bundled examples are installed either way; only the ticked option removes anything.'] : []),
       ].join(' ');
@@ -280,12 +294,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       let retiredBox: HTMLInputElement | null = null;
       if (retired.length > 0) {
         retiredBox = option(
-          consentGroup('retired', 'Retired examples'),
+          consentGroup('retired', hasMovedLoop ? 'Old example files' : 'Retired examples'),
           'retired',
-          `Remove ${retired.length} retired item${retired.length === 1 ? '' : 's'}, whatever they hold`,
+          `Remove ${retired.length} ${hasMovedLoop ? OLD_ITEM_WORD : RETIRED_ITEM_WORD} item${retired.length === 1 ? '' : 's'}, whatever they hold`,
           [
-            `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
-            ...(retiredFallback !== null
+            `${retiredList(retired)}.`,
+            ...(hasRetiredFlow ? [RETIRED_FLOW_STOPS_TEXT] : []),
+            ...(hasMovedLoop ? [MOVED_LOOPS_REMOVAL_TEXT] : []),
+            ...(retiredFallback !== null && hasRetiredFlow
               ? [`Your fallback flow is still the retired ${retiredFallback}, which may use what these remove: replace ${DESTINATION_LABEL.flow} too.`]
               : []),
           ].join(' '),

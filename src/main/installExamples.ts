@@ -1,6 +1,6 @@
 // §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
 
-import { lstatSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync, isWritableContainer } from './atomicFile';
@@ -23,7 +23,7 @@ import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
 import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
-import { retiredCatalogEntries, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { retiredCatalogEntries, removeRetiredEntry, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
 import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import {
   INSTALL_DESTINATION_IDS,
@@ -36,6 +36,7 @@ import {
   type InstallExamplesResult,
   type InstallPreviewId,
   type RetiredExample,
+  type RetiredKind,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -215,7 +216,7 @@ export interface InstallDestination {
   /** Set only on a destination that installs where its tool is: when this directory does not exist, the
    *  destination is skipped rather than created (§18.1). Unset, the destination always installs. */
   toolHome?: string;
-  /** §18.1. Unset on a destination no retired flow ever wrote to. */
+  /** §18.1. Unset on a destination where no older build left a retired flow's files or a moved loop's copy. */
   retired?: RetiredLister;
 }
 
@@ -382,7 +383,7 @@ interface ResolvedDestination {
   jail: string;
   files: ResolvedFile[];
   overwrite: InstallDestination['overwrite'];
-  retired: DestRelativePath[];
+  retired: { rel: DestRelativePath; kind: RetiredKind }[];
 }
 type Resolution =
   | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
@@ -442,7 +443,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       jail,
       files: resolved,
       overwrite: dest.overwrite,
-      retired: (dest.retired?.(jail) ?? []).map(destRelative),
+      retired: (dest.retired?.(jail, dest.bundleDir) ?? []).map((r) => ({ rel: destRelative(r.rel), kind: r.kind })),
     });
   }
   return { ok: true, destinations: out, notInstalled };
@@ -479,7 +480,7 @@ interface InstallAuthorization {
 }
 
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
-  destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
+  destinations.flatMap((d) => d.retired.map((r) => ({ destination: d.id, rel: r.rel, kind: r.kind })));
 
 /** The retired flow the installed fallback flow.yaml still is, read by the loader that runs it (§18.7.3). */
 function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
@@ -660,6 +661,7 @@ export function previewInstallExamples(
 
 export interface ApplyOptions {
   removeRetired: boolean;
+  removeLeftover?: (jail: string, rel: string, kind: RetiredKind) => void;
 }
 
 function applyInstallExamplesWithAuthorization(
@@ -784,17 +786,17 @@ function applyInstallExamplesWithAuthorization(
   }
 
   if (options.removeRetired) {
+    const removeLeftover = options.removeLeftover ?? removeRetiredEntry;
     const offered = authorization === undefined ? null : new Set(authorization.retired.map((r) => snapshotKey(r.destination, r.rel)));
     for (const dest of resolution.destinations) {
-      for (const rel of dest.retired) {
+      for (const { rel, kind } of dest.retired) {
         if (offered !== null && !offered.has(snapshotKey(dest.id, rel))) continue;
         try {
-          // `rm` removes a symbolic link itself, never what it points at.
-          rmSync(path.join(dest.jail, rel), { recursive: true, force: true });
+          removeLeftover(dest.jail, rel, kind);
         } catch (e) {
-          return fail(`Could not remove the retired ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
+          return fail(`Could not remove the ${kind === 'moved-loop' ? 'old' : 'retired'} ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
         }
-        removed.push({ destination: dest.id, rel });
+        removed.push({ destination: dest.id, rel, kind });
       }
     }
   }

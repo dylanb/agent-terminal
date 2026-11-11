@@ -25,7 +25,7 @@ import {
 } from '../../src/main/installExamples';
 import { load as parseYaml } from 'js-yaml';
 import { flowCatalogDir, loadFlowDefinitionLocalFirst } from '../../src/main/flow';
-import { bundledFlowOf } from '../helpers/bundledLoops';
+import { bundledLoopRel } from '../helpers/bundledLoops';
 import {
   isTodoTemplateFile,
   listTodoTemplates,
@@ -77,7 +77,7 @@ let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
 const templateRel = path.join('todo-templates', 'ticket-grooming.md');
-const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
+const planLoopRel = bundledLoopRel('plan-loop');
 const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
+import { listLoopFolders } from '../../src/main/loopFolders';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
 import { installedCodexReviewerProblem, installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
@@ -24,14 +25,10 @@ interface BundledReviewer {
 
 function bundledReviewers(root: string): BundledReviewer[] {
   const out: BundledReviewer[] = [];
-  for (const flow of readdirSync(root)) {
-    for (const loop of readdirSync(path.join(root, flow))) {
-      const defPath = path.join(root, flow, loop, `${loop}.yaml`);
-      if (!existsSync(defPath)) continue;
-      const def = parseYaml(readFileSync(defPath, 'utf8')) as { reviewers: { persona: string; charter: string; tools?: string[] }[] };
-      for (const r of def.reviewers) {
-        out.push({ loop, persona: r.persona, tools: r.tools, charterPath: path.join(root, flow, loop, r.charter) });
-      }
+  for (const { name: loop, dir } of listLoopFolders(root)) {
+    const def = parseYaml(readFileSync(path.join(dir, `${loop}.yaml`), 'utf8')) as { reviewers: { persona: string; charter: string; tools?: string[] }[] };
+    for (const r of def.reviewers) {
+      out.push({ loop, persona: r.persona, tools: r.tools, charterPath: path.join(dir, r.charter) });
     }
   }
   return out;

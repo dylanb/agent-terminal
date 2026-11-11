@@ -12,7 +12,9 @@ rebuild them from memory.
 
 ## Where things are
 
-- **Loop definitions:** `<codex home>/loops-v2/<flow>/<loop>/<loop>.yaml`, for example
+- **Loop definitions:** `<codex home>/loops-v2/<flow>/<loop>/<loop>.yaml`, or
+  `<codex home>/loops-v2/<loop>/<loop>.yaml` when the loop ships in the shared folder. Look in the flow's
+  folder first. For example
   `loops-v2/feature-dev-v3/integration-slice-loop/integration-slice-loop.yaml`. A definition names its own
   files, as paths relative to its directory: its work recipe in `work.recipe`, its judging recipe in
   `consolidator.recipe` when it has review rounds, its standing instructions in `brief` when it has them, and
