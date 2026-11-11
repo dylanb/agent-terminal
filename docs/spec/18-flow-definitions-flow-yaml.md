@@ -15,7 +15,11 @@
   - The action never deletes outside the leftovers it previewed and the user ticked, and never edits a `.gitignore` (§19.1): it is the explicit, user-invoked exemption to the no-silent-rewrite rule.
   - **The engine-capabilities guide is always replaced.** The build generates `engine-capabilities.md`, a Markdown guide for agents that author flows: every key and value the flow loader and the loop-definition loader accept, with what it does and when to choose it, where flows and loops live in each tier, the §27.8 lookup order, and the turn contract a loop's turns follow (the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected) with how briefs, recipes and charters become turns. The accepted flow and loop values have one shared definition: both loaders validate against it and the guide is generated from it, so the guide cannot describe a value the engine does not accept. The guide is never committed. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md`, beside the global fallback flow, so `APP_HOME_DIR` relocates it the same way. It is the one exception to per-destination consent: every install that runs replaces it whole, a stale or hand-edited copy included, and the preview lists it as always replaced with no choice to make. It never opens the confirmation dialog on its own; cancelling the dialog, or a refused pre-write check, leaves it untouched like every other target.
 
-The shipped flows are in `example/flows/`.
+**Terminal reviewer installation** (`agent-terminal --install-reviewers <flow-folder>`, §23.5) uses the same installation mechanism and guarantees for one explicitly selected global, repository or bundled flow. It writes only that flow's reviewer agents, leaves its sources and unrelated assets unchanged, and requires consent for replacements. Settings continues to discover bundled examples only; it does not discover operator-created flows. Reviewer identities distinguish the exact flow definition name, loop and persona on both platforms (§27.4). Same-name sources share identity and can require a consented reinstall when switching. Legacy files are not silently removed; targeted removal is permitted only by the existing retirement rules and unambiguous selected-flow ownership, with separate consent.
+
+The setup popup's **Install/update examples** runs this same install, with the same replace question, from inside the popup (§29.3).
+
+The shipped flows are in `example/flows/`. One of them, `repo-setup`, is the flow the setup popup's **Run setup loop** starts (§29).
 
 ### 18.2 Steps & kinds (D3/D7/D30)
 
@@ -32,6 +36,7 @@ The shipped flows are in `example/flows/`.
 ### 18.4 Typed step inputs (D29/D34)
 
 - Each step declares its required **typed inputs**; when one is not already available the app prompts with the matching **picker** (`github-ticket`, `pr`, `files`, `free-text`). A loop may **create** outputs (new PRs) not known up front.
+- A `pr` input can also name a pull request for a loop step to **adopt** (`pickup: { adopt: pr }`, §27.10): the run then works on that PR rather than on a ticket. Such a step's `pr` input must be required, and it is the flow's only `pr` input; a flow that breaks this, or another §27.10 adoption load rule, fails to load (§18.1 `error`), naming both sides.
 
 ### 18.5 Authoring is separate (D20)
 

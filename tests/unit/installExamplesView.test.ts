@@ -145,6 +145,73 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
 
+  describe('open() — the entry point the setup popup uses', () => {
+    it('runs what a press of the Install examples button runs: the consent step when a destination conflicts', async () => {
+      const apply = vi.fn(async () => okResult());
+      const view = createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('appLoops')), apply }));
+
+      view.open();
+
+      await vi.waitFor(() => expect({ consent: prompt() !== null, applied: apply.mock.calls.length }).toEqual({ consent: true, applied: 0 }));
+    });
+
+    it('runs what a press runs: a clean preview installs, replacing nothing, and reports the result', async () => {
+      const apply = vi.fn(async () => okResult());
+      const view = createInstallExamples(host, deps({ apply }));
+
+      view.open();
+
+      await vi.waitFor(() =>
+        expect({ applied: apply.mock.calls, said: status().textContent?.toLowerCase() ?? '' }).toEqual({
+          applied: [[PREVIEW_ID, [], false]],
+          said: expect.stringContaining('created'),
+        }),
+      );
+    });
+
+    it('starts nothing while a press of the button is still running', async () => {
+      const pending = deferred<InstallExamplesPreview>();
+      const preview = vi.fn(() => pending.promise);
+      const view = createInstallExamples(host, deps({ preview }));
+      button().click();
+
+      view.open();
+      pending.resolve(clean);
+
+      await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+      expect(preview).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('open() — where focus lands, as after a press of the button (WCAG 2.4.3)', () => {
+    function focusElsewhere(): void {
+      const other = document.body.appendChild(document.createElement('button'));
+      other.focus();
+    }
+
+    it('leaves focus on the Install examples button once a clean install has run', async () => {
+      const view = createInstallExamples(host, deps());
+      focusElsewhere();
+
+      view.open();
+
+      await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+      expect(document.activeElement).toBe(button());
+    });
+
+    it('returns focus to the Install examples button when the consent step is cancelled', async () => {
+      const view = createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('appLoops')) }));
+      focusElsewhere();
+
+      view.open();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      buttonNamed('Cancel').click();
+
+      await vi.waitFor(() => expect(prompt()).toBeNull());
+      expect(document.activeElement).toBe(button());
+    });
+  });
+
   it('shows the consent step before any apply when a destination conflicts', async () => {
     const apply = vi.fn(async () => okResult());
     await openConsent(['appLoops'], { apply });

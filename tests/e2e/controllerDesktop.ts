@@ -40,16 +40,31 @@ async function startWindowManager([command, ...args]: Command, env: NodeJS.Proce
   }
 }
 
+// Every screen gets a number no other screen in the run uses, so two never contend for one, and a number is never
+// reused while a stopped screen's lock or socket may linger. Playwright gives each worker process, a restarted one
+// included, its own TEST_WORKER_INDEX. The suite-wide screen the entrypoint starts is :99, below this range.
+const DISPLAY_BASE = 1000;
+const DISPLAYS_PER_WORKER = 100;
+let displaysStarted = 0;
+
+function reservedDisplay(): number {
+  const worker = Number(process.env.TEST_WORKER_INDEX);
+  if (!Number.isSafeInteger(worker) || worker < 0) throw new Error('A controller desktop needs a Playwright worker index (TEST_WORKER_INDEX)');
+  if (displaysStarted >= DISPLAYS_PER_WORKER) throw new Error(`A worker started more than ${DISPLAYS_PER_WORKER} controller desktops`);
+  return DISPLAY_BASE + worker * DISPLAYS_PER_WORKER + displaysStarted++;
+}
+
 export async function createControllerDesktopHarness(
   { windowManager = ['openbox', '--sm-disable'] }: { windowManager?: Command } = {},
 ) {
   if (process.platform !== 'linux') return createControllerHarness();
-  const xvfb = spawn('Xvfb', ['-displayfd', '1', '-screen', '0', '1280x1024x24', '-nolisten', 'tcp'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const number = reservedDisplay();
+  const xvfb = spawn('Xvfb', [`:${number}`, '-displayfd', '1', '-screen', '0', '1280x1024x24', '-nolisten', 'tcp'], { stdio: ['ignore', 'pipe', 'inherit'] });
   let wm: ChildProcess | undefined;
   let displayTimer: ReturnType<typeof setTimeout> | undefined;
   const lines = createInterface({ input: xvfb.stdout! });
   try {
-    const [number] = await Promise.race([
+    const [ready] = await Promise.race([
       once(lines, 'line'),
       once(xvfb, 'exit').then(() => { throw new Error('Xvfb exited before assigning its display'); }),
       new Promise<never>((_resolve, reject) => {
@@ -57,7 +72,7 @@ export async function createControllerDesktopHarness(
       }),
     ]);
     clearTimeout(displayTimer);
-    if (!/^\d+$/.test(number)) throw new Error(`Invalid X display number: ${number}`);
+    if (ready !== String(number)) throw new Error(`Xvfb reported display ${ready}, not the reserved :${number}`);
     const display = `:${number}`;
     const env = { ...process.env, DISPLAY: display };
     wm = await startWindowManager(windowManager, env);

@@ -3,7 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
-import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
+import { isAppBootstrapConflictTarget, isTicketRef } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -41,6 +41,7 @@ import {
   type StepMissingConsent,
   CATALOG_ORIGINS,
   type FlowResolveAppBootstrapConflictMsg,
+  type FlowResolveAdoptTicketMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
@@ -60,6 +61,9 @@ import {
   type UiSetSettingsMsg,
   type ViewerReadMsg,
   type ViewerTreeMsg,
+  type SetupAgentStateMsg,
+  type SetupDismissMsg,
+  type SetupStatusMsg,
 } from '../shared/ipc';
 import { isOneOf } from '../shared/oneOf';
 
@@ -212,6 +216,21 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
     m.id.length > 0 &&
     m.id.length <= MAX_CATALOG_ID_LENGTH
   );
+}
+
+export function isValidSetupStatus(m: unknown): m is SetupStatusMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+export function isValidSetupAgentState(m: unknown): m is SetupAgentStateMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidSetupDismiss(m: unknown): m is SetupDismissMsg {
+  if (!isRecord(m) || !isLiveSession(m) || !isRecord(m.dismissal)) return false;
+  const { dismissal } = m;
+  if (dismissal.kind === 'repo') return isSafeRepoKey(dismissal.repoKey);
+  return dismissal.kind === 'examples' && typeof dismissal.appVersion === 'string';
 }
 
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
@@ -378,6 +397,15 @@ export function isValidFlowResolveAppBootstrapConflict(
     typeof m.wipe === 'boolean' &&
     isAppBootstrapConflictTarget(m)
   );
+}
+
+/** flow:resolveAdoptTicket — the operator's answer to one ticket-choice offer. */
+export function isValidFlowResolveAdoptTicket(m: unknown): m is FlowResolveAdoptTicketMsg {
+  if (!isRecord(m) || !isLiveSession(m) || !isSafeRepoKey(m.repoKey)) return false;
+  if (typeof m.step !== 'string' || m.step.length === 0 || typeof m.choiceId !== 'string' || m.choiceId.length === 0) return false;
+  const answer = m.answer;
+  if (!isRecord(answer)) return false;
+  return answer.kind === 'cancel' || (answer.kind === 'ticket' && isTicketRef(answer.ticket));
 }
 
 /** flow:resolveEpicPromotion — the operator's confirm/decline of the §28.7 confirm-first preview. `repoKey`

@@ -106,8 +106,8 @@ export function composeLifecycleEndRun(autoGate: AutoGate): (repoKey: string) =>
   return (repoKey) => autoGate.endRun(repoKey);
 }
 
-export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'] {
-  const loadBound = createBoundSourceLoader(globalRoot);
+export function composeCurrentRun(globalRoot: string, defTiers: LoopDefV2Tiers): AutoGateDeps['currentRun'] {
+  const loadBound = createBoundSourceLoader(globalRoot, defTiers);
   return (repoDir) => {
     const binding = readRunBinding(repoDir);
     if (binding === null) return null;

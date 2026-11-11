@@ -17,10 +17,12 @@ rebuild them from memory.
   files, as paths relative to its directory: its work recipe in `work.recipe`, its judging recipe in
   `consolidator.recipe` when it has review rounds, its standing instructions in `brief` when it has them, and
   each reviewer's charter in `reviewers[].charter`. A definition with a `work.goal` reviews its own work.
-- **Reviewer agents:** one custom agent per reviewer, in `<codex home>/agents/`. Its name is the loop
-  name and the persona name joined by `__`, with every `-` written as `_`. The `impl-review-reliability`
-  reviewer of `integration-slice-loop`, for example, is `integration_slice_loop__impl_review_reliability`.
-  Its instructions already are its charter.
+- **Reviewer agents:** one custom agent per flow-name/loop/persona tuple, in `<codex home>/agents/`.
+  Use the exact installed name from the engine's reviewer roster. For a hand run, compute
+  the lowercase SHA-256 hex digest of the UTF-8 compact JSON array
+  `[flowName, loopName, persona]` (no added spaces or Unicode normalization), and verify that the
+  corresponding TOML file carries the resolved charter. The flow name is the definition's `name`,
+  not its folder. Its instructions already are its charter. Restart the session after installation.
 
 If a loop, a charter, or a reviewer agent you need is missing, stop and tell the user to run **Install
 examples** in agent-terminal again and then restart Codex, because Codex loads agents only when a session

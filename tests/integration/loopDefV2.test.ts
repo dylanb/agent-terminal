@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
+import { isAdoptPickup, resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 
 // A minimal, valid §27 (v2) def as YAML. Helpers below mutate one line at a time so each escape /
@@ -111,7 +111,7 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(d.gate[0].sideEffects[0]).toMatchObject({ kind: 'gh' });
     expect(d.gate[0].sideEffects[0].args).toMatchObject({ action: 'publish-pr-body' });
     // pickup contract; inputs and outputs
-    expect(d.pickup?.initialStatus).toBe('planning');
+    expect(d.pickup !== null && !isAdoptPickup(d.pickup) ? d.pickup.initialStatus : null).toBe('planning');
     expect(d.inputs[0].id).toBe('ticket');
     expect(d.outputs[0].id).toBe('plan');
   });
@@ -202,11 +202,14 @@ describe('resolveLoopDefV2 — the bootstrap pickup contract is optional and sel
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', extended);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
-    if (!r.ok || r.def.pickup === null) return;
-    expect(r.def.pickup.initialStatus).toBe('planning');
-    expect(r.def.pickup.branchTemplate).toBe('plan-loop/issue-{issue}');
-    expect(r.def.pickup.wipe).toEqual({ mode: 'wipe-and-retry' });
-    expect(r.def.pickup.initialLabels).toEqual([
+    if (!r.ok) return;
+    const pickup = r.def.pickup;
+    expect(pickup !== null && !isAdoptPickup(pickup)).toBe(true);
+    if (pickup === null || isAdoptPickup(pickup)) return;
+    expect(pickup.initialStatus).toBe('planning');
+    expect(pickup.branchTemplate).toBe('plan-loop/issue-{issue}');
+    expect(pickup.wipe).toEqual({ mode: 'wipe-and-retry' });
+    expect(pickup.initialLabels).toEqual([
       { target: 'issue', action: 'add', label: 'agent-loop/in-progress' },
       { target: 'pr', action: 'remove', label: 'needs-triage' },
     ]);
@@ -218,10 +221,11 @@ describe('resolveLoopDefV2 — the bootstrap pickup contract is optional and sel
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
-    if (r.ok && r.def.pickup) {
-      expect(r.def.pickup.wipe).toEqual({ mode: 'abort' });
-      expect(r.def.pickup.initialLabels).toEqual([]);
-    }
+    const pickup = r.ok ? r.def.pickup : null;
+    expect(pickup !== null && !isAdoptPickup(pickup)).toBe(true);
+    if (pickup === null || isAdoptPickup(pickup)) return;
+    expect(pickup.wipe).toEqual({ mode: 'abort' });
+    expect(pickup.initialLabels).toEqual([]);
   });
 
   it('rejects an on_conflict outside the closed vocabulary, naming the field', () => {
@@ -722,6 +726,36 @@ describe('resolveLoopDefV2 — the loop brief (§27.8)', () => {
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/brief reference escapes/);
+  });
+});
+
+describe('resolveLoopDefV2 — a work turn can be handed a self-check (§29)', () => {
+  const withSelfCheck = (v: string): string => VALID_DEF.replace('  artifact: plan\n', `  artifact: plan\n  self_check: ${v}\n`);
+
+  it('reads a declared loop-capabilities self-check', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('loop-capabilities'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok, r.ok ? '' : r.reason).toBe(true);
+    expect(r.ok && r.def.work.selfCheck).toBe('loop-capabilities');
+  });
+
+  it('declares none when the def names none', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok && r.def.work.selfCheck).toBeUndefined();
+  });
+
+  it('refuses a self-check outside the closed set, naming the field', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('lint-everything'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.reason).toContain('self_check');
+  });
+
+  it('refuses a self-check that is a list rather than a single name', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withSelfCheck('[loop-capabilities]'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
   });
 });
 

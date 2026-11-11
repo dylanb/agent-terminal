@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
+import { bodyControlIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
+import { statusItem } from '../helpers/controllerHistory';
+import { STATUS_CASES, statusTerminal, withActivity, type StatusCase } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -23,8 +24,8 @@ function expanded(host: HTMLElement, directory: string): boolean | string {
   return state === 'true' || state === 'false' ? state === 'true' : `aria-expanded is ${state}`;
 }
 
-const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
-const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working' };
+const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
+const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working', timeline: [statusItem('Went quiet', 1000)], clearHistoryTarget: { id: 'working', launchDirectory: '/cards/working', revision: 'r1' } };
 const peer = { ...statusTerminal({ activity: 'quiet' }), id: 'peer', launchDirectory: '/cards/peer' };
 
 describe('the default collapse rule', () => {
@@ -72,7 +73,8 @@ describe('an untoggled card follows the rule', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [blocked], oneColumn: true });
     try {
       const card = cardIn(host, blocked.launchDirectory);
-      (card && bringForwardIn(card))?.focus();
+      expect(card && bodyControlIn(card), 'a control in the body').toBeDefined();
+      (card && bodyControlIn(card))?.focus();
       service.publish([working]);
       const target = header(host, working.launchDirectory);
       expect({ collapsed: expanded(host, working.launchDirectory) === false, focused: target !== undefined && document.activeElement === target })
@@ -84,7 +86,8 @@ describe('an untoggled card follows the rule', () => {
     const { host, layout, dispose } = mountControllerPanes({ terminals: [working], oneColumn: false });
     try {
       const card = cardIn(host, working.launchDirectory);
-      (card && bringForwardIn(card))?.focus();
+      expect(card && bodyControlIn(card), 'a control in the body').toBeDefined();
+      (card && bodyControlIn(card))?.focus();
       layout.set(true);
       const target = header(host, working.launchDirectory);
       expect({ collapsed: expanded(host, working.launchDirectory) === false, focused: target !== undefined && document.activeElement === target })
@@ -107,7 +110,7 @@ describe('an untoggled card follows the rule', () => {
 });
 
 describe('an activity change alone', () => {
-  it('changes an untoggled one-column card\'s written status, open state and the summary counts in the same update, keeping its place', () => {
+  it('changes an untoggled one-column card\'s written status, open state, summary counts and place in its status group in the same update', () => {
     const gated = (row: StatusCase) => ({ ...row.terminal, id: 'gated', launchDirectory: '/cards/gated', repositoryRoot: '/cards' });
     const [busy, quiet] = [STATUS_CASES['needs-human-working'], STATUS_CASES['needs-human']];
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, gated(busy)], oneColumn: true });
@@ -126,9 +129,9 @@ describe('an activity change alone', () => {
       const onceIdle = read(quiet);
       service.publish([peer, gated(busy)]);
       const workingAgain = read(busy);
-      const shown = (c: StatusCase, open: boolean) => ({ status: c.text, expanded: open, order: [0, 1], countsNotShown: [] });
+      const shown = (c: StatusCase, open: boolean, order: number[]) => ({ status: c.text, expanded: open, order, countsNotShown: [] });
       expect({ whileWorking, onceIdle, workingAgain })
-        .toEqual({ whileWorking: shown(busy, false), onceIdle: shown(quiet, true), workingAgain: shown(busy, false) });
+        .toEqual({ whileWorking: shown(busy, false, [0, 1]), onceIdle: shown(quiet, true, [1, 0]), workingAgain: shown(busy, false, [0, 1]) });
     } finally { dispose(); }
   });
 });
@@ -198,7 +201,7 @@ describe('focus on a card header across a live update', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, working] });
     try {
       header(host, working.launchDirectory)?.focus();
-      service.publish([peer, { ...working, work: { ...working.work, activity: 'quiet' } }]);
+      service.publish([peer, { ...working, work: withActivity(working.work, 'quiet') }]);
       const target = header(host, working.launchDirectory);
       expect(target !== undefined && document.activeElement === target).toBe(true);
     } finally { dispose(); }

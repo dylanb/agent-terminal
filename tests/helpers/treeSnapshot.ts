@@ -27,7 +27,7 @@ export function snapshotTree(root: string): Record<string, TreeEntry> {
     else if (stat.isFile()) out[rel] = { type: 'file', bytes: readFileSync(abs).toString('base64') };
     else if (stat.isDirectory()) {
       out[rel] = { type: 'dir' };
-      for (const name of readdirSync(abs).sort()) visit(rel === '' ? name : join(rel, name));
+      for (const name of readdirSync(abs).sort().filter((name) => rel !== '' || name !== '.git')) visit(rel === '' ? name : join(rel, name));
     } else out[rel] = { type: 'other' };
   };
   visit('');

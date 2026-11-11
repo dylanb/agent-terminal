@@ -41,8 +41,8 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     driveToReviewInjected(engine);
 
     const prompt = reviewPrompt();
-    expect(prompt).toContain('plan_loop__review_plan_principal');
-    expect(prompt).toContain('plan_loop__review_plan_security');
+    expect(prompt).toMatch(/- review-plan-principal — agent: [a-z0-9_]+/);
+    expect(prompt).toMatch(/- review-plan-security — agent: [a-z0-9_]+/);
     expect(prompt).not.toContain('subagent_type');
     expect(prompt).not.toContain('Task tool');
   });
@@ -53,7 +53,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     enterAndInjectWork(engine);
 
     const prompt = goalPrompt();
-    expect(prompt).toContain('plan_loop__review_plan_principal');
+    expect(prompt).toMatch(/- review-plan-principal — agent: [a-z0-9_]+/);
     expect(prompt).not.toContain('subagent_type');
   });
 
@@ -61,7 +61,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     const engine = engineFor('claude-code');
     driveToReviewInjected(engine);
 
-    expect(reviewPrompt()).toContain('subagent_type: plan-loop--review-plan-principal');
+    expect(reviewPrompt()).toMatch(/- review-plan-principal — subagent_type: [a-z0-9_-]+/);
   });
 
   it('names the reviewers for the same agent it checked them against, within one turn', () => {
@@ -98,8 +98,25 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
+    engine.onAgentWaitElapsed();
 
     expect(engine.liveErrorFor(h.repo)?.reason).toBe('no hosted agent at the prompt');
+  });
+
+  it('a turn entered before the agent starts injects once the agent is at its prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    h.hosted = 'absent';
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(false);
+
+    h.hosted = 'idle';
+    engine.onInjectable();
+    engine.onInjectable();
+    engine.onAgentWaitElapsed();
+
+    expect(h.injected.some((p) => p.startsWith('/goal '))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
   });
 
   it('refuses the turn when the Codex agent of a reviewer is not installed, and says how to install it', () => {

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dump, load } from 'js-yaml';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
-import { CLAUDE_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
+import { CLAUDE_REVIEWER_AGENT, planReviewerAgents, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { userConfigAgentsDir } from '../../src/main/userConfig';
 
 /** The phase loops a fixture flow binds by name and drives with a round-answering fake agent (§27.5). */
@@ -58,4 +59,19 @@ export function seedSharedExampleConfig(): string {
   mkdirSync(agents, { recursive: true });
   for (const agent of planReviewerAgents(bundle, CLAUDE_REVIEWER_AGENT)) writeFileSync(join(agents, agent.rel), agent.bytes());
   return root;
+}
+
+export function seedExampleReviewers(config: string, flow: string, loopNames: readonly string[]): void {
+  const loops = join(config, 'loops-v2');
+  const agents = userConfigAgentsDir(config);
+  if (agents === null) throw new Error(`no agents directory under ${config}`);
+  mkdirSync(agents, { recursive: true });
+  for (const loop of new Set(loopNames)) {
+    const resolved = resolveLoopDefV2(loop, { repoDir: config, flow, tiers: { operator: loops, appBundled: loops, retired: null } });
+    if (!resolved.ok) continue;
+    for (const reviewer of resolved.def.reviewers) {
+      const spec = { flow, loop, persona: reviewer.persona, tools: reviewer.tools, charter: readFileSync(reviewer.charter, 'utf8') };
+      writeFileSync(join(agents, reviewerAgentName(loop, reviewer.persona, flow) + '.md'), renderReviewerAgent(spec));
+    }
+  }
 }

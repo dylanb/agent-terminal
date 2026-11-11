@@ -2,6 +2,7 @@
 // an aria-hidden child so the live region (WCAG 4.1.3) is not re-announced every second.
 
 import type { MonitorUpdateMsg } from '../../shared/ipc';
+import { waitingLabel } from '../../shared/waiting';
 
 // While quiet, the "quiet for Ns" counter is re-rendered on this cadence (§8.3).
 const QUIET_TICK_MS = 1000;
@@ -30,11 +31,12 @@ export function createStatusStrip(statusEl: HTMLElement, now: () => number = Dat
 
   function render(): void {
     const state = last?.agentState ?? 'quiet';
+    const waiting = last?.waiting ?? null;
     statusEl.innerHTML = '';
     quietCounterEl = null;
     const items: Array<[string, string, boolean]> = [
       ['session', alive ? 'alive' : 'exited', alive],
-      ['agent', state === 'active' ? 'working' : 'quiet', state === 'active'],
+      ['agent', state === 'active' ? 'working' : waiting ? `waiting · ${waitingLabel(waiting)}` : 'quiet', state === 'active' || waiting !== null],
       ['full-screen', last?.altScreen ? 'yes' : 'no', !!last?.altScreen],
     ];
     for (const [label, value, on] of items) {
@@ -42,7 +44,7 @@ export function createStatusStrip(statusEl: HTMLElement, now: () => number = Dat
       chip.className = `status-chip${on ? ' on' : ''}`;
       chip.dataset.status = label;
       chip.textContent = `${label}: ${value}`;
-      if (label === 'agent' && state === 'quiet') {
+      if (label === 'agent' && state === 'quiet' && !waiting) {
         quietCounterEl = document.createElement('span');
         quietCounterEl.className = 'quiet-counter';
         quietCounterEl.setAttribute('aria-hidden', 'true');

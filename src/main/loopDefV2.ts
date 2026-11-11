@@ -99,6 +99,14 @@ export function requiresResultBinding(mode: WorkCompletion): boolean {
   return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);
 }
 
+/** The checks a work turn's agent can be handed to run on what it wrote (§29). Prompt-only: no engine gate. */
+export const SELF_CHECKS = ['loop-capabilities'] as const;
+export type SelfCheck = (typeof SELF_CHECKS)[number];
+const SELF_CHECK_SET: ReadonlySet<string> = new Set(SELF_CHECKS);
+function isSelfCheck(value: string): value is SelfCheck {
+  return SELF_CHECK_SET.has(value);
+}
+
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
  *  §28.4 — the optional completion mode (absent for the existing §27 loops). */
 export interface WorkRecipe {
@@ -111,6 +119,7 @@ export interface WorkRecipe {
   checkpoint?: { passes: number };
   /** §28.5.1 */
   frozenCheck?: true;
+  selfCheck?: SelfCheck;
 }
 
 /** §27.3/§27.8 */
@@ -144,6 +153,18 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
+/** A pickup that adopts the existing pull request the step's `pr`-typed input names, instead of opening one for a
+ *  ticket. */
+export interface AdoptPickupV2 {
+  adopt: 'pr';
+}
+
+export type PickupV2 = PickupContractV2 | AdoptPickupV2;
+
+export function isAdoptPickup(pickup: PickupV2): pickup is AdoptPickupV2 {
+  return 'adopt' in pickup;
+}
+
 function isPolishPolicy(value: string): value is PolishPolicy {
   return isOneOf(POLISH_POLICIES, value);
 }
@@ -165,6 +186,7 @@ export interface ExecSideEffect {
  *  `consolidator`, each `inputs[]`/`outputs[]` path) is already confined to the boundary its role dictates;
  *  an escape is a resolution failure, so a parsed def carries no escaping path. */
 export interface LoopDefV2 {
+  flow?: string;
   version: string;
   name: string;
   work: WorkRecipe;
@@ -173,7 +195,7 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2 | null;
+  pickup: PickupV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
@@ -377,9 +399,15 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   });
 }
 
-function toPickup(raw: unknown): PickupContractV2 | null {
+function toPickup(raw: unknown): PickupV2 | null {
   if (raw === undefined) return null;
   const pickup = requireRecord(raw, 'pickup');
+  if ('adopt' in pickup) {
+    if (pickup.adopt !== 'pr') fail(`pickup adopt must be pr: ${String(pickup.adopt)}`);
+    const stray = Object.keys(pickup).find((key) => key !== 'adopt');
+    if (stray !== undefined) fail(`pickup adopt: pr takes no other key: ${stray}`);
+    return { adopt: 'pr' };
+  }
   return {
     initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
     branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
@@ -419,6 +447,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
   if (work.frozen_check !== undefined && !isOneOf(FROZEN_CHECK_VALUES, work.frozen_check)) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
+  let workSelfCheck: SelfCheck | undefined;
+  if (work.self_check !== undefined) {
+    const c = requireString(work.self_check, 'work self_check');
+    if (!isSelfCheck(c)) fail(`unknown work self_check: ${c} (expected ${SELF_CHECKS.join(' or ')})`);
+    workSelfCheck = c;
+  }
 
   let workGoal: string | undefined;
   if (work.goal !== undefined) {
@@ -485,6 +519,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       ...(workGoal !== undefined ? { goal: workGoal } : {}),
       ...(workCheckpoint !== undefined ? { checkpoint: workCheckpoint } : {}),
       ...(workFrozenCheck ? { frozenCheck: true as const } : {}),
+      ...(workSelfCheck !== undefined ? { selfCheck: workSelfCheck } : {}),
     },
     reviewers,
     rounds,
@@ -607,7 +642,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Lookup): LoopDefV2R
     if (!read.ok && read.cause === 'absent') continue;
     if (!read.ok) return { ok: false, reason: `cannot read def ${name}: ${unreadReason(read, MAX_LOOP_DEF_BYTES)}`, defFile };
     try {
-      return { ok: true, def: parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), tierRoot, defDir, defFile };
+      return { ok: true, def: { ...parse(read.text, tierRoot, defDir, name, ctx.repoDir ?? tierRoot), ...(ctx.flow !== undefined ? { flow: ctx.flow } : {}) }, tierRoot, defDir, defFile };
     } catch (e) {
       return { ok: false, reason: errMsg(e), defFile };
     }

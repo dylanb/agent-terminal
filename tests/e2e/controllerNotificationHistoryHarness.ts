@@ -1,3 +1,4 @@
+import { seedExampleReviewers } from '../helpers/e2eExampleConfig';
 import { expect } from '@playwright/test';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dump, load } from 'js-yaml';
@@ -9,7 +10,7 @@ import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { controllerSnapshot } from './controllerSnapshot';
-import { notificationEntries } from '../helpers/controllerHistory';
+import { notificationEntries, timelineOf } from '../helpers/controllerHistory';
 
 export const historyControllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 export const historyTerminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
@@ -34,6 +35,7 @@ export async function historyGate() {
     const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
     def.gate = [{ option: 'approve' }, { option: 'request-changes' }];
     writeFileSync(defPath, dump(def));
+    seedExampleReviewers(config, 'history-flow', ['red-loop']);
     relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome);
     seedTrustedFlow(h.fixture.home, repo, 'history-flow', autoGateFlowYaml([
       { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' }, { id: 'verify', kind: 'manual' },
@@ -60,14 +62,15 @@ export async function historyGate() {
         const view = await state();
         return { human: view.loop?.humanNeeded, iteration: view.loop?.iteration, status: view.loop?.status };
       }, { timeout: 60_000 }).toEqual({ human: true, iteration: round, status: 'complete' });
-      await expect.poll(async () => (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)?.notifications?.[0]?.message,
+      await expect.poll(async () => notificationEntries((await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo))[0]?.message,
         { timeout: 30_000 }).toContain(`iter ${round}`);
-      return (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)!.notifications![0];
+      return notificationEntries((await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo))[0];
     }
     const first = await gate(1);
     return {
       h, repo, terminal, first, state, dispose,
       controller: () => controller,
+      timeline: async () => timelineOf((await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)),
       entries: async () => notificationEntries((await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)),
       async next(round: number) {
         const accepted = await terminal.page.evaluate(async directory => {

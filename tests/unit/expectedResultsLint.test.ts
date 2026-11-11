@@ -19,9 +19,12 @@ describe('an expected-results fixture never imports the code it checks', () => {
       shared: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n"),
       reExport: await ruleErrors("export { cardStatus } from '../../src/shared/controllerCardClassification';\n"),
       inCardHelper: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCards.ts'),
+      inProcessTable: await ruleErrors("import { commandsIn } from '../../src/main/waitingRule';\n", 'tests/helpers/processTable.ts'),
+      inCardOrderFixture: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCardOrderFixture.ts'),
       inCapabilityOracle: await ruleErrors("import { GATE_AUTHORITIES } from '../../src/shared/gateAuthority';\n", 'tests/helpers/engineCapabilityOracle.ts'),
+      inReviewerContracts: await ruleErrors("import { reviewerAgentName } from '../../src/main/reviewerAgents';\n", 'tests/helpers/reviewerContracts.ts'),
       inJsonListCases: await ruleErrors("import { JSON_LIST_DESCRIPTOR } from '../../src/shared/jsonList';\n", 'tests/helpers/jsonListCases.ts'),
-    }).toEqual({ renderer: 1, shared: 1, reExport: 1, inCardHelper: 1, inCapabilityOracle: 1, inJsonListCases: 1 });
+    }).toEqual({ renderer: 1, shared: 1, reExport: 1, inCardHelper: 1, inCapabilityOracle: 1, inReviewerContracts: 1, inJsonListCases: 1, inProcessTable: 1, inCardOrderFixture: 1 });
   });
 
   it('allows the IPC contract and other test helpers, and leaves other files alone', async () => {
@@ -34,7 +37,7 @@ describe('an expected-results fixture never imports the code it checks', () => {
   });
 
   it('the expected-results fixtures in the tree follow the rule', async () => {
-    const results = await eslint.lintFiles([FIXTURE, 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts', 'tests/helpers/jsonListCases.ts']);
+    const results = await eslint.lintFiles([FIXTURE, 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts', 'tests/helpers/jsonListCases.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts']);
     const offenders = results.flatMap((r) =>
       r.messages.filter((m) => INDEPENDENT.test(m.message)).map((m) => `${r.filePath.slice(root.length + 1)}:${m.line}`),
     );

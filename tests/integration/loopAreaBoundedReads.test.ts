@@ -82,7 +82,7 @@ const readers: Reader[] = [
   },
   {
     name: 'the pickup record',
-    write: () => writeAppLoopBootstrap(repo, { pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' }),
+    write: () => writeAppLoopBootstrap(repo, { kind: 'opened', pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' }),
     read: () => readPickupRecord(repo).kind,
     refused: 'invalid',
   },
@@ -124,7 +124,7 @@ const readers: Reader[] = [
   },
   {
     name: 'the run pickup',
-    write: () => trustedPickups().set(repo, { pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' }),
+    write: () => trustedPickups().set(repo, { kind: 'opened', pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' }),
     read: () => trustedPickups().get(repo),
     refused: undefined,
   },

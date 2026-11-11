@@ -7,6 +7,7 @@ import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { createFlowManager } from '../../src/main/flow';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A2 (#133) §18.7.3 AC9 — a begun run resolves its RECORDED source, never the live pointer: it never silently
@@ -33,7 +34,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
     seedEntry(wt, 'flow-y', 'flow-y', 'y-step');
     writeActiveFlow(wt, 'flow-x');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
 
     const fresh = resolve(wt); // never-started → binds flow-x
     expect(runName(fresh.load)).toBe('flow-x');
@@ -49,7 +50,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] }); // a fallback exists to swap TO
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step', 'x-next');
     writeActiveFlow(wt, 'flow-x');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
@@ -65,7 +66,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const globalDir = fx.makeWorktree('a2-begun-fallback-global');
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
@@ -80,7 +81,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
     seedEntry(globalDir, 'flow-g', 'flow-g', 'g-step', 'g-next');
     writeActiveFlow(wt, 'flow-g');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     const started = mgr.start(wt);
@@ -89,7 +90,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     expect(started.steps).toEqual(['g-step', 'g-next']);
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'flow-g' });
 
-    const relaunchedResolve = createRunResolver(globalDir);
+    const relaunchedResolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const relaunched = createFlowManager({ globalDir, loadDefinition: (repoKey) => relaunchedResolve(repoKey) });
     expect(relaunched.state(wt).steps).toEqual(['g-step', 'g-next']);
     expect(relaunched.state(wt).status).toBe('in_progress');
@@ -101,7 +102,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
     writeActiveFlow(wt, 'missing-flow');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     const view = mgr.start(wt);
@@ -116,7 +117,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const globalDir = fx.makeWorktree('a2-bound-global-global');
     seedEntry(globalDir, 'flow-g', 'global-flow-g', 'g-step');
     writeActiveFlow(wt, 'flow-g');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const fresh = resolve(wt);
     expect(fresh.binding).toEqual({ source: 'catalog', tier: 'global', id: 'flow-g' });
     recordDisposition(wt, fresh.binding ?? { source: 'non-catalog' });
@@ -138,7 +139,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     symlinkSync(secret, join(flowCatalogDir(wt), 'b', FLOW_DEF_FILE));
     writeActiveFlow(wt, 'a');
 
-    const resolved = createRunResolver(globalDir)(wt);
+    const resolved = createRunResolver(globalDir, repoOnlyDefTiers())(wt);
 
     expect(JSON.stringify(resolved)).not.toContain('SECRET-OUTSIDE-JAIL');
     expect(resolved.binding).not.toEqual(expect.objectContaining({ source: 'catalog' }));
@@ -150,7 +151,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] }); // a fallback exists to swap TO
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
     writeActiveFlow(wt, 'flow-x');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
 
     recordDisposition(wt, resolve(wt).binding ?? { source: 'non-catalog' }); // begin bound to flow-x
     rmSync(join(flowCatalogDir(wt), 'flow-x'), { recursive: true, force: true }); // the source is gone
@@ -165,7 +166,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const globalDir = fx.makeWorktree('a2-swap-local-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['local-step'] }); // no pointer set → leg 2 (local) wins
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
 
     const fresh = resolve(wt); // never-started → leg 2 local, binds non-catalog
     expect(runName(fresh.load)).toBe('local-only');
@@ -181,7 +182,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const globalDir = fx.makeWorktree('a2-begun-no-marker-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
     fx.writeFlowState(wt, { step: 'build', status: 'in_progress' });
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
 
     expect(resolve(wt).load.ok).toBe(false);
   });
@@ -193,7 +194,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
     fx.writeFlowState(wt, { step: 'build', status: 'in_progress' }); // started via the display status
     writeFileSync(runDispositionFile(wt), 'source: totally-bogus\n'); // marker PRESENT, its binding unreadable
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
 
     expect(resolve(wt).load.ok).toBe(false);
   });

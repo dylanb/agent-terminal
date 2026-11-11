@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { load } from 'js-yaml';
+import { load, YAMLException } from 'js-yaml';
 import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
@@ -14,9 +14,11 @@ import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
-import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
+import { seedSharedExampleConfig, seedExampleReviewers } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import type { ReviewerSession } from './reviewerSession';
+import { FAKE_SPAWN_ARM, fakeSpawnShell } from './fakeProcesses';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -35,9 +37,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
   const logFile = join(binDir, 'calls.log');
   // Resolve REAL git once from the test process (whose PATH lacks binDir, so this is never the shim) rather
   // than hard-coding a path — keeps the shim-escape without coupling to the container base image's git location.
-  const realGit = opts.realCommitOps
-    ? execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-    : '';
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const fakeGit =
     '#!/usr/bin/env bash\n' +
     HOLD_WAIT_FN +
@@ -46,6 +46,10 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // With FAKE_GIT_HOLD_REV unset, the rev is the hold file's first line, for a rev known only mid-run.
     'hold_rev="$FAKE_GIT_HOLD_REV"; if [ -z "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -s "$FAKE_GIT_HOLD" ]; then hold_rev=$(head -n 1 "$FAKE_GIT_HOLD"); fi\n' +
     'if [ -n "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -e "$FAKE_GIT_HOLD" ]; then for a in "$@"; do case "$a" in *"$hold_rev"*) hold_wait "$FAKE_GIT_HOLD" "git $*" || exit 1; break;; esac; done; fi\n' +
+    // The setup check's ignore question gets real git's verdict over its whole argv (`-C`, the hardening `-c`
+    // pairs), never this shim's catch-all exit 0 ("ignored"). Found past every global option, value-taking or not.
+    'argv=("$@"); i=0; while [ "$i" -lt "${#argv[@]}" ]; do case "${argv[$i]}" in -C|-c|--git-dir|--work-tree|--namespace|--config-env) i=$((i + 2));; -*) i=$((i + 1));; *) break;; esac; done\n' +
+    `if [ "\${argv[$i]:-}" = "check-ignore" ]; then exec ${shellQuote(realGit)} "$@"; fi\n` +
     // Skip ALL leading git GLOBAL options so `$1` is the subcommand real git would dispatch: the bootstrap
     // port's throwaway `--git-dir <tmp>`, the neutralizing `-c <k=v>` pairs, and `--no-replace-objects` (the §28
     // reads' tamper-evidence flag — workingTreeTestPaths/changedTestPaths/baselineCapabilities send it ahead of
@@ -130,7 +134,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","baseRefName":"main","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
     // The open PR a branch already has, answered only to a `--head` lookup and only when the knob is set, so a pickup's
     // own conflict probe (run without it) still sees a free branch.
     'if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ -n "$FAKE_GH_BRANCH_PR" ] && [[ " $* " = *" --head "* ]]; then printf \'[{"number":%s,"url":"https://github.com/fake/repo/pull/%s","isCrossRepository":false}]\\n\' "$FAKE_GH_BRANCH_PR" "$FAKE_GH_BRANCH_PR"; exit 0; fi\n' +
@@ -154,10 +158,11 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
     // sub-ticket's label set is independently assertable.
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; echo "$value" >> "$FAKE_GHGIT_LOG.issue-label.$3"; exit 0; fi\n' +
-    // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
+    // As gh does, `pr create --body-file -` reads the whole body before it answers, so the app's write never meets
+    // a closed pipe. The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale.
-    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then case " $* " in *" --body-file - "*) cat > /dev/null;; esac; [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo "[]"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.pr-label"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then echo "$3" > "$FAKE_GHGIT_LOG.pr-ready"; exit 0; fi\n' +
@@ -408,13 +413,18 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   ];
 }
 
+/** The line a seeded fake agent prints once it is running. The shell marks the command running before the agent
+ *  starts, so a test that sees this line can press Start without the engine finding a bare shell at the prompt. */
+export const FAKE_AGENT_READY = 'fake-agent: ready';
+const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
+
 // A scriptable §27 fake-agent (§27.15 test seam), one per run and scripted per step: each step's arms match only
 // that step's `work-`, `review-` and `consolidate-` turn keys. On the app WORK prompt it produces the §27
 // completion artifact and/or done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained
 // REVIEW-AND-FIX prompt it writes the round report + the review done-file. It records the boundary commands and
 // bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
-export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>): void {
+export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>, reviewers?: ReviewerSession): void {
   const scripts = Object.entries(steps);
   // A step id that prefixes another (`red`, `red-2`) must not capture its turns, so longer ids match first.
   const ordered = [...scripts].sort(([a], [b]) => b.length - a.length);
@@ -431,10 +441,14 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     : '';
   const script =
     '#!/usr/bin/env bash\n' +
+    (reviewers ? `${reviewers.startupShell}\n` : '') +
+    READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
+    fakeSpawnShell(binDir) +
     'while IFS= read -r line; do\n' +
     logInjected +
+    (reviewers ? `${reviewers.observeLineShell}\n` : '') +
     '  [ -z "$line" ] && continue\n' +
     promptedArt +
     '  case "$line" in\n' +
@@ -442,6 +456,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     repairArm +
     '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${FAKE_SPAWN_ARM}\n` +
     ordered.flatMap(([id, s]) => stepArms(id, s)).join('\n') +
     '\n  esac\n' +
     'done\n';
@@ -454,10 +469,20 @@ export function seedFakeAgentV2(binDir: string, opts: StepScript & { stepId: str
   seedFakeAgentSteps(binDir, { [stepId]: step });
 }
 
+// Shell for one scripted turn of an adopted-PR run, given through `StepScript.extraShell`.
+/** Commits `contents` at `path` on the checked-out branch: one fix commit. */
+export const agentCommitsFixSh = (path: string, contents: string, message: string): string =>
+  `mkdir -p "$(dirname ${shellQuote(path)})"; printf %s '${b64(contents)}' | base64 -d > ${shellQuote(path)}; ` +
+  `git add -- ${shellQuote(path)}; git commit -q -m ${shellQuote(message)}`;
+/** Appends the checked-out branch to `.agent-terminal/branches-seen`, one line per turn. */
+export const AGENT_LOGS_BRANCH_SH = 'mkdir -p .agent-terminal; git rev-parse --abbrev-ref HEAD >> .agent-terminal/branches-seen';
+/** Checks out `branch`, creating or resetting it at the current commit, so the next turn starts on it. */
+export const agentSwitchesBranchSh = (branch: string): string => `git checkout -q -B ${shellQuote(branch)}`;
+
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {
   const file = catalogEntryDefFile(home, id);
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, yamlText);
+  writeExampleFlow(file, yamlText);
 }
 
 export function seedCommitGateConfig(prefix: string): string {
@@ -520,6 +545,7 @@ export function seedV3GoalAgent(binDir: string, name: string, goal: Record<strin
   const keepPrompt = 'k=$(ls .agent-terminal | grep -c "^goal-prompt\\.$step\\."); cp "$p" ".agent-terminal/goal-prompt.$step.$((k + 1)).md"';
   const script =
     '#!/usr/bin/env bash\n' +
+    READY_LINE +
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
@@ -580,4 +606,19 @@ export function v3ImplGoals(opts: { before?: Record<string, string>; blocked?: R
       return [step, opts.checkpointFirstLeg?.includes(step) ? `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${run}; fi` : run];
     }),
   );
+}
+
+export function writeExampleFlow(file: string, yamlText: string, config = exampleConfigDir): void {
+  writeFileSync(file, yamlText);
+  let flow: { name: string; steps?: { kind?: string; loop?: string }[] };
+  try {
+    flow = load(yamlText) as typeof flow;
+  } catch (error) {
+    if (error instanceof YAMLException) return;
+    throw error;
+  }
+  if (typeof flow?.name === 'string' && Array.isArray(flow.steps)) {
+    const loops = flow.steps.flatMap((step) => step?.kind === 'loop' && typeof step.loop === 'string' ? [step.loop] : []);
+    seedExampleReviewers(config, flow.name, loops);
+  }
 }

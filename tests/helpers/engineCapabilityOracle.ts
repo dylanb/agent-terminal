@@ -210,7 +210,7 @@ export const LOOP_NAMESPACE_RUNS_ENGINE: Readonly<Record<'app' | 'legacy', boole
 export const ACTED_INPUT_TYPES = ['github-ticket', 'pr'] as const;
 export const ACTED_GATE_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish', 'back-to-red'] as const;
 export const ACTED_SIDE_EFFECT_KINDS = ['gh', 'commit', 'promote'] as const;
-export const ACTED_GH_ACTIONS = ['mark-ready', 'update-issue-body', 'publish-pr-body'] as const;
+export const ACTED_GH_ACTIONS = ['mark-ready', 'update-issue-body', 'publish-pr-body', 'publish-pr-review'] as const;
 
 export type OracleActedInputType = (typeof ACTED_INPUT_TYPES)[number];
 export type OracleActedGateOption = (typeof ACTED_GATE_OPTIONS)[number];

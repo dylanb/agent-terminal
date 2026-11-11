@@ -79,7 +79,7 @@ let configRoot: string;
 let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
-const templateRel = path.join('todo-templates', 'ticket-grooming.md');
+const templateRel = path.join('todo-templates', 'polish.md');
 const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
 const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';

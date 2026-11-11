@@ -15,6 +15,7 @@ import { heldRunOf } from '../../src/main/runHoldRead';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A3 (#134) §18.7.3 / §18.7.4 AC12 / AC13 — recovering a held run onto a flow that lacks its current step ends the
@@ -43,7 +44,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     const wt = fx.makeWorktree('a3-nomatch-wt');
     if (opts.local !== false) fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l1', 'l2'] });
     writeActiveFlow(wt, 'prior-flow');
-    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home)(repoKey) });
+    const manager = () => createFlowManager({ globalDir: home, loadDefinition: (repoKey) => createRunResolver(home, repoOnlyDefTiers())(repoKey) });
     const real = productionRecoveryDeps(home);
     const recovery = createHeldRunRecovery({
       lock: createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }),

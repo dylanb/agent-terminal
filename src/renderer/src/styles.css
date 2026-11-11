@@ -63,6 +63,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar:has(.sb-alert-btn) { background:color-mix(in srgb, var(--attn) 10%, var(--card));
   border-bottom-color:color-mix(in srgb, var(--attn) 38%, var(--hair)); }
 
+.status-bar .sb-body { display:contents; }
+.status-bar .sb-setup-slot { flex:none; display:flex; }
+.status-bar .sb-setup { min-height:var(--sb-line); padding:0 10px; border-radius:999px; font:inherit; font-weight:600;
+  border:1px solid var(--attn); background:transparent; color:var(--text); cursor:pointer; }
+.status-bar .sb-setup:hover, .status-bar .sb-setup:focus-visible { background:color-mix(in srgb, var(--attn) 12%, transparent); }
+.status-bar .sb-setup[hidden] { display:none; }
+
 /* WCAG 1.4.4 / 1.4.10 / 2.4.11 */
 .status-bar .sb-title { flex:0 10000 auto; min-width:7ch; overflow:hidden; margin-right:auto; }
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -242,7 +249,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flow.vert .stn { padding:9px 0; }
 .flow.vert .seg { width:2px; height:18px; margin:0 0 0 4px; }
 /* §24.2.2 S5 — live derived status (n/m done · activity); compact, muted (no mockup counterpart). */
-.flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); text-transform:lowercase; }
+.flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); }
 .flowstrip .flow-control { margin-top:8px; }
 /* Undo a manual advance (§24.2.2) — secondary to Restart: same outline pill, muted label. */
 .flowstrip .flow-undo { margin-top:8px; color:var(--dim); }
@@ -488,8 +495,8 @@ button:hover { border-color:var(--dim); }
 .flow-modal { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:60; }
 /* The consent step's manifest is unbounded — it enumerates the whole bundle — so this dialog can outgrow
    any viewport (WCAG 2.1.1, 2.4.3, 1.4.10). `safe`: CSS Box Alignment L3 §4.4. */
-.flow-modal { overflow-y:auto; align-items:safe center; }
-.flow-modal .card { width:440px; max-width:92vw; max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
+.flow-modal { overflow-y:auto; align-items:safe center; justify-content:safe center; }
+.flow-modal .card { width:440px; max-width:calc(92vw - 46px); max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
 /* The shell's body slot (UI §5): a card marks the chain that should absorb the card's leftover column height
    `data-modal-grow`, and the one box within it that should scroll `data-modal-scroll`. The bound is the
    card's remaining column height, never a `vh` cap — a viewport-relative bound cannot know what the column
@@ -530,7 +537,8 @@ button:hover { border-color:var(--dim); }
 .flow-modal .field input { width:100%; box-sizing:border-box; font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:7px; padding:9px 11px; }
 .flow-modal .field input:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
 .flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
-.flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
+.flow-modal .mfoot { display:flex; flex-wrap:wrap; justify-content:safe flex-end; gap:9px; margin-top:20px; }
+.flow-modal .mfoot .pill { flex:0 1 auto; max-width:100%; height:auto; min-height:34px; white-space:normal; text-align:center; }
 
 /* §27.9/AC4 — the request-changes feedback composer body: a free-text area, a curatable review-todo
    checklist, and the delivery-mode radios, all styled to the modal's own field system so it reads as one
@@ -598,6 +606,13 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-pane-list { display:grid; gap:var(--r); align-items:start; grid-template-columns:repeat(auto-fit, minmax(min(18rem, calc((100% - var(--r)) / 2)), 1fr)); }
 .controller-panes[data-layout="one-column"] .controller-pane-list { grid-template-columns:minmax(0, 1fr); }
 .controller-pane-list > p { margin:0; }
+.controller-group-heading { grid-column:1 / -1; margin:var(--r) 0 0; font-size:13px; font-weight:600; color:var(--text); }
+.controller-group-heading:first-child { margin-top:0; }
+.sort-mode-control { display:inline-flex; flex-wrap:wrap; gap:var(--r); }
+.sort-mode-control > [role="radio"] { display:inline-flex; align-items:center; gap:var(--r); background:var(--card); color:var(--text); border-color:var(--signal); }
+.sort-mode-control > [role="radio"][aria-checked="true"] { background:var(--signal-text); color:var(--card); border-color:var(--signal-text); }
+.sort-mode-control > [role="radio"][aria-checked="true"] .spin { color:var(--card); }
+.controller-sort-sentence { flex-basis:100%; margin:0; font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
 .controller-panes [data-status="error"] { --card-accent:var(--status-error); --card-text:var(--status-error-text); }
 .controller-panes [data-status="needs-human"] { --card-accent:var(--status-needs-human); --card-text:var(--status-needs-human-text); }
 .controller-panes [data-status="working"] { --card-accent:var(--status-working); --card-text:var(--status-working-text); }
@@ -608,10 +623,12 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-card.is-disconnected { border:1px dashed var(--status-error-border); }
 .controller-card-header { display:flex; gap:var(--r); min-width:0; }
 .controller-card-accent { flex:none; width:4px; border-radius:2px; background-color:var(--card-accent); }
+.controller-card-bring { flex:none; align-self:start; display:grid; place-items:center; padding:4px; line-height:0; }
+.controller-card-bring svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .controller-card-heading { flex:1; min-width:0; margin:0; overflow-wrap:anywhere; font-size:14px; font-weight:600; }
 .controller-card-toggle { display:block; width:100%; min-width:0; padding:0; border:0; border-radius:2px; background:none; color:inherit; font:inherit; text-align:left; }
 .controller-card-label { display:block; margin-top:2px; font-size:12px; color:var(--card-text); }
-.controller-card-directory { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; font-size:11.5px; font-weight:400; color:var(--dim); }
+.controller-card-directory { display:block; margin:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; font-size:11.5px; font-weight:400; color:var(--dim); }
 .controller-card-body { display:grid; gap:4px; min-width:0; font-size:13px; }
 .controller-card-body > p { margin:0; min-width:0; overflow-wrap:anywhere; }
 .controller-card-status { font-weight:600; color:var(--card-text); }
@@ -648,11 +665,11 @@ body:has(.controller-panes) { overflow:visible; }
 
 .controller-status-announcement { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 
-.controller-notification { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:var(--r); min-width:0; padding:var(--r); border:1px solid var(--hair); border-radius:var(--r); background:var(--bg); color:var(--text); }
-.controller-notification p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
-.controller-notification time { grid-column:2; }
-.controller-notification-bell { width:1.25em; height:1.25em; fill:none; stroke:currentColor; stroke-width:2; color:var(--dim); }
+.controller-timeline { list-style:none; display:grid; gap:var(--r); min-width:0; margin:0; padding:0; }
+.controller-timeline-entry { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--r); min-width:0; padding:var(--r); border:1px solid var(--hair); border-radius:var(--r); background:var(--bg); color:var(--text); overflow-wrap:anywhere; white-space:pre-wrap; }
+.controller-timeline-notification { border-inline-start-width:3px; }
+.controller-timeline-text { flex:1 1 12em; min-width:0; }
+.controller-visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+.controller-notification-bell { align-self:center; width:1.25em; height:1.25em; fill:none; stroke:currentColor; stroke-width:2; color:var(--dim); }
 .controller-card[data-status="needs-human"] .controller-notification-bell { color:var(--status-needs-human-text); }
 .controller-card[data-status="error"] .controller-notification-bell { color:var(--status-error-text); }
-
-.controller-notification-history { min-width:0; padding-inline-start:var(--r); overflow-wrap:anywhere; white-space:pre-wrap; }

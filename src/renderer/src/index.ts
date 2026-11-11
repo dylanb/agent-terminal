@@ -8,6 +8,9 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
+import { createAdoptTicketChoice } from './adoptTicketChoice';
+import { createSetupCheckDialog } from './setupCheckDialog';
+import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -30,7 +33,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import type { GateDecisionOption } from '../../shared/ipc';
+import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
@@ -300,6 +303,12 @@ if (flowStripHost) {
     confirm: (key, run, pr, ticket) => window.flow.confirmRunPickup(key, run, pr, ticket),
     onFocusLost: landFocus,
   });
+  const adoptTicketChoiceHost = document.getElementById('adopt-ticket-choice-modal-host');
+  if (adoptTicketChoiceHost) createAdoptTicketChoice(adoptTicketChoiceHost, {
+    onOffer: (cb) => window.flow.onAdoptTicketChoice(cb),
+    answer: (repoKey, step, choiceId, answer) => window.flow.resolveAdoptTicket(repoKey, step, choiceId, answer),
+    onFocusLost: landFocus,
+  });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     onView: (...args) => {
@@ -348,6 +357,40 @@ if (flowStripHost) {
   });
   const seededKey = repo.repoKey();
   if (seededKey !== null) strip.onRepoChanged(seededKey);
+}
+
+const setupCheckHost = document.getElementById('setup-check-host');
+const setupNeededHost = document.getElementById('setup-needed');
+if (setupCheckHost && setupNeededHost) {
+  let agentState: HostedAgentState = 'absent';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
+  const agentStateIs = (state: HostedAgentState): void => {
+    if (state === agentState) return;
+    agentState = state;
+    for (const cb of [...agentListeners]) cb(state);
+  };
+  window.setup.onAgentStateChanged(agentStateIs);
+  window.setup.agentState().then(agentStateIs, (e: unknown) => {
+    console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  const setupCheck = createSetupCheckDialog({ button: setupNeededHost, dialog: setupCheckHost }, {
+    status: (repoKey) => window.setup.status(repoKey),
+    dismiss: (dismissal) => window.setup.dismiss(dismissal),
+    previewExamples: () => window.examples.preview(),
+    installExamples: (previewId, { replace, removeRetired }) => window.examples.apply(previewId, replace, removeRetired),
+    runSetupFlow: createSetupFlowRun({
+      setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
+      start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
+    }),
+    onSetupLoopFailed: (reason) => showError({ title: 'Could not run the setup loop', message: reason }),
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
+    onFocusLost: landFocus,
+  });
+  repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
 
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live

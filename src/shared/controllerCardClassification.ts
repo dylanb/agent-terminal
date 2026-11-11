@@ -1,14 +1,28 @@
-import type { ControllerWorkStatus } from './ipc';
+import type { ControllerWorkActivity, ControllerWorkStatus } from './ipc';
 import type { ControllerDirectoryCard } from './controllerCards';
+import { waitingLabel } from './waiting';
 
 export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' | 'idle';
 export type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
 
 export const ACTIVITY_WORDS: Readonly<Record<ControllerWorkStatus['activity'], string>> = {
-  active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable',
+  active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable', waiting: 'Waiting',
 };
 
-const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
+export const TIMELINE_ACTIVITY: Readonly<Record<ControllerWorkStatus['activity'], Exclude<ControllerWorkStatus['activity'], 'waiting'>>> = {
+  active: 'active', quiet: 'quiet', unavailable: 'unavailable', waiting: 'active',
+};
+
+const WORKING: Readonly<Record<ControllerWorkStatus['activity'], boolean>> = {
+  active: true, waiting: true, quiet: false, unavailable: false,
+};
+
+export function activityLine(work: ControllerWorkActivity): string {
+  const word = ACTIVITY_WORDS[work.activity];
+  return work.activity === 'waiting' ? `${word} · ${waitingLabel(work.waiting)}` : word;
+}
+
+export const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
 
 const SUMMARY_CLASS: Readonly<Record<SummaryLabel, CardStatusClass>> = {
   errors: 'error', 'need a human': 'needs-human', idle: 'idle', working: 'working',
@@ -27,7 +41,7 @@ export interface CardStatus {
 function conditionStatus(work: ControllerWorkStatus): [string, CardStatusClass] {
   const loopError = work.loopMessage?.kind === 'error';
   const text = [...(work.error ? ['Flow error'] : []), ...(loopError ? ['Loop error'] : []), ...(work.attention ? ['Needs a human'] : []), ACTIVITY_WORDS[work.activity]].join(' · ');
-  if (work.activity === 'active') return [text, 'working'];
+  if (WORKING[work.activity]) return [text, 'working'];
   return [text, work.error || loopError ? 'error' : 'needs-human'];
 }
 
@@ -41,7 +55,7 @@ function textAndClass(card: ControllerDirectoryCard): [string, CardStatusClass] 
   if (work.flow.availability !== 'known' || work.flow.assignment === 'unavailable') return ['Status unknown', 'idle'];
   if (work.flow.assignment === 'unassigned') return ['Unassigned', 'idle'];
   if (work.flow.assignment === 'completed') return ['Completed', 'completed'];
-  return [ACTIVITY_WORDS[work.activity], work.activity === 'active' ? 'working' : 'idle'];
+  return [activityLine(work), WORKING[work.activity] ? 'working' : 'idle'];
 }
 
 export function cardStatus(card: ControllerDirectoryCard): CardStatus {

@@ -34,3 +34,4 @@
 - [25. Flow audit record (per-run, append-only)](docs/spec/25-flow-audit-record-per-run-append-only.md)
 - [27. In-terminal loop engine — the live design](docs/spec/27-in-terminal-loop-engine-the-live-design.md)
 - [28. The full-TDD development process — a chain of §27 loops](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md)
+- [29. Repository setup check and the repo-setup flow](docs/spec/29-repository-setup-check.md)

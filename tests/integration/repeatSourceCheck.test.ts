@@ -126,7 +126,7 @@ describe('pressing Start on a list-form flow whose count source no resolved loop
     const steps = spec.steps.map((s): FlowStepSpec => (s.kind === 'loop' ? { ...s, gateAuthority: 'auto' } : s));
     writeFlow(flowLocations.repoCatalogEntry(repo, FLOW_ID), { ...spec, steps });
     writeActiveFlow(repo, FLOW_ID);
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, tiers);
     const flow = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
     const gate = createAutoGate({
       audit: () => {},

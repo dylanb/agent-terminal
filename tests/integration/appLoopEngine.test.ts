@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writePhaseResult } from '../helpers/phaseResults';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
@@ -384,6 +384,21 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(reason).toContain('fatal: not a git repository');
     expect(reason).toContain(PICKUP_BRANCH);
     expect(reason).not.toContain('detached');
+  });
+
+  it("an adopting run whose branch probe fails is held naming its fix branch, PR and primary ticket with its repository (#304 AC 5)", () => {
+    const fixBranch = 'agent-terminal/review-pr-41-1700000000000';
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => ({ kind: 'fix-branch', branch: fixBranch, pr: 41, primary: { repo: 'contributor/fork', number: 177 } }),
+      currentBranch: () => ({ ok: false, detail: 'fatal: not a git repository' }),
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    const reason = engine.liveErrorFor(h.repo)?.reason ?? '';
+    expect.soft(reason).toContain('fatal: not a git repository');
+    expect.soft(reason).toContain(fixBranch);
+    expect.soft(reason).toMatch(/#41(\D|$)/);
+    expect.soft(reason).toContain('contributor/fork#177');
   });
 
   it('an unreadable pickup record refuses the turn with its read error instead of lifting the guard', () => {
@@ -789,6 +804,28 @@ describe('§27 engine — stall (AC6)', () => {
     expect(state?.turnKey).not.toBe(TURN_KEY); // advanced to the review round
     expect(engine.liveErrorFor(h.repo)).toBeNull();
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a stall after injection tells the gate it is resumable, naming the done-file the turn was told to write', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    const event = loopRunEvent.mock.calls.at(-1)?.[3] as { resumableStall?: { doneRelPath: string } } | undefined;
+    const doneRelPath = event?.resumableStall?.doneRelPath;
+    expect(doneRelPath).toEqual(expect.any(String));
+    expect(h.injected.join('\n')).toContain(doneRelPath);
+  });
+
+  it('a turn error that is not a stall reaches the gate as a plain error', () => {
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { loopRunEvent });
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(loopRunEvent).toHaveBeenLastCalledWith(h.repo, STEP, TURN_KEY, 'error');
   });
 
   it('a done file after the operator accepted a stalled turn does not advance it a second time', () => {

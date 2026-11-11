@@ -1,11 +1,18 @@
 import { expect } from 'vitest';
 
-type Role = 'button' | 'checkbox' | 'textbox';
+type Role = 'button' | 'checkbox' | 'textbox' | 'dialog' | 'alertdialog' | 'alert' | 'listitem' | 'heading' | 'status' | 'group';
 
 const SELECTOR: Record<Role, string> = {
+  heading: 'h1:not([role]), h2:not([role]), h3:not([role]), h4:not([role]), h5:not([role]), h6:not([role]), [role="heading"]',
+  status: '[role="status"]',
+  group: '[role="group"], fieldset:not([role])',
   button: 'button:not([role]), [role="button"]',
   checkbox: 'input[type="checkbox"]:not([role]), [role="checkbox"]',
   textbox: 'textarea:not([role]), input:not([type]):not([role]), input[type="text"]:not([role]), [role="textbox"]',
+  dialog: 'dialog:not([role]), [role="dialog"]',
+  alertdialog: '[role="alertdialog"]',
+  alert: '[role="alert"]',
+  listitem: 'li:not([role]), [role="listitem"]',
 };
 
 function visibleText(node: Node): string {
@@ -25,12 +32,20 @@ export function accessibleName(el: Element): string {
       .join(' ')
       .trim();
   }
+  if (el instanceof HTMLInputElement && el.labels?.length) {
+    return [...el.labels].map(visibleText).join(' ').replace(/\s+/g, ' ').trim();
+  }
   return visibleText(el).replace(/\s+/g, ' ').trim();
+}
+
+/** Every element with `role`, whatever its name, in document order. */
+export function everyByRole(host: ParentNode, role: Role): HTMLElement[] {
+  return [...host.querySelectorAll<HTMLElement>(SELECTOR[role])];
 }
 
 /** All elements with `role` whose accessible name is `name`, in document order. */
 export function allByRole(host: ParentNode, role: Role, name: string): HTMLElement[] {
-  return [...host.querySelectorAll<HTMLElement>(SELECTOR[role])].filter((el) => accessibleName(el) === name);
+  return everyByRole(host, role).filter((el) => accessibleName(el) === name);
 }
 
 /** The one element with `role` whose accessible name is `name`; fails when there is not exactly one. */

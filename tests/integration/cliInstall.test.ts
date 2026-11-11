@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installCliShim, handleCliInstall, type RuntimeInfo } from '../../src/main/cliInstall';
 import { resolveShellPath } from '../../src/main/pty';
-import { CLI_COMMAND_NAME, type LaunchInvocation } from '../../src/main/cliShim';
+import { CLI_COMMAND_NAME, resolveLaunchInvocation, type LaunchInvocation } from '../../src/main/cliShim';
 import { SESSION_ID, type CliInstallResult } from '../../src/shared/ipc';
 import { writeForegroundRecorder } from '../helpers/shimRecorder';
 
@@ -16,7 +16,7 @@ import { writeForegroundRecorder } from '../helpers/shimRecorder';
 // "does the command resolve from a new shell", never by asserting an intermediate target shape.
 
 let root: string;
-const inv = (execPath: string): LaunchInvocation => ({ execPath, appArgs: [] });
+const inv = (execPath: string): LaunchInvocation => resolveLaunchInvocation(execPath, false, undefined, '/');
 const binOf = (home: string): string => join(home, '.agent-terminal', 'bin');
 const cmdOf = (home: string): string => join(binOf(home), CLI_COMMAND_NAME);
 const isExecutable = (p: string): boolean => (statSync(p).mode & 0o111) !== 0;
@@ -26,6 +26,7 @@ const runtime = (over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   shell: '/bin/sh',
   currentPath: '/usr/bin',
   invocation: inv('/app/x'),
+  uid: process.getuid?.() ?? -1,
   checkerScript: '/app/out/main/artifactCheck.js',
   ...over,
 });
@@ -219,6 +220,16 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(asOk(res).path).toBe(cmdOf(root)); // not the dir under a tamperable ancestor
     expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
     expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+  });
+
+  it.skipIf(isRoot)('falls back to the hardened dedicated dir when the preferred dir is owned by another user', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(join(root, '.local'), 0o755);
+    chmodSync(lbin, 0o755);
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin`, uid: statSync(lbin).uid + 1 }));
+    expect(asOk(res).path).toBe(cmdOf(root));
+    expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
   });
 
   it('installs into ~/bin when ~/.local/bin is absent but ~/bin is writable and on PATH', () => {
@@ -456,6 +467,198 @@ describe('installCliShim error path (no partial-success state)', () => {
     const res = installCliShim(runtime({ home, shell: '/bin/sh' }));
     expect(asErr(res).error).toBeTruthy();
   });
+});
+
+describe('installCliShim from an AppImage (#306)', () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(homedir(), '.agent-terminal-test-')));
+    chmodSync(base, 0o700);
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  const launchOut = (): string => join(root, 'launch-target.txt');
+
+  const standIn = (file: string, label: string): void => {
+    mkdirSync(join(file, '..'), { recursive: true });
+    writeFileSync(file, `#!/bin/sh\nprintf '%s' "${label}|$APP_LAUNCH_DIR" > "${launchOut()}.tmp" && mv "${launchOut()}.tmp" "${launchOut()}"\n`);
+    chmodSync(file, 0o755);
+  };
+
+  /** An AppImage stand-in at `appImagePath` and a differently-labelled mount binary; the invocation is
+   *  what the production resolver returns for the running app. */
+  const appImageInvocation = (appImagePath: string): LaunchInvocation => {
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(appImagePath, 'appimage');
+    standIn(mountBinary, 'mount');
+    return resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: appImagePath, mountDir });
+  };
+
+  const mkdir = (dir: string, mode: number): string => {
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, mode);
+    return dir;
+  };
+
+  const expectRefusal = (res: CliInstallResult, folders: string[]): void => {
+    expect.soft(res.ok).toBe(false);
+    const err = res.ok ? '' : res.error ?? '';
+    expect.soft(folders.some((f) => err.includes(f))).toBe(true);
+    expect(existsSync(cmdOf(root))).toBe(false);
+  };
+
+  it('installs from an owner-only folder chain, and the installed command launches the AppImage with the directory', async () => {
+    const apps = mkdir(join(base, 'apps'), 0o755);
+    const res = installCliShim(runtime({ invocation: appImageInvocation(join(apps, 'agent-terminal-1.4.0.AppImage')) }));
+    const cmd = asOk(res).path;
+    const target = join(root, 'proj');
+    mkdirSync(target);
+    execFileSync(cmd, [target], { cwd: root, timeout: 5000 });
+    const deadline = Date.now() + 5000;
+    while (!existsSync(launchOut()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    expect(existsSync(launchOut()) ? readFileSync(launchOut(), 'utf8') : null).toBe(`appimage|${target}`);
+  });
+
+  it.each([0o770, 0o775, 0o757])('refuses an AppImage folder with mode %o, naming the folder, writing no command', (mode) => {
+    const apps = mkdir(join(base, 'apps'), mode);
+    expectRefusal(installCliShim(runtime({ invocation: appImageInvocation(join(apps, 'agent-terminal.AppImage')) })), [apps]);
+  });
+
+  it('refuses when an ancestor of the AppImage folder is other-writable although the folder itself is owner-only', () => {
+    mkdir(join(base, 'outer'), 0o777);
+    const apps = mkdir(join(base, 'outer', 'apps'), 0o755);
+    expectRefusal(installCliShim(runtime({ invocation: appImageInvocation(join(apps, 'agent-terminal.AppImage')) })), [apps]);
+  });
+
+  it('refuses when an ancestor of the AppImage folder is group-writable', () => {
+    mkdir(join(base, 'outer'), 0o770);
+    const apps = mkdir(join(base, 'outer', 'inner', 'apps'), 0o755);
+    expectRefusal(installCliShim(runtime({ invocation: appImageInvocation(join(apps, 'agent-terminal.AppImage')) })), [apps]);
+  });
+
+  it('refuses an AppImage reached through a symlinked folder whose real parent is world-writable', () => {
+    const realParent = mkdir(join(base, 'shared'), 0o777);
+    const realApps = mkdir(join(realParent, 'real'), 0o755);
+    const link = join(base, 'link');
+    symlinkSync(realApps, link);
+    expectRefusal(installCliShim(runtime({ invocation: appImageInvocation(join(link, 'agent-terminal.AppImage')) })), [link, realApps]);
+  });
+
+  it.each([0o775, 0o757])(
+    'refuses an AppImage file with mode %o in an owner-only folder chain, naming the file and the chmod that fixes it, writing no command',
+    (mode) => {
+      const apps = mkdir(join(base, 'apps'), 0o755);
+      const appImage = join(apps, 'agent-terminal.AppImage');
+      const invocation = appImageInvocation(appImage);
+      chmodSync(appImage, mode);
+      const res = installCliShim(runtime({ invocation }));
+      expectRefusal(res, [appImage]);
+      expect(res.ok ? '' : res.error ?? '').toContain('chmod go-w');
+    },
+  );
+
+  it('refuses an AppImage path that is a symlink to a group-writable file, although every folder is owner-only', () => {
+    const owned = mkdir(join(base, 'owned'), 0o755);
+    const target = join(owned, 'real.AppImage');
+    const link = join(owned, 'agent-terminal.AppImage');
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(target, 'appimage');
+    standIn(mountBinary, 'mount');
+    chmodSync(target, 0o775);
+    symlinkSync(target, link);
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    expectRefusal(installCliShim(runtime({ invocation })), [link, target]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('refuses an AppImage whose folder is owned by another user, naming the folder, writing no command', () => {
+    const apps = mkdir(join(base, 'apps'), 0o755);
+    const invocation = appImageInvocation(join(apps, 'agent-terminal.AppImage'));
+    expectRefusal(installCliShim(runtime({ invocation, uid: statSync(apps).uid + 1 })), [apps]);
+  });
+
+  it('installs an AppImage file that only its owner can write', () => {
+    const apps = mkdir(join(base, 'apps'), 0o755);
+    const appImage = join(apps, 'agent-terminal.AppImage');
+    const invocation = appImageInvocation(appImage);
+    chmodSync(appImage, 0o700);
+    asOk(installCliShim(runtime({ invocation })));
+    expect(existsSync(cmdOf(root))).toBe(true);
+  });
+
+  it('refuses an AppImage path that is a symlink to a file in a world-writable folder, naming the link or its target', () => {
+    const owned = mkdir(join(base, 'owned'), 0o755);
+    const shared = mkdir(join(base, 'shared'), 0o777);
+    const target = join(shared, 'agent-terminal.AppImage');
+    const link = join(owned, 'agent-terminal.AppImage');
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(target, 'appimage');
+    standIn(mountBinary, 'mount');
+    symlinkSync(target, link);
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    expectRefusal(installCliShim(runtime({ invocation })), [link, target]);
+  });
+
+  it("refuses an AppImage path that is a symlink inside a world-writable folder, even when its target's folder is owner-only", () => {
+    const owned = mkdir(join(base, 'owned'), 0o755);
+    const shared = mkdir(join(base, 'shared'), 0o777);
+    const target = join(owned, 'agent-terminal.AppImage');
+    const link = join(shared, 'agent-terminal.AppImage');
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(target, 'appimage');
+    standIn(mountBinary, 'mount');
+    symlinkSync(target, link);
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    expectRefusal(installCliShim(runtime({ invocation })), [shared]);
+  });
+
+  it('refuses when the AppImage folder cannot be examined, naming the folder and the operating system reason, writing no command', () => {
+    const folder = join(base, 'missing');
+    const appImage = join(folder, 'agent-terminal.AppImage');
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(mountBinary, 'mount');
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage, mountDir });
+    const res = installCliShim(runtime({ invocation }));
+    expect.soft(res.ok).toBe(false);
+    const err = res.ok ? '' : res.error ?? '';
+    expect.soft(err).toContain(folder);
+    expect.soft(err).toMatch(/ENOENT|no such file or directory/);
+    expect.soft(err).not.toMatch(/can be written by other users/);
+    expect(existsSync(cmdOf(root))).toBe(false);
+  });
+
+  it('refuses when the AppImage file itself cannot be examined, naming the file and the operating system reason, writing no command', () => {
+    const apps = mkdir(join(base, 'apps'), 0o755);
+    const appImage = join(apps, 'agent-terminal.AppImage');
+    const mountDir = join(base, 'mnt', '.mount_agentX');
+    const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
+    standIn(mountBinary, 'mount');
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage, mountDir });
+    const res = installCliShim(runtime({ invocation }));
+    expect.soft(res.ok).toBe(false);
+    const err = res.ok ? '' : res.error ?? '';
+    const reasonAt = err.search(/ENOENT|no such file or directory/);
+    expect.soft(reasonAt).toBeGreaterThan(-1);
+    expect.soft(err.slice(0, reasonAt)).toContain(appImage);
+    expect(existsSync(cmdOf(root))).toBe(false);
+  });
+
+  it('leaves an already-installed command byte-for-byte unchanged when the AppImage install is refused', () => {
+    asOk(installCliShim(runtime({ shell: '/bin/sh', invocation: inv('/builds/one/app') })));
+    const before = readFileSync(cmdOf(root));
+    const apps = mkdir(join(base, 'apps'), 0o775);
+    const res = installCliShim(runtime({ shell: '/bin/sh', invocation: appImageInvocation(join(apps, 'agent-terminal.AppImage')) }));
+    expect.soft(res).toMatchObject({ ok: false, error: expect.stringContaining(apps) });
+    expect(readFileSync(cmdOf(root)).equals(before)).toBe(true);
+});
+
 });
 
 describe('installCliShim hands the installed command the build\'s checker runtime (§23.5)', () => {

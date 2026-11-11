@@ -9,6 +9,8 @@ import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { connectWebSocket, createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
+import { connectScriptedTerminal } from '../helpers/scriptedControllerTerminal';
+import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_WAITING_MINOR } from '../../src/shared/controllerProtocol';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
@@ -163,7 +165,7 @@ it('confirms registration with its own minor version', async () => {
   await once(peer, 'open');
   const ack = once(peer, 'message');
   peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: '/work', repositoryRoot: null }));
-  expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 2, minor: 2, type: 'registered' });
+  expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 2, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' });
 });
 
 it('asks a terminal to dismiss the loop message it shows, and never a replaced one or one sent to a terminal that predates loop messages', async () => {
@@ -188,5 +190,93 @@ it('advertises notification support to a notification-capable terminal without d
   await once(peer, 'open');
   const ack = once(peer, 'message');
   peer.send(JSON.stringify({ version: 2, minor: 2, type: 'register', launchDirectory: '/notification-peer', repositoryRoot: null }));
-  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: 2, type: 'registered' });
+  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' });
+});
+
+const identity = { title: 'Show live controller status', branch: 'feature/card-identity' } as const;
+
+it.each([
+  { minor: undefined, sent: false },
+  { minor: CONTROLLER_LOOP_MESSAGE_MINOR, sent: false },
+  { minor: CONTROLLER_IDENTITY_MINOR - 1, sent: false },
+  { minor: CONTROLLER_IDENTITY_MINOR, sent: true },
+])('sends the title and branch only to a controller whose minor supports them: minor $minor', async ({ minor, sent }) => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, ...(minor === undefined ? {} : { minor }), type: 'registered' });
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus(identity)); return () => {}; }));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  expect([controller.statuses[0].work.title, controller.statuses[0].work.branch]).toEqual(sent ? [identity.title, identity.branch] : [undefined, undefined]);
+  expect(controller.statuses[0].work).toMatchObject({ activity: 'active', flow: { availability: 'known' } });
+});
+
+it('keeps a null title and branch on the wire for a controller that supports them', async () => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, minor: CONTROLLER_IDENTITY_MINOR, type: 'registered' });
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus({ title: null, branch: null })); return () => {}; }));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  expect([controller.statuses[0].work.title, controller.statuses[0].work.branch]).toEqual([null, null]);
+});
+
+it('registers a terminal that predates title and branch and shows its work without them, beside one that reports them', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const current = await connectScriptedTerminal(root, { launchDirectory: '/work/current', repositoryRoot: null });
+  cleanups.push(() => current.close());
+  await current.sendStatus(workStatus(identity));
+  await vi.waitFor(() => expect(server.terminals().find(t => t.launchDirectory === '/work/current')?.work).toEqual(workStatus(identity)));
+  const older = await connectScriptedTerminal(root, { launchDirectory: '/work/older', repositoryRoot: null }, CONTROLLER_IDENTITY_MINOR - 1);
+  cleanups.push(() => older.close());
+  await older.sendStatus(workStatus({ activity: 'quiet' }));
+  await vi.waitFor(() => expect(server.terminals().find(t => t.launchDirectory === '/work/older')?.work).toEqual(workStatus({ activity: 'quiet' })));
+  const olderWork = server.terminals().find(t => t.launchDirectory === '/work/older')?.work;
+  expect([olderWork?.title, olderWork?.branch]).toEqual([undefined, undefined]);
+});
+
+it.each([CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_IDENTITY_MINOR - 1])('records the status changes of a terminal at minor %i in its timeline', async minor => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const older = await connectScriptedTerminal(root, { launchDirectory: '/work/older-timeline', repositoryRoot: null }, minor);
+  cleanups.push(() => older.close());
+  const terminal = () => server.terminals().find(t => t.launchDirectory === '/work/older-timeline');
+  await older.sendStatus(workStatus({ activity: 'active' }));
+  await vi.waitFor(() => expect(terminal()?.work?.activity).toBe('active'));
+  expect(terminal()?.timeline ?? []).toEqual([]);
+  await older.sendStatus(workStatus({ activity: 'quiet' }));
+  await vi.waitFor(() => expect(terminal()?.work?.activity).toBe('quiet'));
+  expect(terminal()?.timeline).toEqual([{ kind: 'status', text: expect.stringContaining('Idle'), receivedAt: expect.any(Number) }]);
+});
+
+const waiting = { program: 'node', others: 1 } as const;
+
+it.each([
+  { minor: undefined, shown: { activity: 'active' } },
+  { minor: CONTROLLER_WAITING_MINOR - 1, shown: { activity: 'active' } },
+  { minor: CONTROLLER_WAITING_MINOR, shown: { activity: 'waiting', waiting } },
+])('reports a Waiting terminal as Working with no label to a controller older than the Waiting minor, and as Waiting from it: minor $minor', async ({ minor, shown }) => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, ...(minor === undefined ? {} : { minor }), type: 'registered' });
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus({ activity: 'waiting', waiting })); return () => {}; }));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  const { activity, waiting: label } = controller.statuses[0].work;
+  expect({ activity, ...(label === undefined ? {} : { waiting: label }) }).toEqual(shown);
+});
+
+it('shows a Waiting terminal at the Waiting minor as Waiting, beside an older terminal it shows as before', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const current = await connectScriptedTerminal(root, { launchDirectory: '/work/waiting', repositoryRoot: null }, CONTROLLER_WAITING_MINOR);
+  cleanups.push(() => current.close());
+  const older = await connectScriptedTerminal(root, { launchDirectory: '/work/older-quiet', repositoryRoot: null }, CONTROLLER_WAITING_MINOR - 1);
+  cleanups.push(() => older.close());
+  await older.sendStatus(workStatus({ activity: 'quiet' }));
+  await current.sendStatus(workStatus({ activity: 'waiting', waiting }));
+  const work = (directory: string) => server.terminals().find(t => t.launchDirectory === directory)?.work;
+  await vi.waitFor(() => expect({ current: work('/work/waiting'), older: work('/work/older-quiet') })
+    .toEqual({ current: workStatus({ activity: 'waiting', waiting }), older: workStatus({ activity: 'quiet' }) }));
 });

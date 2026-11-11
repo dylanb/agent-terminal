@@ -7,7 +7,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
-import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, dismissLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, dismissLocator, headerActivationLocator } from '../helpers/controllerCards';
 import { connectedTerminals as connected } from './controllerSnapshot';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
@@ -74,7 +74,9 @@ test('conflict connections retain real PTYs, restore original windows and reduce
     const first = cardLocator(controller.page, directory).first();
     const header = cardHeaderLocator(first, directory);
     if (await header.getAttribute('aria-expanded') !== 'true') await header.click();
-    await bringForwardLocator(first).click();
+    await expect(headerActivationLocator(first), 'header icon on the duplicate card').toBeVisible();
+    await expect.soft(bringForwardLocator(first), 'one activation control on the card').toHaveCount(1);
+    await headerActivationLocator(first).click();
     for (const target of [a, b]) {
       await expect.soft.poll(() => target.app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
@@ -148,8 +150,9 @@ test('overlap hides a real pending gate without resolving it and restores curren
     await expect.soft(cardLocator(controller.page, repo)).toHaveCount(1);
     await expect.soft.poll(() => contents(controller.page, repo)).not.toMatch(/conflict-gate-flow|Human needed|stop for a human|Flow:|Step:/i);
     const first = cardLocator(controller.page, repo).first();
-    await expect.soft(bringForwardLocator(first)).toHaveText('Bring 3 terminals forward');
-    await bringForwardLocator(first).click();
+    await expect(headerActivationLocator(first), 'header icon on the duplicate card').toBeVisible();
+    await expect.soft(bringForwardLocator(first), 'one activation control on the card').toHaveCount(1);
+    await headerActivationLocator(first).click();
     await expect.soft.poll(() => Promise.all([a, b, c].map(target => target.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())))).toEqual([true, true, true]);
     expect.soft(readFileSync(stateFile, 'utf8')).toBe(before);
     expect.soft((await a.page.evaluate(directory => window.flow.state(directory), repo)).loop?.humanNeeded).toBe(true);
@@ -190,7 +193,8 @@ test('an unconfirmed captured peer does not prevent a real window restoring or a
     const original = await h.launch(terminalTarget, directory);
     await expect.poll(() => connected(controller.page, directory).then(items => items.length)).toBe(2);
     await original.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
-    await bringForwardLocator(cardLocator(controller.page, directory).first()).click();
+    await expect(headerActivationLocator(cardLocator(controller.page, directory).first()), 'header icon on the duplicate card').toBeVisible();
+    await headerActivationLocator(cardLocator(controller.page, directory).first()).click();
     await expect.poll(() => requested).toBe(true);
     let replacementActivations = 0;
     stopReplacement = registerControllerTerminal(h.fixture.home, { launchDirectory: directory, repositoryRoot: null }, () => { replacementActivations++; return 'activated'; });

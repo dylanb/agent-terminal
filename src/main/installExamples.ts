@@ -40,6 +40,9 @@ import {
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 import { FLOW_DEF_FILE, TODO_TEMPLATES_SUBDIR } from './flowHome';
 import { isOneOf } from '../shared/oneOf';
+import { readBoundedBytesNoFollow } from './boundedRead';
+
+const MAX_INSTALL_TARGET_BYTES = 16 * 1024 * 1024;
 
 /** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
  *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
@@ -353,11 +356,13 @@ const alwaysReplaces = (overwrite: InstallDestination['overwrite']): boolean => 
 /** `null` only when absent. An existing-but-unreadable target (EACCES, EISDIR, …) must not be silently
  *  overwritten, so it throws — naming the file, which Node's own message for these does not. */
 function readTarget(file: { rel: DestRelativePath; real: string }): Buffer | null {
-  try {
-    return readFileSync(file.real);
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return null;
-    throw new Error(`cannot read the existing ${file.rel}: ${errMsg(e)}`);
+  const read = readBoundedBytesNoFollow(file.real, MAX_INSTALL_TARGET_BYTES);
+  if (read.ok) return read.bytes;
+  switch (read.cause) {
+    case 'absent': return null;
+    case 'over-cap': throw new Error(`cannot read the existing ${file.rel}: larger than ${MAX_INSTALL_TARGET_BYTES} bytes`);
+    case 'unreadable': throw new Error(`cannot read the existing ${file.rel}: ${read.error === undefined ? 'not a readable regular file' : errMsg(read.error)}`);
+    default: throw new Error(`Unexpected read failure: ${read.cause satisfies never}`);
   }
 }
 
@@ -481,6 +486,12 @@ interface InstallAuthorization {
   retired: RetiredExample[];
 }
 
+/** What installing would do to one planned file, the one verdict the consent preview and the setup warning share. */
+export function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | 'identical' {
+  if (file.targetHash === null) return 'create';
+  return file.targetHash === file.sourceHash ? 'identical' : 'replace';
+}
+
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
   destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
 
@@ -569,6 +580,7 @@ function verifyAuthorization(
 
 interface PreparedInstallExamples {
   destinations: InstallDestinationPreview[];
+  notInstalled: InstallDestinationNotInstalled[];
   alwaysReplaced: InstallDestinationFiles[];
   retired: RetiredExample[];
   retiredFallback: string | null;
@@ -579,7 +591,7 @@ type InstallExamplesPreparation =
   | { ok: true; prepared: PreparedInstallExamples }
   | { ok: false; error: string };
 
-function prepareInstallExamples(
+export function prepareInstallExamples(
   destinations: InstallDestination[],
 ): InstallExamplesPreparation {
   let resolution: Resolution;
@@ -598,12 +610,7 @@ function prepareInstallExamples(
     const conflicts = new Set<InstallDestinationId>();
     const previews = resolution.destinations.filter((d) => !alwaysReplaces(d.overwrite)).map((destination) => {
       const differing = files
-        .filter(
-          (file) =>
-            file.destination === destination.id &&
-            file.targetHash !== null &&
-            file.targetHash !== file.sourceHash,
-        )
+        .filter((file) => file.destination === destination.id && installFileVerdict(file) === 'replace')
         .map((file) => file.rel);
       if (differing.length === 0) {
         return {
@@ -628,6 +635,7 @@ function prepareInstallExamples(
       ok: true,
       prepared: {
         destinations: previews,
+        notInstalled: resolution.notInstalled,
         alwaysReplaced: resolution.destinations
           .filter((d) => alwaysReplaces(d.overwrite) && d.files.length > 0)
           .map((d) => ({ destination: d.id, files: d.files.map((f) => f.rel) })),
@@ -661,11 +669,29 @@ export function previewInstallExamples(
   };
 }
 
+export type ExamplesCurrency = { ok: true; current: boolean } | { ok: false; error: string };
+
+/** Whether installing the bundled examples would change anything: create or replace a file, or offer to remove a
+ *  retired example. */
+export function inspectExamplesCurrency(destinations: InstallDestination[]): ExamplesCurrency {
+  const fail = (error: unknown): ExamplesCurrency => ({ ok: false, error: `Could not check the installed examples: ${errMsg(error)}` });
+  try {
+    const resolution = resolveAll(destinations);
+    if (!resolution.ok) return resolution;
+    const files = captureInstallSnapshot(resolution.destinations);
+    const current =
+      files.every((file) => installFileVerdict(file) === 'identical') && retiredOf(resolution.destinations).length === 0;
+    return { ok: true, current };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 export interface ApplyOptions {
   removeRetired: boolean;
 }
 
-function applyInstallExamplesWithAuthorization(
+export function applyInstallExamplesWithAuthorization(
   destinations: InstallDestination[],
   replace: InstallDestinationId[],
   options: ApplyOptions,

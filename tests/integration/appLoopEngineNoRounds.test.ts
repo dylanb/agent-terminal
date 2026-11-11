@@ -5,7 +5,7 @@ import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
-import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { CAPABILITIES_CHECK_COMMAND, createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
 // §27.3 — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
 // and a goal work turn is submitted as one `/goal` command whose condition names the full work prompt, written
@@ -112,12 +112,30 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
 
     const prompt = promptFile(goalCommand());
     expect(prompt).toContain('Produce the plan.');
-    expect(prompt).toContain('subagent_type: plan-loop--review-plan-principal');
-    expect(prompt).toContain('subagent_type: plan-loop--review-plan-security');
+    expect(prompt).toMatch(/- review-plan-principal — subagent_type: [a-z0-9_-]+/);
+    expect(prompt).toMatch(/- review-plan-security — subagent_type: [a-z0-9_-]+/);
     const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
     expect(handoff).toContain('gh issue view 204 --comments');
     expect(handoff).toContain('.agent-terminal/loop/artifacts/plan.md');
     expect(prompt).toContain(`turn-done:${TURN_KEY}`);
+  });
+
+  it("hands an adopting run's reviewers its pull request's tickets, each read through gh in its own repository, not the primary's number as an issue (#304 AC 6)", () => {
+    const engine = makeEngine();
+    h.workRefsResult = {
+      ticket: 177,
+      pr: 41,
+      adoption: { pr: 41, host: 'github.com', tickets: [{ repo: 'owner/repo', number: 176 }, { repo: 'contributor/fork', number: 177 }], baseOid: 'b'.repeat(40), fixBranch: 'agent-terminal/review-fixture-branch' },
+    };
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = promptFile(goalCommand());
+    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END)).split('\n');
+    const readsTicket = (repo: string, n: number): string[] => handoff.filter((l) => /\bgh\b/.test(l) && l.includes(`github.com/${repo}`) && new RegExp(`(^|\\D)${n}(\\D|$)`).test(l));
+    expect.soft(readsTicket('owner/repo', 176)).not.toEqual([]);
+    expect.soft(readsTicket('contributor/fork', 177)).not.toEqual([]);
+    expect.soft(handoff.filter((l) => l.includes('gh issue view 177 --comments'))).toEqual([]);
   });
 
   it('refuses the goal turn before submitting it when a reviewer sub-agent is not installed', () => {
@@ -180,5 +198,29 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     const prompt = goalPrompt();
     const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
     expect(handoff).toContain('This round covers impl-slice 2 of the plan only');
+  });
+});
+
+describe('a work turn whose def declares the capabilities self-check is handed its command (§29)', () => {
+  const selfCheckDef = (): LoopDefV2 => {
+    const base = noRoundsDef();
+    return { ...base, work: { ...base.work, selfCheck: 'loop-capabilities' } };
+  };
+
+  it('names the capabilities check command in the work prompt', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(selfCheckDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.') && p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(true);
+  });
+
+  it('names no capabilities check in the work prompt of a def that declares none', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(noRoundsDef());
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    expect(h.injected.some((p) => p.includes(CAPABILITIES_CHECK_COMMAND))).toBe(false);
   });
 });

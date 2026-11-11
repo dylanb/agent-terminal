@@ -1,32 +1,33 @@
-import { ACTIVITY_WORDS, cardStatus } from '../../shared/controllerCardClassification';
+import { activityLine, cardStatus } from '../../shared/controllerCardClassification';
 import { workConditions, type WorkCondition } from './controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
-import type { ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerClearTarget, ControllerWorkStatus } from '../../shared/ipc';
 import type { ControllerDirectoryCard } from '../../shared/controllerCards';
 import { createClampedReason, type ClampedReason } from './clampedReason';
-import { createPressGroup, onPress, type PressGroup } from './pressable';
+import { content, reconcileChildren, type Content } from './dom';
+import { createPressGroup, onPress } from './pressable';
 
 export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
-  onAction(): void | Promise<unknown>;
-  onClearHistory?(): void | Promise<unknown>;
-  onDismissLoopMessage(id: string): void | Promise<unknown>;
-  from?: CardState;
+  timeText: string;
+  held?: boolean;
+  onAction(card: ControllerDirectoryCard): void | Promise<unknown>;
+  onClearHistory?(target: ControllerClearTarget): void | Promise<unknown>;
+  onDismissLoopMessage(id: string, card: ControllerDirectoryCard): void | Promise<unknown>;
+  /** The operator pressed one of the card's own controls and the control accepted the press. */
+  onUse?(): void;
 }
 
-type Action = 'bring-forward' | 'dismiss' | 'dismiss-loop-message';
-type Focus = 'header' | 'history' | 'clear' | Action | { reason: string };
-const HANDOVER = Symbol('controller card handover');
-
-export interface CardState {
-  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; historyExpanded: boolean; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
-}
+type Action = 'bring-forward' | 'dismiss';
 
 export interface ControllerCard {
+  update(card: ControllerDirectoryCard): void;
   setExpandedByDefault(expanded: boolean): void;
-  state(): CardState;
-  focusTarget(): HTMLElement | undefined;
+  setTimeText(text: string): void;
+  setHeld(held: boolean): void;
+  contains(node: Node | null): boolean;
+  element(): HTMLElement;
   header(): HTMLElement;
   dispose(): void;
 }
@@ -37,134 +38,124 @@ const FLOW_TEXT = { loading: 'Flow loading', unavailable: 'Flow unavailable' } a
 
 let nextCardId = 0;
 
+function keyedPool<V>(release: (item: V) => void = () => {}) {
+  let shown = new Map<string, V[]>();
+  let next = new Map<string, V[]>();
+  return {
+    take(key: string, create: () => V): V {
+      const item = shown.get(key)?.shift() ?? create();
+      next.set(key, [...(next.get(key) ?? []), item]);
+      return item;
+    },
+    commit(): void {
+      for (const left of shown.values()) left.forEach(release);
+      [shown, next] = [next, new Map()];
+    },
+    values: () => [...shown.values()].flat(),
+  };
+}
+
 function finalSegment(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
 
 export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps): ControllerCard {
-  const { card: model } = deps;
+  let model = deps.card;
   const doc = host.ownerDocument;
-  const status = cardStatus(model);
-  const count = model.kind === 'disconnected' ? 0 : model.activationTargets.length;
-  const work = model.kind === 'single' ? model.work : undefined;
-  const duplicate = model.kind === 'conflict';
-  const statusText = duplicate ? `${status.text} · ${count} instances` : status.text;
-  const carried = deps.from?.[HANDOVER];
-  const actions = carried?.actions ?? createPressGroup();
-  const reasons: { text: string; reason: ClampedReason }[] = [];
+  const actions = createPressGroup();
+  const reasons = keyedPool<ClampedReason>(reason => reason.dispose());
   const fullReasons = new Set<string>();
+  const boxes = keyedPool<HTMLElement>();
+  const loopDismissals = keyedPool<HTMLButtonElement>();
+  const use = (): void => deps.onUse?.();
+  const used = (pressed: () => unknown) => (): unknown => {
+    use();
+    return pressed();
+  };
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
     const created = doc.createElement(tag);
     created.className = className;
     if (text !== undefined) created.textContent = text;
     return created;
   };
+  const space = () => content(doc.createTextNode(' '));
+  const icon = (path: string): SVGSVGElement => {
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    const drawn = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    drawn.setAttribute('d', path);
+    svg.append(drawn);
+    return svg;
+  };
 
   const card = element('article', 'controller-card');
-  card.dataset.status = status.statusClass;
-  if (model.kind === 'disconnected') card.classList.add('is-disconnected');
   const cardId = `controller-card-${nextCardId += 1}`;
   const headingId = `${cardId}-heading`;
-  card.setAttribute('aria-labelledby', headingId);
+  const toggleId = `${cardId}-toggle`;
+  const directoryId = `${cardId}-directory`;
+  card.setAttribute('aria-labelledby', `${headingId} ${directoryId}`);
 
   const header = element('header', 'controller-card-header');
   const accent = element('span', 'controller-card-accent');
   accent.dataset.testid = 'card-accent';
-  const heading = element('h2', 'controller-card-heading');
+  const heading = element('h3', 'controller-card-heading');
   heading.id = headingId;
-  const directory = element('span', 'controller-card-directory mono');
-  directory.title = model.launchDirectory;
-  const directoryText = element('bdi', '', model.launchDirectory);
+  const directory = element('p', 'controller-card-directory mono');
+  directory.id = directoryId;
+  const directoryText = element('bdi', '');
   directoryText.dir = 'ltr';
   directory.append(directoryText);
-  const statusLabel = element('span', 'controller-card-label', statusText);
+  const statusLabel = element('span', 'controller-card-label');
+  let statusText = '';
+  let timeText = deps.timeText;
+  let held = deps.held ?? false;
+  const showStatus = () => { statusLabel.textContent = `${statusText} · ${timeText}${held ? ' · position held' : ''}`; };
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
+  toggle.id = toggleId;
   toggle.setAttribute('aria-controls', `${cardId}-body`);
-  toggle.append(element('span', 'controller-card-name', finalSegment(model.repositoryRoot ?? model.launchDirectory)), ' ', directory);
+  toggle.setAttribute('aria-labelledby', `${toggleId} ${directoryId}`);
   heading.append(toggle);
-  header.append(accent, heading);
 
   const body = element('div', 'controller-card-body');
   body.id = `${cardId}-body`;
-  const statusRow = element('p', 'controller-card-status', statusText);
+  const statusRow = element('p', 'controller-card-status');
   statusRow.dataset.testid = 'card-status';
-  body.append(statusRow);
   card.append(header, ' ', body);
   host.append(card);
 
-  let loopMessageDismiss: HTMLButtonElement | undefined;
-  const actionKind: Action = model.kind === 'disconnected' ? 'dismiss' : 'bring-forward';
-  const action = (label: string, name: string, use: () => unknown) => {
-    const button = element('button', 'controller-card-action', label);
-    button.type = 'button';
-    button.setAttribute('aria-label', `${name} ${model.launchDirectory}`);
-    actions.bind(button, use, { key: name });
-    return button;
-  };
-
-  let actionButton: HTMLButtonElement;
-  if (actionKind === 'dismiss') {
-    actionButton = action('Dismiss', 'Dismiss disconnected terminal', deps.onAction);
-  } else {
-    if (duplicate) body.append(' ', element('p', 'controller-card-line', 'Bring the terminals forward and close extra instances so only one remains.'));
-    else if (work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
-    else if (work) appendWork(work);
-    const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
-    actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
-  }
-  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? [];
-  if (notifications[0]) {
-    const notification = notifications[0];
-    const box = element('section', 'controller-notification');
-    box.setAttribute('role', 'region');
-    box.setAttribute('aria-label', 'Received notification');
-    const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    bell.classList.add('controller-notification-bell');
-    bell.setAttribute('viewBox', '0 0 24 24');
-    bell.setAttribute('aria-hidden', 'true');
-    bell.setAttribute('focusable', 'false');
-    const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-    outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
-    bell.append(outline);
-    const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-    time.dateTime = new Date(notification.receivedAt).toISOString();
-    box.append(bell, ' ', element('p', 'controller-card-line', notification.message), ' ', time);
-    if (notification.count > 1) box.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
-    body.append(' ', box);
-  }
-  body.append(' ', actionButton);
-  let history: HTMLButtonElement | undefined;
-  let clear: HTMLButtonElement | undefined;
-  let historyExpanded = carried?.historyExpanded ?? false;
-  if (!duplicate) {
-    history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
-    history.type = 'button';
-    history.setAttribute('aria-expanded', String(historyExpanded));
-    const earlier = element('ol', 'controller-notification-history');
-    earlier.id = `${cardId}-history`;
-    earlier.hidden = !historyExpanded;
-    history.setAttribute('aria-controls', earlier.id);
-    for (const notification of notifications.slice(1)) {
-      const item = element('li', 'controller-card-line');
-      const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-      time.dateTime = new Date(notification.receivedAt).toISOString();
-      item.append(element('p', 'controller-card-line', notification.message), ' ', time);
-      if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
-      earlier.append(item);
+  const bringForward = element('button', 'controller-card-bring');
+  bringForward.type = 'button';
+  bringForward.append(icon('M7 17L17 7M9 7h8v8'));
+  actions.bind(bringForward, used(() => deps.onAction(model)));
+  const dismiss = element('button', 'controller-card-action', 'Dismiss');
+  dismiss.type = 'button';
+  actions.bind(dismiss, used(() => deps.onAction(model)));
+  const clear = element('button', 'controller-card-action', 'Clear history');
+  clear.type = 'button';
+  const clearTarget = (): ControllerClearTarget | undefined => {
+    switch (model.kind) {
+      case 'single':
+      case 'disconnected':
+        return model.clearHistoryTarget;
+      case 'conflict':
+        return undefined;
+      default:
+        return model satisfies never;
     }
-    clear = notifications.length && deps.onClearHistory
-      ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
-    if (clear) clear.hidden = !historyExpanded;
-    actions.bind(history, () => {
-      historyExpanded = !historyExpanded;
-      earlier.hidden = !historyExpanded;
-      if (clear) clear.hidden = earlier.hidden;
-      history!.setAttribute('aria-expanded', String(historyExpanded));
-    });
-    body.append(' ', history, ' ', earlier);
-    if (clear) body.append(' ', clear);
-  }
+  };
+  actions.bind(clear, used(() => {
+    const target = clearTarget();
+    return target && deps.onClearHistory?.(target);
+  }));
+
+  let wasDisconnected = model.kind === 'disconnected';
+  let chosenExpanded: boolean | undefined;
+  let expandedByDefault = deps.expandedByDefault;
+  let expanded = expandedByDefault;
+  const toToggle = () => toggle;
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {
     const line = element('p', 'controller-card-line controller-card-ticket');
@@ -180,80 +171,155 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     return line;
   }
 
-  function appendWork(work: ControllerWorkStatus): void {
+  function workLines(work: ControllerWorkStatus): HTMLElement[] {
     const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
-    body.append(' ', ticketLine(work), ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', ACTIVITY_WORDS[work.activity]));
-    for (const condition of workConditions(work)) appendCondition(condition);
+    return [ticketLine(work), element('p', 'controller-card-line', flow), element('p', 'controller-card-line', activityLine(work))];
   }
 
-  function appendCondition({ statusClass, title, reasons: texts, loopMessageId }: WorkCondition): void {
-    const box = element('section', `controller-condition controller-condition-${statusClass}`);
-    box.append(element('p', 'controller-condition-title', title), ' ');
-    body.append(' ', box);
+  function conditionBox({ statusClass, title, reasons: texts, loopMessageId }: WorkCondition): HTMLElement {
+    const key = `${statusClass}\u0000${title}`;
+    const box = boxes.take(key, () => {
+      const created = element('section', `controller-condition controller-condition-${statusClass}`);
+      body.append(created);
+      return created;
+    });
+    const children: (Node | Content)[] = [content(element('p', 'controller-condition-title', title)), space()];
     for (const text of texts) {
-      if (carried?.fullReasons.has(text)) fullReasons.add(text);
-      reasons.push({ text, reason: createClampedReason(box, {
+      children.push(reasons.take(`${key}\u0000${text}`, () => createClampedReason(box, {
         text,
         full: fullReasons.has(text),
         onToggle(full) {
           if (full) fullReasons.add(text);
           else fullReasons.delete(text);
+          use();
         },
-      }) });
+      })).element());
     }
     if (loopMessageId !== undefined) {
-      loopMessageDismiss = action('Dismiss', `Dismiss ${title.toLowerCase()}`, () => deps.onDismissLoopMessage(loopMessageId));
-      box.append(' ', loopMessageDismiss);
+      const button = loopDismissals.take(loopMessageId, () => {
+        const created = element('button', 'controller-card-action', 'Dismiss');
+        created.type = 'button';
+        actions.bind(created, used(() => deps.onDismissLoopMessage(loopMessageId, model)));
+        return created;
+      });
+      button.setAttribute('aria-label', `Dismiss ${title.toLowerCase()} ${model.launchDirectory}`);
+      children.push(space(), button);
     }
+    reconcileChildren(box, children, toToggle);
+    return box;
   }
 
-  let chosenExpanded = carried?.disconnected && model.kind !== 'disconnected' ? undefined : carried?.chosenExpanded;
-  let expanded = chosenExpanded ?? deps.expandedByDefault;
+  function timelineList(timeline: NonNullable<Extract<ControllerDirectoryCard, { kind: 'single' }>['timeline']>): HTMLElement {
+    const entries = element('ol', 'controller-timeline');
+    for (const entry of timeline) {
+      const item = element('li', `controller-timeline-entry controller-timeline-${entry.kind}`);
+      if (entry.kind === 'notification') {
+        const bell = icon('M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
+        bell.classList.add('controller-notification-bell');
+        item.append(bell, element('span', 'controller-visually-hidden', 'Notification: '));
+      }
+      const time = element('time', 'controller-muted', new Date(entry.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      time.dateTime = new Date(entry.receivedAt).toISOString();
+      item.append(element('span', 'controller-timeline-text', entry.kind === 'notification' ? entry.message : entry.text), ' ', time);
+      if (entry.kind === 'notification' && entry.count > 1) item.append(' ', element('span', 'controller-muted', `${entry.count} arrivals`));
+      entries.append(item);
+    }
+    return entries;
+  }
+
+  function render(): void {
+    const status = cardStatus(model);
+    const count = model.kind === 'disconnected' ? 0 : model.activationTargets.length;
+    const work = model.kind === 'single' ? model.work : undefined;
+    const duplicate = model.kind === 'conflict';
+    statusText = duplicate ? `${status.text} · ${count} instances` : status.text;
+    card.dataset.status = status.statusClass;
+    card.classList.toggle('is-disconnected', model.kind === 'disconnected');
+    directory.title = model.launchDirectory;
+    directoryText.textContent = model.launchDirectory;
+    statusRow.textContent = statusText;
+    showStatus();
+
+    const repositoryName = finalSegment(model.repositoryRoot ?? model.launchDirectory);
+    const toggleParts: Content[] = [content(element('span', 'controller-card-name', repositoryName))];
+    for (const text of model.kind === 'single' ? [work?.title, work?.branch] : []) {
+      if (text) toggleParts.push(content(doc.createTextNode(' · ')), content(element('span', 'controller-card-identity', text)));
+    }
+    reconcileChildren(toggle, [...toggleParts, statusLabel]);
+
+    const actionKind: Action = model.kind === 'disconnected' ? 'dismiss' : 'bring-forward';
+    const label = count > 1 ? `Bring all ${count} terminals forward` : 'Bring forward';
+    bringForward.title = count > 1 ? 'Bring all of these terminals forward' : 'Bring this terminal forward';
+    bringForward.setAttribute('aria-label', `${label} ${repositoryName} ${model.launchDirectory}`);
+    dismiss.setAttribute('aria-label', `Dismiss disconnected terminal ${model.launchDirectory}`);
+    clear.setAttribute('aria-label', `Clear history for ${model.launchDirectory}`);
+    reconcileChildren(header, actionKind === 'bring-forward' ? [accent, heading, bringForward] : [accent, heading], toToggle);
+
+    let conditions: WorkCondition[] = [];
+    const parts: (Node | Content)[] = [];
+    if (actionKind === 'dismiss') parts.push(dismiss);
+    else if (duplicate) parts.push(content(element('p', 'controller-card-line', 'Bring the terminals forward and close extra instances so only one remains.')));
+    else if (work?.unavailableReason) parts.push(content(element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT)));
+    else if (work) {
+      conditions = workConditions(work);
+      parts.push(...workLines(work).map(content), ...conditions.map(condition => conditionBox(condition)));
+    }
+    const timeline = model.kind === 'conflict' ? [] : model.timeline ?? [];
+    if (timeline.length) {
+      parts.push(content(timelineList(timeline)));
+      if (deps.onClearHistory && clearTarget()) parts.push(clear);
+    }
+    reconcileChildren(body, [directory, space(), statusRow, ...parts.flatMap(part => [space(), part])], toToggle);
+
+    reasons.commit();
+    boxes.commit();
+    loopDismissals.commit();
+    const shownTexts = new Set(conditions.flatMap(condition => condition.reasons));
+    for (const text of fullReasons) if (!shownTexts.has(text)) fullReasons.delete(text);
+
+    const disconnected = model.kind === 'disconnected';
+    if (wasDisconnected && !disconnected) chosenExpanded = undefined;
+    wasDisconnected = disconnected;
+    setExpanded(chosenExpanded ?? expandedByDefault);
+  }
+
   function setExpanded(next: boolean): void {
-    const held = body.contains(doc.activeElement);
+    const focusInBody = body.contains(doc.activeElement);
     expanded = next;
     toggle.setAttribute('aria-expanded', String(expanded));
     body.hidden = !expanded;
-    if (expanded) statusLabel.remove();
-    else toggle.append(statusLabel);
-    if (held && !expanded) toggle.focus();
+    if (focusInBody && !expanded) toggle.focus();
   }
-  setExpanded(expanded);
   onPress(toggle, () => {
     chosenExpanded = !expanded;
     setExpanded(chosenExpanded);
+    use();
   });
-
-  function focused(): Focus | undefined {
-    const active = doc.activeElement;
-    if (active === toggle) return 'header';
-    if (history && active === history) return 'history';
-    if (clear && active === clear) return 'clear';
-    if (active === actionButton) return actionKind;
-    if (active && active === loopMessageDismiss) return 'dismiss-loop-message';
-    const reason = reasons.find(({ reason }) => reason.control() === active);
-    return reason && { reason: reason.text };
-  }
-
-  function shown(want: Focus): HTMLElement | undefined {
-    if (want === 'header') return toggle;
-    if (body.hidden) return undefined;
-    if (want === 'history') return history;
-    if (want === 'clear') return historyExpanded ? clear : undefined;
-    if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
-    if (want === 'dismiss-loop-message') return loopMessageDismiss;
-    return want === actionKind ? actionButton : undefined;
-  }
+  render();
 
   return {
+    update(next) {
+      if (next.launchDirectory !== model.launchDirectory) throw new Error(`The card for ${model.launchDirectory} cannot show ${next.launchDirectory}`);
+      model = next;
+      render();
+    },
     setExpandedByDefault(next) {
+      expandedByDefault = next;
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, historyExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
-    focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
+    setTimeText(text) {
+      timeText = text;
+      showStatus();
+    },
+    setHeld(next) {
+      held = next;
+      showStatus();
+    },
+    contains: node => card.contains(node),
+    element: () => card,
     header: () => toggle,
     dispose() {
-      reasons.forEach(({ reason }) => reason.dispose());
+      for (const reason of reasons.values()) reason.dispose();
       card.remove();
     },
   };

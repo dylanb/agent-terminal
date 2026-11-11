@@ -61,12 +61,23 @@ export function runValidateFlow(operands: readonly string[], deps: ValidateFlowD
 }
 
 function validate(folder: string, deps: ValidateFlowDeps): Problem | null {
+  const selected = selectFlowFolder(folder, deps);
+  return selected.ok ? null : selected.problem;
+}
+
+export function selectFlowFolder(folder: string, deps: ValidateFlowDeps):
+  | { ok: true; definition: FlowDefinition; flowDir: string; loops: LoopDefV2Lookup }
+  | { ok: false; problem: Problem } {
   const refused = folderRefusal(folder);
-  if (refused !== null) return { file: folder, text: refused };
+  if (refused !== null) return { ok: false, problem: { file: folder, text: refused } };
   const located = locate(folder, deps);
-  if (!located.ok) return { file: folder, text: located.reason };
-  if (!located.load.ok) return { file: located.flowFile, text: located.load.error };
-  return stepProblem(located.load.definition, located.load.flowDir, located.flowFile, { ...located.loops, flow: located.load.definition.name });
+  if (!located.ok) return { ok: false, problem: { file: folder, text: located.reason } };
+  if (!located.load.ok) return { ok: false, problem: { file: located.flowFile, text: located.load.error } };
+  const loops = { ...located.loops, flow: located.load.definition.name };
+  const problem = stepProblem(located.load.definition, located.load.flowDir, located.flowFile, loops);
+  return problem === null
+    ? { ok: true, definition: located.load.definition, flowDir: located.load.flowDir, loops }
+    : { ok: false, problem };
 }
 
 function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Lookup): Problem | null {

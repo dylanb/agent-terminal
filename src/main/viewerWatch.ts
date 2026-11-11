@@ -5,7 +5,7 @@ import { watch, readdirSync, lstatSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { gitRootOf, IGNORED_DIRS } from './artifactTree';
-import { APP_STATE_DIRS } from './appStateDirs';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
 /** Cap on `git ls-files` stdout. A repo whose tracked-file list exceeds this makes execFileSync throw, and
  *  the caller falls back to walking the tree — degraded, not broken. */
@@ -81,6 +81,7 @@ export function watchableDirs(root: string): string[] {
 function gitNonIgnoredDirs(gitRoot: string): string[] | null {
   let out: string;
   try {
+    // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
     out = execFileSync('git', ['-C', gitRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
       encoding: 'utf8',
       maxBuffer: GIT_LS_FILES_MAX_BYTES,
@@ -100,6 +101,18 @@ function gitNonIgnoredDirs(gitRoot: string): string[] | null {
   return [...dirs];
 }
 
+/** The app-state dirs the viewer watch covers even when gitignored: `.agent-loop`'s tree, `.agent-terminal`
+ *  itself as a single leaf (so `loop/` appearing is seen), and the `.agent-terminal/loop/` tree the viewer
+ *  surfaces (§20.1). Any other tree under `.agent-terminal` (an agent's scratch builds) is not app state the
+ *  viewer shows; walking it put thousands of dirs in the watch and hung macOS in FSEvents stream rebuilds. */
+function appWatchDirs(root: string): string[] {
+  return [
+    ...watchableDirs(path.join(root, '.agent-loop')),
+    path.join(root, APP_LOOP_DIR_SEGMENTS[0]),
+    ...watchableDirs(path.join(root, ...APP_LOOP_DIR_SEGMENTS)),
+  ];
+}
+
 /** The directories the live-reload watch covers for a viewer root (`viewerRoot(cwd)` — the git top-level,
  *  or the cwd outside a repo), always PLUS the app state dirs (§20.1). In a git repo: every dir the repo's
  *  .gitignore does not exclude (so node_modules/build/dist/… are skipped per THIS repo's rules, not a
@@ -108,7 +121,7 @@ function gitNonIgnoredDirs(gitRoot: string): string[] | null {
  *  filesystem and exhaust the inotify limit (ENOSPC, the reported crash). A missing dir is a path the watch
  *  factory simply skips. */
 export function viewerWatchDirs(root: string): string[] {
-  const appDirs = APP_STATE_DIRS.flatMap((d) => watchableDirs(path.join(root, d)));
+  const appDirs = appWatchDirs(root);
   const gitRoot = gitRootOf(root);
   if (gitRoot === null) return appDirs;
   // git-failure fallback: the hard-coded IGNORED_DIRS walk still excludes node_modules/.git.
@@ -121,30 +134,67 @@ export function viewerWatchDirs(root: string): string[] {
 // `error` EVENT, which with no listener becomes an uncaught exception that crashes the whole app — and live
 // artifact reload (§20.1) is a cosmetic convenience that must never abort the process (CLAUDE.md). A per-dir
 // failure degrades to one fewer watched dir; the disposer closes them all.
-const defaultWatchFactory: ViewerWatchFactory = (dir, onEvent) => {
-  const watchers = viewerWatchDirs(dir)
-    .map((d) => {
-      try {
-        const w = watch(d, (_event, filename) => onEvent(filename));
-        w.on('error', () => {});
-        return w;
-      } catch {
-        return null;
-      }
-    })
-    .filter((w): w is ReturnType<typeof watch> => w !== null);
+function openWatch(
+  dir: string,
+  recursive: boolean,
+  onEvent: (filename: string | Buffer | null) => void,
+): ReturnType<typeof watch> | null {
+  try {
+    const w = watch(dir, { recursive }, (_event, filename) => onEvent(filename));
+    w.on('error', () => {});
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+function closeAll(watchers: (ReturnType<typeof watch> | null)[]): { close(): void } {
   return {
     close() {
       for (const w of watchers) {
         try {
-          w.close();
+          w?.close();
         } catch {
           /* already closed / removed */
         }
       }
     },
   };
+}
+
+const perDirWatchFactory: ViewerWatchFactory = (dir, onEvent) =>
+  closeAll(viewerWatchDirs(dir).map((d) => openWatch(d, false, onEvent)));
+
+// One recursive watch per root (the git root, or each app dir outside a repo), filtered to events whose
+// parent is in viewerWatchDirs — the per-dir backend's exact coverage — and reported by basename, i.e.
+// relative to the dir that fired, as the per-dir backend reports them.
+const recursiveWatchFactory: ViewerWatchFactory = (dir, onEvent) => {
+  const covered = new Set(viewerWatchDirs(dir));
+  const gitRoot = gitRootOf(dir);
+  const roots = gitRoot !== null ? [gitRoot] : [path.join(dir, '.agent-loop'), path.join(dir, APP_LOOP_DIR_SEGMENTS[0])];
+  return closeAll(
+    roots.map((root) =>
+      openWatch(root, true, (filename) => {
+        if (filename === null) return onEvent(null);
+        const abs = path.join(root, filename.toString());
+        if (covered.has(path.dirname(abs))) onEvent(path.basename(abs));
+      }),
+    ),
+  );
 };
+
+export type ViewerWatchMode = 'recursive' | 'per-dir';
+
+/** On macOS every fs.watch shares one FSEvents stream that is rebuilt with every watched path on each
+ *  open/close, so N per-dir watchers cost O(N²) and block the main thread; one recursive watch is one stream.
+ *  On Linux a recursive watch spends an inotify watch per dir (ignored subtrees included → ENOSPC). */
+export function viewerWatchMode(platform: NodeJS.Platform): ViewerWatchMode {
+  return platform === 'darwin' ? 'recursive' : 'per-dir';
+}
+
+export function viewerWatchFactory(mode: ViewerWatchMode): ViewerWatchFactory {
+  return mode === 'recursive' ? recursiveWatchFactory : perDirWatchFactory;
+}
 
 /** Watch the tree rooted at `dir`, coalescing events over `opts.debounceMs` into one `onChange` (§20.1).
  *  `opts.watch` injects the watch backend; the default watches the computed set of non-ignored directories
@@ -157,7 +207,7 @@ export function watchViewerTree(
   opts: { debounceMs?: number; watch?: ViewerWatchFactory } = {},
 ): () => void {
   const debounceMs = opts.debounceMs ?? VIEWER_WATCH_DEBOUNCE_MS;
-  const makeWatcher = opts.watch ?? defaultWatchFactory;
+  const makeWatcher = opts.watch ?? perDirWatchFactory;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const schedule = (): void => {
     if (timer) clearTimeout(timer);

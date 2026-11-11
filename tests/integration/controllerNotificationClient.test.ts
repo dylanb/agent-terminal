@@ -7,7 +7,7 @@ import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
-import { CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage, type NotificationCondition, type ControllerNotificationSource } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, encodeControllerMessage, type NotificationCondition, type ControllerNotificationSource } from '../../src/shared/controllerProtocol';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
@@ -51,7 +51,7 @@ async function connect(minor: number | undefined, current: NotificationCondition
 
 it('publishes every distinct arrival in order independently of status coalescing', async () => {
   const h = await connect(2, null);
-  expect.soft(h.received.find(frame => frame.type === 'register')).toMatchObject({ version: 2, minor: 2 });
+  expect.soft(h.received.find(frame => frame.type === 'register')).toMatchObject({ version: 2, minor: CONTROLLER_PROTOCOL_MINOR });
   const notifications = ['first', 'second', 'third'].map((message, index) => ({ conditionId: `stop-${index}`, message }));
   for (const notification of notifications) h.emit(notification);
   await h.flush();

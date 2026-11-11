@@ -22,6 +22,7 @@ import {
   b64,
   exampleConfigDir,
   goalBlockedCmd,
+  FAKE_AGENT_READY,
   goalProgressCmd,
   seedFakeAgentSteps,
   seedFakeAgentV2,
@@ -155,6 +156,7 @@ async function launchInto(
   await typeCommand(`cd ${shellQuote(repo)}`);
   if (control !== null) await expect(flowControl()).toHaveText(control, { timeout: UI_MS });
   await typeCommand('fake-agent');
+  await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY, { timeout: UI_MS });
   return { home, repo, logFile };
 }
 
@@ -1137,7 +1139,7 @@ test('#251 relaunch reconstructs finalization evidence and preserves the human s
   recordDisposition(repo, { source: 'catalog', tier: 'global', id: FEATURE_DEV_ID });
   createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', ...run, inputs: { ticket: '176' } });
   createTrustedPickups({ currentRun: () => run, persistFailed: (_repo, reason) => { throw new Error(reason); }, forgetFailed: (_repo, reason) => { throw new Error(reason); } })
-    .set(repo, { pr: 4242, issue: 176, branch: 'plan-loop/issue-176', initialStatus: 'planning' });
+    .set(repo, { kind: 'opened', pr: 4242, issue: 176, branch: 'plan-loop/issue-176', initialStatus: 'planning' });
   writeAppLoopState(repo, {
     loop: 'finalize-loop', step: 'finalize', turnKey: 'work-finalize', status: 'complete',
     verdict: 'stop for a human', verdictReason: 'Theme choice and billing need answers.',

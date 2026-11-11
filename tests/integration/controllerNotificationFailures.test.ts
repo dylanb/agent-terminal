@@ -8,6 +8,7 @@ import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { createLoopNotifier } from '../../src/main/loopNotifier';
 import { CONTROLLER_MAX_STATUS_BYTES } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal, FlowStateView } from '../../src/shared/ipc';
+import { notificationEntries } from '../helpers/controllerHistory';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
 it.each(['capacity', 'throw', 'callback'] as const)('contains notification transport %s failure without interrupting source observation', async failure => {
@@ -27,7 +28,7 @@ it.each(['capacity', 'throw', 'callback'] as const)('contains notification trans
   try {
     await expect.poll(() => registry.terminals()[0]?.work).toEqual(workStatus());
     source.observe('/work', view('first'));
-    await expect.poll(() => registry.terminals()[0]?.notifications?.[0]?.message).toBe('first · iter 1');
+    await expect.poll(() => notificationEntries(registry.terminals()[0])[0]?.message).toBe('first · iter 1');
     if (failure === 'capacity') {
       vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get').mockReturnValue(CONTROLLER_MAX_STATUS_BYTES);
     } else {
@@ -45,7 +46,7 @@ it.each(['capacity', 'throw', 'callback'] as const)('contains notification trans
     }
     expect(() => source.observe('/work', view('second'))).not.toThrow();
     await expect.poll(() => disconnected?.status).toBe('disconnected');
-    expect(disconnected?.notifications?.[0]?.message).toBe('first · iter 1');
+    expect(notificationEntries(disconnected)[0]?.message).toBe('first · iter 1');
     expect(source.current('/work')?.message).toBe('second · iter 1');
     source.observe('/work', view('working', false));
     expect(source.current('/work')).toBeNull();

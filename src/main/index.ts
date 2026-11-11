@@ -1,3 +1,5 @@
+import { shellQuote } from '../shared/shellQuote';
+import { CLI_COMMAND_NAME, INSTALL_REVIEWERS_FLAG } from './cliShim';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
@@ -11,6 +13,7 @@ import {
   type FlowCatalogListResult,
   type RebindResult,
   type ConfirmRunPickupResult,
+  type ResolveAdoptTicketResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -24,6 +27,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
+import { holdQuitForShell, killShell } from './shellQuit';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
@@ -41,10 +45,14 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupDismiss,
+  isValidSetupAgentState,
+  isValidSetupStatus,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
   isValidFlowConfirmRunPickup,
   isValidFlowResolveAppBootstrapConflict,
+  isValidFlowResolveAdoptTicket,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -75,9 +83,19 @@ import { createTodoStore } from './todoStore';
 import { createUiSettingsStore } from './uiSettings';
 import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
+import { createWaitingDetector } from './waitingDetector';
+import { readProcessTable } from './waitingLookup';
+import { waitingInTable, waitingPlatform } from './waitingRule';
+import { createHelperPrograms } from './waitingHelperFile';
+import { createWindowStatus } from './windowStatus';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo, resolveRepoKey } from './repoKey';
+import { currentRepoInfo, findRepoRoot, resolveRepoKey } from './repoKey';
+import { agentTerminalIgnored } from './gitIgnoreCheck';
+import { createSetupCheck, setupCheckEnabled } from './setupCheck';
+import { repoSetupFlowInstalled } from './setupFlowInstalled';
+import { createSetupDismissals } from './setupDismissals';
+import { loadLoopCapabilities } from './loopCapabilities';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, type FlowLoad, type FlowStepDef } from './flow';
@@ -102,8 +120,8 @@ import { createRepeatSourcer } from './repeatSourcing';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
-import { currentGitBranch } from './gitBranch';
-import { watchViewerTree, viewerRoot } from './viewerWatch';
+import { currentGitBranch, readBranchLabel } from './gitBranch';
+import { watchViewerTree, viewerRoot, viewerWatchFactory, viewerWatchMode } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -112,11 +130,12 @@ import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
-import { resolveLaunchInvocation } from './cliShim';
+import { cliRuntime } from './cliRuntime';
 import type { BundleLocation } from './bundleLocation';
 import {
   createInstallExamplesCoordinator,
   exampleInstallDirs,
+  inspectExamplesCurrency,
   type InstallDestination,
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
@@ -132,13 +151,17 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAdoptedPickup, writeAdoptedPickupIntent, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
-import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
+import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun, type ReachedPickupStep } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS, readLoopArtifact } from './appLoopPaths';
-import { MAX_LOOP_RECIPE_BYTES, type LoopDefV2Context, type PickupContractV2 } from './loopDefV2';
+import { MAX_LOOP_RECIPE_BYTES, isAdoptPickup, type LoopDefV2Context, type PickupV2 } from './loopDefV2';
+import { compensateAdoption, runAdoptionStart, type AdoptionStartDeps } from './adoptionStart';
+import { adoptedRunRefs } from '../shared/currentTicket';
+import { createRealAdoptionGit, createRealAdoptionGitHub } from './adoptionPorts';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import { readBoundedNoFollow } from './boundedRead';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
@@ -165,10 +188,13 @@ import {
   composeCountSourceRefusal,
   loopLookupContext,
 } from './autoGateComposition';
-import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
+import type { CliInstallResult, HostedAgentState, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
+  jobBootstrapFor,
+  jobMatchesFlowRefs,
+  trustedPickupServesJob,
   resolveAppGateRefs,
   resolvePickupBranch,
   type AppLoopBootstrapCoordinator,
@@ -213,18 +239,17 @@ async function createWindow(): Promise<void> {
   });
   const checkerScript = resolveArtifactCheckScript(__dirname);
   ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
-    handleCliInstall(m, () => ({
-      home: os.homedir(),
-      shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
-      currentPath: process.env.PATH ?? '',
-      invocation: resolveLaunchInvocation(
-        process.execPath,
-        process.defaultApp === true,
-        process.argv[1],
-        process.cwd(),
-      ),
-      checkerScript,
-    })));
+    handleCliInstall(m, () =>
+      cliRuntime({
+        env: process.env,
+        checkerScript,
+        home: os.homedir(),
+        user: os.userInfo(),
+        execPath: process.execPath,
+        isDevBuild: process.defaultApp === true,
+        mainScript: process.argv[1],
+        cwd: process.cwd(),
+      })));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
   let finishRegistration!: (accepted: boolean) => void;
@@ -310,17 +335,41 @@ async function createWindow(): Promise<void> {
   // §27.2/§27.3 — fired on each active→quiet flip so the app-loop engine can inject a deferred/retry
   // turn the moment the instance is injectable. Assigned once the engine exists (below); a no-op until.
   let notifyInjectable: () => void = () => {};
+  let pushAgentState: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
+  const windowStatus = createWindowStatus({
+    deliver: (update) => {
+      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...update });
+      pushFlowChanged();
+    },
+  });
+
+  const platformForWaiting = waitingPlatform(process.platform);
+  const helperPrograms = createHelperPrograms({ appHome: flowGlobalDir, now: () => Date.now() });
+  const waitingDetector = createWaitingDetector({
+    commands: async (signal) => platformForWaiting === null ? null
+      : waitingInTable(await readProcessTable({ signal }), { shellPid: ptyProcess.pid, platform: platformForWaiting, helpers: helperPrograms.names() }),
+    timers: { setTimer: (cb, ms) => setTimeout(cb, ms), clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+    lookupTimeoutMs: config.waitingLookupTimeoutMs,
+    onChange: (activity) => {
+      refreshControllerStatus();
+      windowStatus.activity(activity);
+    },
+  });
+  waitingDetector.screen(agentActivity);
+  win.once('closed', () => waitingDetector.dispose());
+
   const shadow = createShadowModel({
     quietMs: config.quietMs,
     onStatus: (status) => {
       agentActivity = status.agentState;
-      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
-      pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
+      windowStatus.screen(status);
+      waitingDetector.screen(status.agentState);
+      pushAgentState();
       if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
     },
   });
@@ -332,6 +381,16 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
+  const agentAtPrompt = (): boolean => hostedAgentPresent(tracker.summaries(), tracker.shellPrompted(), config.agentCommands);
+  const hostedAgentState = (): HostedAgentState => classifyHostedAgent(agentAtPrompt(), agentActivity);
+  let lastAgentState = hostedAgentState();
+  pushAgentState = () => {
+    const state = hostedAgentState();
+    if (state === lastAgentState) return;
+    lastAgentState = state;
+    send(CH.setupAgentStateChanged, { sessionId: SESSION_ID, state });
+  };
+  tracker.onChange(pushAgentState);
   // §27.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
@@ -340,6 +399,26 @@ async function createWindow(): Promise<void> {
   // — §12 gap tracked in #153.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
+  const isGitRepository = (dir: string): boolean => findRepoRoot(dir) === dir;
+  const setupCheck = createSetupCheck({
+    examplesCurrent: () => inspectExamplesCurrency(resolveExampleInstallDestinations()),
+    isGitRepository,
+    agentTerminalIgnored,
+    loadCapabilities: loadLoopCapabilities,
+    setupFlowInstalled: (repoKey) => repoSetupFlowInstalled({ worktreeDir: repoKey, globalRoot: flowGlobalDir }),
+    appVersion: app.getVersion(),
+    dismissals: createSetupDismissals(flowGlobalDir),
+  });
+  const setupStatus: (repoKey: string) => Promise<SetupStatusReply> = setupCheckEnabled(process.env)
+    ? (repoKey) => setupCheck.status(repoKey)
+    : async (repoKey) => ({
+        ok: true,
+        repoKey,
+        isRepository: isGitRepository(repoKey),
+        appVersion: app.getVersion(),
+        setupFlowInstalled: false,
+        entries: [],
+      });
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -358,13 +437,14 @@ async function createWindow(): Promise<void> {
     onChanged: pushViewerChanged,
   });
   const onViewerActivity = createViewerActivityHandler({ pushChanged: pushViewerChanged, warm: warmBase });
-  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
+  const viewerWatchOpts = { watch: viewerWatchFactory(viewerWatchMode(process.platform)) };
+  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity, viewerWatchOpts);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
     knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
-    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
+    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity, viewerWatchOpts);
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
@@ -430,6 +510,7 @@ async function createWindow(): Promise<void> {
   // loop area (AC10).
   const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
   let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
+  let agentWaitTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchAppTurnDone: (() => void) | null = null;
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
@@ -445,7 +526,7 @@ async function createWindow(): Promise<void> {
   };
   let lifecycle: FlowLifecycle;
   const agentQuestion = createAgentQuestion({
-    readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    readiness: hostedAgentState,
     inject: (text) => inject(text, { submit: true }),
   });
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
@@ -454,7 +535,7 @@ async function createWindow(): Promise<void> {
   const autoGate = createAutoGate({
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     resolveDef: (repoDir, loop) => defResolutionOf(observedResolveDef(repoDir, loop)),
-    currentRun: composeCurrentRun(flowGlobalDir),
+    currentRun: composeCurrentRun(flowGlobalDir, resolveAppLoopDefTiers(iconLoc)),
     runInProgressAt: composeRunInProgressAt(),
     onViewChanged: () => pushFlowChanged(),
     emitError: (_repoDir, reason) => loopMessages.post('error', reason),
@@ -493,10 +574,14 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    reviewerAgentProblem: (reviewer, kind) => {
-      if (kind !== 'codex') return installedReviewerProblem(userConfigAgentsDir(), reviewer);
+    reviewerAgentProblem: (reviewer, kind, repoDir) => {
       const home = codexHome();
-      return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
+      const problem = kind === 'codex'
+        ? installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer)
+        : installedReviewerProblem(userConfigAgentsDir(), reviewer);
+      if (problem === null) return null;
+      const load = resolveActiveDefinition(repoDir);
+      return load.ok ? `${problem}. Run ${CLI_COMMAND_NAME} ${INSTALL_REVIEWERS_FLAG} ${shellQuote(load.flowDir)}` : problem;
     },
     hostedAgentKind: () => {
       let foreground = foregroundCommand(ptyProcess.pid);
@@ -513,7 +598,11 @@ async function createWindow(): Promise<void> {
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),
         trustedAppBootstraps.get(repoDir) ?? null,
-        flow.state(repoDir).refs?.ticket ?? null,
+        {
+          ticket: flow.state(repoDir).refs?.ticket ?? null,
+          pr: flow.state(repoDir).refs?.pr ?? null,
+          startedAt: inProgressRunIdentity(repoDir)?.startedAt ?? null,
+        },
       ),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
@@ -527,8 +616,9 @@ async function createWindow(): Promise<void> {
     repeatEntry: (repoDir, stepId) => flow.entryFor(repoDir, stepId),
     reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
-      const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
-      return { ticket: r.ticket, pr: r.pr };
+      const trusted = trustedAppBootstraps.get(repoDir) ?? null;
+      const r = resolveAppGateRefs(flow.state(repoDir).refs, trusted);
+      return { ticket: r.ticket, pr: r.pr, ...(trusted !== null && isAdoptedPickup(trusted) ? { adoption: adoptedRunRefs(trusted) } : {}) };
     },
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
@@ -538,7 +628,7 @@ async function createWindow(): Promise<void> {
     // §27.9/AC6 — a fresh work-turn entry clears any stale stand-down (see the engine's `enter`), so an abandoned
     // polish cannot resurrect on a later same-step re-drive.
     clearPolish,
-    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    hostedAgent: hostedAgentState,
     armTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks
       appTurnTimer = setTimeout(() => appEngine.onStall(), config.stallTimeoutMs);
@@ -546,6 +636,14 @@ async function createWindow(): Promise<void> {
     cancelTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer);
       appTurnTimer = null;
+    },
+    armAgentWait: () => {
+      if (agentWaitTimer) clearTimeout(agentWaitTimer);
+      agentWaitTimer = setTimeout(() => appEngine.onAgentWaitElapsed(), config.agentWaitMs);
+    },
+    cancelAgentWait: () => {
+      if (agentWaitTimer) clearTimeout(agentWaitTimer);
+      agentWaitTimer = null;
     },
     noteSettle: () => shadow.noteSettle(),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
@@ -701,7 +799,7 @@ async function createWindow(): Promise<void> {
         entry: t.entry,
         issue,
         slice,
-        bootstrap: resolved.def.pickup,
+        bootstrap: jobBootstrapFor(resolved.def.pickup, flow.state(t.repoKey).refs),
         ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
     },
@@ -710,14 +808,14 @@ async function createWindow(): Promise<void> {
   // resolveActiveDefinition), so none can resolve a different flow from another (the shared-semantics /
   // "parallel copies that agree today" rule). Its seams and the AC9 begun-run binding live in runResolver.ts,
   // the one factory the integration tests drive too.
-  const resolveRun = createRunResolver(flowGlobalDir);
+  const resolveRun = createRunResolver(flowGlobalDir, resolveAppLoopDefTiers(iconLoc));
   const resolveActiveDefinition = (repoKey: string): FlowLoad => resolveRun(repoKey).load;
   // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
   const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
   const activeFlowGate = createActiveFlowGate(worktreeLock);
   const heldRunRecovery = createHeldRunRecovery({
     lock: worktreeLock,
-    ...realHeldRunRecoveryDeps(flowGlobalDir),
+    ...realHeldRunRecoveryDeps(flowGlobalDir, resolveAppLoopDefTiers(iconLoc)),
     terminate: (repoKey) => flow.terminate(repoKey),
     selectIfUnlocked,
   });
@@ -764,17 +862,26 @@ async function createWindow(): Promise<void> {
   const pickupRecordPredatesRun = new Set<string>();
   // §27.13
   const runsBegunHere = new Set<string>();
-  const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
-    const run = inProgressRunIdentity(repoKey);
-    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
+  /** The first pickup step the flow has reached, or null when its flow does not load or has reached none. */
+  const reachedPickup = (repoKey: string): ReachedPickupStep<PickupV2> => {
     const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return null;
-    const view = flow.state(repoKey);
-    const reached = reachedPickupStep(load.definition.steps, view.position, (step: FlowStepDef): PickupContractV2 | null => {
+    return reachedPickupStep(load.definition.steps, flow.state(repoKey).position, (step: FlowStepDef): PickupV2 | null => {
       if (step.kind !== 'loop' || step.loop === undefined) return null;
       const resolved = observedResolveDef(repoKey, step.loop);
       return resolved.ok ? resolved.def.pickup : null;
     });
+  };
+  const adoptingPickupStep = (repoKey: string): boolean => {
+    const reached = reachedPickup(repoKey);
+    return reached !== null && isAdoptPickup(reached.contract);
+  };
+  const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
+    const run = inProgressRunIdentity(repoKey);
+    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
+    const view = flow.state(repoKey);
+    const reached = reachedPickup(repoKey);
+    const adopting = reached !== null && isAdoptPickup(reached.contract);
     const held = awaitingPickupConfirm({
       run,
       pickupInFlight: pickupInFlight?.repoKey === repoKey,
@@ -782,16 +889,24 @@ async function createWindow(): Promise<void> {
       runBegunHere: runsBegunHere.has(repoKey),
       flowRefs: { ticket: view.refs?.ticket ?? null, pr: view.refs?.pr ?? null },
       bootstrapRecord: readPickupRecord(repoKey),
+      ...(adopting ? { adopting: true as const } : {}),
     });
-    return held === null || reached === null ? null : { run: held, initialStatus: reached.contract.initialStatus };
+    if (held === null || reached === null) return null;
+    return { run: held, initialStatus: isAdoptPickup(reached.contract) ? null : reached.contract.initialStatus };
   };
   const pickupConfirmations = createRunPickupConfirmations({
     heldRun: pickupHeldRun,
     evidence: (repoKey) => {
       const branch = currentGitBranch(repoKey);
-      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, bootstrapRecord: readPickupRecord(repoKey) };
+      const refs = flow.state(repoKey).refs;
+      return {
+        branch: branch.ok ? branch.branch : null,
+        flowTicket: refs?.ticket ?? null,
+        bootstrapRecord: readPickupRecord(repoKey),
+        ...(adoptingPickupStep(repoKey) ? { adopting: { pr: refs?.pr ?? null, startedAt: inProgressRunIdentity(repoKey)?.startedAt ?? null } } : {}),
+      };
     },
-    lookup: createRealPullRequestLookup,
+    lookup: (repoKey) => createRealPullRequestLookup(repoKey, adoptingPickupStep(repoKey) ? 'ignore' : 'refuse'),
     trust: (repoKey, pickup) => {
       trustedAppBootstraps.set(repoKey, pickup);
       pickupRecordPredatesRun.delete(repoKey);
@@ -812,6 +927,20 @@ async function createWindow(): Promise<void> {
     appBootstrapSessions.set(repoDir, session);
     return session;
   };
+  const adoptionDepsByRepo = new Map<string, AdoptionStartDeps>();
+  const adoptionDeps = (repoDir: string): AdoptionStartDeps => {
+    const existing = adoptionDepsByRepo.get(repoDir);
+    if (existing !== undefined) return existing;
+    const deps: AdoptionStartDeps = {
+      git: createRealAdoptionGit(repoDir),
+      github: createRealAdoptionGitHub(repoDir),
+      prepareRecord: (intent) => writeAdoptedPickupIntent(repoDir, intent),
+      writeRecord: (pickup) => writeAdoptedPickup(repoDir, pickup),
+      clearRecord: () => clearAppLoopBootstrap(repoDir),
+    };
+    adoptionDepsByRepo.set(repoDir, deps);
+    return deps;
+  };
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
       pickupInFlight = {
@@ -827,32 +956,50 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
       }
     },
-    compensateBootstrap: (job, ownership) =>
-      appBootstrapSession(job.repoDir).compensate(ownership),
+    adopt: async (repoDir, pr, pick) => {
+      pickupInFlight = { repoKey: repoDir, issue: pr, wipe: false };
+      pushFlowChanged();
+      try {
+        const run = inProgressRunIdentity(repoDir);
+        if (run === null) return { ok: false, kind: 'error', error: 'adopting a pull request needs a run in progress' };
+        return await runAdoptionStart(adoptionDeps(repoDir), { pr, startedAt: run.startedAt, ...(pick === undefined ? {} : { pick }) });
+      } finally {
+        if (pickupInFlight?.repoKey === repoDir) pickupInFlight = null;
+        pushFlowChanged();
+      }
+    },
+    compensateBootstrap: (job, ownership) => {
+      switch (ownership.kind) {
+        case 'adopted':
+          return compensateAdoption(adoptionDeps(job.repoDir), ownership);
+        case 'opened':
+          return appBootstrapSession(job.repoDir).compensate(ownership);
+        default:
+          return ownership satisfies never;
+      }
+    },
     finalizeBootstrap: (job, identity) => {
-      if (job.issue === null || job.bootstrap === null) return Promise.resolve();
+      if (job.issue === null || job.bootstrap === null || isAdoptPickup(job.bootstrap)) return Promise.resolve();
       return appBootstrapSession(job.repoDir).finalize(
         { issue: job.issue, spec: job.bootstrap },
         identity,
       );
     },
-    hasBootstrapForJob: (job) => {
-      const trusted = trustedAppBootstraps.get(job.repoDir);
-      return trusted?.issue === job.issue;
-    },
+    hasBootstrapForJob: (job) => trustedPickupServesJob(job, trustedAppBootstraps.get(job.repoDir)),
     isCurrentJob: (job) => {
       const current = flow.state(job.repoDir);
       return (
         currentFlowEntryTokens.get(job.repoDir) === job.entryToken &&
         current.status === 'in_progress' &&
         current.stepName === job.stepId &&
-        (current.refs?.ticket ?? null) === job.issue
+        jobMatchesFlowRefs(job, current.refs)
       );
     },
     canEnterWork: () => appEngine.canEnter(),
     acceptBootstrap: (job, identity) => {
       trustedAppBootstraps.set(job.repoDir, identity);
       pickupRecordPredatesRun.delete(job.repoDir);
+      if (isAdoptedPickup(identity)) audit.recordTicket(job.repoDir, identity.primary);
     },
     rollbackStep: (job) => {
       const current = flow.state(job.repoDir);
@@ -860,7 +1007,7 @@ async function createWindow(): Promise<void> {
         currentFlowEntryTokens.get(job.repoDir) !== job.entryToken ||
         current.status !== 'in_progress' ||
         current.stepName !== job.stepId ||
-        (current.refs?.ticket ?? null) !== job.issue
+        !jobMatchesFlowRefs(job, current.refs)
       ) {
         return false;
       }
@@ -913,6 +1060,15 @@ async function createWindow(): Promise<void> {
         step: stepId,
         ...conflict,
       }),
+    emitTicketChoice: ({ repoDir, stepId, pr, choiceId, tickets }) =>
+      send(CH.flowOnAdoptTicketChoice, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        pr,
+        choiceId,
+        tickets: tickets.map((t) => ({ repo: t.repo, number: t.number })),
+      }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
         repoDir,
@@ -933,10 +1089,11 @@ async function createWindow(): Promise<void> {
     current: () => {
       const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
       const load = resolveActiveDefinition(repoKey);
-      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
+      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: waitingDetector.current(), loopMessage: loopMessages.current() };
     },
-    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
-  });
+    refTitle: async (repoKey, kind, number) => (await createGithubRefs()(repoKey, kind, number))?.title ?? null,
+    branch: repoKey => readBranchLabel(repoKey),
+  }, { branchRefreshMs: config.branchRefreshMs });
   controllerStatus.subscribe(work => {
     currentWork = work;
     for (const listener of statusListeners) listener(work);
@@ -988,7 +1145,7 @@ async function createWindow(): Promise<void> {
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
-    const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity);
+    const base = deriveFlowView(view, todoStore.list(repoKey), windowStatus.shown());
     const activity = loopActivityFor(repoKey);
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {
@@ -1236,13 +1393,27 @@ async function createWindow(): Promise<void> {
     shadow.write(data);
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  let shellExited = false;
   ptyProcess.onExit(({ exitCode }) => {
+    shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
+    waitingDetector.dispose();
+    refreshControllerStatus();
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();
     }
   });
+  app.on('will-quit', holdQuitForShell(
+    {
+      exited: () => shellExited,
+      onExit: (run) => { ptyProcess.onExit(run); },
+      forceKill: () => killShell(() => ptyProcess.kill('SIGKILL')),
+    },
+    config.shellQuitGraceMs,
+    (ms, run) => { setTimeout(run, ms); },
+    () => app.quit(),
+  ));
 
   const disposeIpc = registerIpcListeners(
     ipcMain,
@@ -1522,6 +1693,11 @@ async function createWindow(): Promise<void> {
           listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
         );
       },
+      // §27.10 — the answer names its offer, so it can never pick for a start the operator was not shown.
+      [CH.flowResolveAdoptTicket]: (_e, m): ResolveAdoptTicketResult => {
+        if (!isValidFlowResolveAdoptTicket(m)) return { ok: false, reason: 'invalid flow:resolveAdoptTicket request' };
+        return appBootstrapCoordinator?.resolveTicket(m.repoKey, m.step, m.choiceId, m.answer) ?? { ok: false, reason: 'no pickup is waiting for a ticket choice' };
+      },
       [CH.flowConfirmRunPickup]: (_e, m): Promise<ConfirmRunPickupResult> =>
         isValidFlowConfirmRunPickup(m) && knownRepoKeys.has(m.repoKey)
           ? pickupConfirmations.confirm(m.repoKey, m.run, m.pr, m.ticket)
@@ -1568,6 +1744,15 @@ async function createWindow(): Promise<void> {
       // Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
       [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),
+      [CH.setupStatus]: (_e, m): Promise<SetupStatusReply> =>
+        isValidSetupStatus(m) && knownRepoKeys.has(m.repoKey)
+          ? setupStatus(m.repoKey)
+          : Promise.resolve({ ok: false, reason: 'invalid setup:status request' }),
+      [CH.setupDismiss]: (_e, m): SetupDismissReply =>
+        isValidSetupDismiss(m) && (m.dismissal.kind !== 'repo' || knownRepoKeys.has(m.dismissal.repoKey))
+          ? setupCheck.dismiss(m.dismissal)
+          : { ok: false, reason: 'invalid setup:dismiss request' },
+      [CH.setupAgentState]: (_e, m): HostedAgentState => (isValidSetupAgentState(m) ? hostedAgentState() : 'absent'),
     },
   );
 
@@ -1586,6 +1771,7 @@ async function createWindow(): Promise<void> {
       () => stopViewerWatch(),
       () => {
         if (appTurnTimer) clearTimeout(appTurnTimer);
+        if (agentWaitTimer) clearTimeout(agentWaitTimer);
       },
       () => unwatchAppTurnDone?.(),
     ]);

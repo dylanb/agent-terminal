@@ -6,10 +6,12 @@ import { lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
-import type { ControllerTerminal, ControllerClearTarget, ControllerClearOutcome, ControllerNotificationEntry } from '../shared/ipc';
-import { CONTROLLER_LOOP_MESSAGE_MINOR, type NotificationCondition, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import type { ControllerTerminal, ControllerClearTarget, ControllerClearOutcome, ControllerTimelineEntry } from '../shared/ipc';
+import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { createControllerTimelines } from './controllerTimeline';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
+import { isPrivateDirectory } from './ownerOnlyPath';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
@@ -29,7 +31,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const directory = dirname(endpoint);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const directoryStat = await lstat(directory);
-  if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid?.() || (directoryStat.mode & 0o777) !== 0o700) {
+  if (!isPrivateDirectory(directoryStat, process.getuid?.() ?? -1)) {
     throw new Error('The controller endpoint directory must be owned by the current user with permissions 0700.');
   }
   const ownership = createWorktreeLock({ lockRoot: directory }).acquire(endpoint);
@@ -38,24 +40,9 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const registrations = new Map<WebSocket, ControllerTerminal>();
   const minors = new Map<WebSocket, number>();
   const retained = new Map<string, ControllerTerminal>();
-  const current = new Map<WebSocket, NotificationCondition | null>();
-  const directoryConditions = new Map<string, { current?: string; cleared?: string }>();
+  const timelines = createControllerTimelines<WebSocket>();
   const members = (directory: string) => [...registrations].filter(([, terminal]) => terminal.launchDirectory === directory);
-  const renewClearTarget = (terminal: ControllerTerminal) => {
-    if (terminal.notifications) terminal.clearHistoryTarget = { id: terminal.id, launchDirectory: terminal.launchDirectory, revision: randomUUID() };
-    else delete terminal.clearHistoryTarget;
-  };
-  const receive = (terminal: ControllerTerminal, notification: NotificationCondition) => {
-    if (directoryConditions.get(terminal.launchDirectory)?.cleared === notification.conditionId) return;
-    const entries = terminal.notifications ??= [];
-    const repeated = entries.find(entry => entry.message === notification.message);
-    if (repeated) repeated.count += 1;
-    else {
-      entries.unshift({ message: notification.message, receivedAt: Date.now(), count: 1 });
-      entries.splice(3);
-    }
-    renewClearTarget(terminal);
-  };
+  const overlapping = (directory: string) => members(directory).length > 1;
   const snapshot = () => structuredClone([...retained.values(), ...registrations.values()]);
   const pending = new Map<string, { socket: WebSocket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
@@ -73,19 +60,11 @@ export async function startControllerTransport(appHome: string): Promise<Control
       const terminal = registrations.get(socket);
       registrations.delete(socket);
       minors.delete(socket);
-      current.delete(socket);
       if (terminal) {
         const remaining = members(terminal.launchDirectory);
-        if (!remaining.length) {
-          renewClearTarget(terminal);
-          retained.set(terminal.id, { ...terminal, work: undefined, status: 'disconnected' });
-        }
-        else if (remaining.length === 1) {
-          const [survivorSocket, survivor] = remaining[0];
-          const condition = current.get(survivorSocket);
-          directoryConditions.set(survivor.launchDirectory, { current: condition?.conditionId });
-          if (condition) receive(survivor, condition);
-        }
+        const card: ControllerTerminal = { ...terminal, work: undefined, status: 'disconnected' };
+        timelines.departed(socket, card, remaining);
+        if (!remaining.length) retained.set(card.id, card);
       }
       for (const request of pending.values()) if (request.socket === socket) request.finish('unavailable');
       notify();
@@ -95,43 +74,28 @@ export async function startControllerTransport(appHome: string): Promise<Control
         if (binary) throw new Error('Binary controller message');
         const message = parseControllerMessage(chunk.toString());
         if (message.type === 'register' && !registrations.has(socket)) {
-          let notifications: ControllerNotificationEntry[] | undefined;
+          let timeline: ControllerTimelineEntry[] | undefined;
           for (const [id, terminal] of retained) {
             if (terminal.launchDirectory === message.launchDirectory) {
-              notifications = terminal.notifications;
+              timeline = terminal.timeline;
               retained.delete(id);
             }
           }
           notificationsSupported = supportsControllerNotifications(message.minor);
-          const terminal: ControllerTerminal = { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(notifications ? { notifications } : {}) };
-          renewClearTarget(terminal);
+          const terminal: ControllerTerminal = { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(timeline ? { timeline } : {}) };
           registrations.set(socket, terminal);
-          const peers = members(message.launchDirectory);
-          if (peers.length > 1) {
-            directoryConditions.delete(message.launchDirectory);
-            for (const [, peer] of peers) {
-              delete peer.notifications;
-              renewClearTarget(peer);
-            }
-          }
+          timelines.registered(socket, terminal, members(message.launchDirectory).map(([, peer]) => peer), notificationsSupported);
           minors.set(socket, message.minor ?? 0);
           notify();
           socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
         } else if ((message.type === 'notification' || message.type === 'notification-current') && registrations.has(socket) && notificationsSupported) {
           const terminal = registrations.get(socket)!;
-          const previous = current.get(socket);
-          current.set(socket, message.notification);
-          if (members(terminal.launchDirectory).length === 1) {
-            const state = directoryConditions.get(terminal.launchDirectory) ?? {};
-            state.current = message.notification?.conditionId;
-            directoryConditions.set(terminal.launchDirectory, state);
-            if (message.notification && (message.type === 'notification' || previous === undefined)) {
-              receive(terminal, message.notification);
-              notify();
-            }
-          }
+          const report = message.type === 'notification' ? 'arrival' : 'current';
+          if (timelines.notified(socket, terminal, message.notification, report, overlapping(terminal.launchDirectory))) notify();
         } else if (message.type === 'status' && registrations.has(socket)) {
-          registrations.get(socket)!.work = message.work;
+          const terminal = registrations.get(socket)!;
+          terminal.work = message.work;
+          timelines.reported(socket, terminal, message.work, overlapping(terminal.launchDirectory));
           notify();
         } else if (message.type === 'result') {
           const request = pending.get(message.requestId);
@@ -191,19 +155,14 @@ export async function startControllerTransport(appHome: string): Promise<Control
     clearHistory(target) {
       const terminal = retained.get(target.id) ?? [...registrations.values()].find(item => item.id === target.id);
       if (!terminal || terminal.launchDirectory !== target.launchDirectory) return 'stale';
-      if (members(terminal.launchDirectory).length > 1
-        || terminal.clearHistoryTarget?.revision !== target.revision) return 'stale';
-      renewClearTarget(terminal);
-      terminal.notifications = [];
-      const state = directoryConditions.get(terminal.launchDirectory);
-      if (state) state.cleared = state.current;
-      notify();
-      return 'cleared';
+      const outcome = timelines.clear(terminal, target.revision, overlapping(terminal.launchDirectory));
+      if (outcome === 'cleared') notify();
+      return outcome;
     },
     dismiss(id) {
       const terminal = retained.get(id);
       if (terminal) {
-        directoryConditions.delete(terminal.launchDirectory);
+        timelines.dismissed(terminal.launchDirectory);
         retained.delete(id);
         notify();
       }

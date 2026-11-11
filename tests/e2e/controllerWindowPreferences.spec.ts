@@ -1,13 +1,18 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
-import { heldHumanGate, type HeldHumanGate } from './autoGateHarness';
+import { heldHumanGate, seedTrustedFlow, type HeldHumanGate } from './autoGateHarness';
+import { waitForConnections } from './controllerSnapshot';
 import { STATUS_BUDGET_MS } from './controllerStatusObservation';
 import {
   closeControllerWindow, isAlwaysOnTop, isFullScreen, isMaximized, isMinimized, minimizedOnDesktop, moveAndResize, normalBounds, shownOnDesktopAt,
   waitForAlwaysOnTop, type WindowBounds,
 } from './controllerWindow';
-import { alwaysOnTopLocator, cardHeaderLocator, cardLocator, themeControlLocator } from '../helpers/controllerCards';
+import {
+  alwaysOnTopLocator, cardHeaderLocator, cardLocator, listSequenceOf, sortOptionLocator, statusRowLocator, themeControlLocator, windowHeaderLocator,
+} from '../helpers/controllerCards';
+import { RECENTLY_USED_HEADING } from '../helpers/controllerCardOrderFixture';
+import { createControllerSettingsStore } from '../../src/main/controllerSettings';
 import { createControllerWindowStateStore } from '../../src/main/controllerWindowState';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -101,6 +106,63 @@ for (const order of ORDERS) {
     }
   });
 }
+
+/** A flow no run has started, so a real terminal in its directory reads Unassigned (Idle & unassigned). */
+const UNSTARTED_FLOW = 'name: sort-choice\nsteps:\n  - id: implement\n    kind: manual\n';
+
+/** Moves the pointer to the window header and focus out of the cards, so no card is held when the order is read. */
+async function away(page: Page): Promise<void> {
+  await windowHeaderLocator(page).hover({ position: { x: 4, y: 4 } });
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+}
+
+/** Waits until the profile holds `sortMode`, so a Quit straight after a selection cannot drop its save; the checks after relaunch report a save that never lands. */
+const sortModeSaved = (profile: string, sortMode: 'attention' | 'recently-used') =>
+  expect.poll(() => createControllerSettingsStore(profile).sortMode()).toBe(sortMode).catch(() => undefined);
+
+test('the selected card order survives Quit and relaunch with an empty recency list, beside the saved theme: Recently used, then Attention', { tag: '@ownapp' }, async () => {
+  test.setTimeout(240_000);
+  const h = await createControllerDesktopHarness();
+  const [x, w] = h.fixture.repositories;
+  try {
+    for (const directory of [x, w]) seedTrustedFlow(h.fixture.home, directory, 'sort-choice', UNSTARTED_FLOW);
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    const { page } = controller;
+    await h.launch(terminalTarget, x);
+    await expect(statusRowLocator(cardLocator(page, x))).toHaveText('Unassigned');
+    await h.launch(terminalTarget, x);
+    await expect(statusRowLocator(cardLocator(page, x))).toContainText('Duplicate directory');
+    await h.launch(terminalTarget, w);
+    await expect(statusRowLocator(cardLocator(page, w))).toHaveText('Unassigned');
+
+    await switchToDarkTheme(controller);
+    await sortOptionLocator(page, 'Recently used').click();
+    await cardHeaderLocator(cardLocator(page, w), w).click();
+    await away(page);
+    await expect.poll(() => listSequenceOf(page, [x, w])).toEqual([RECENTLY_USED_HEADING, w, x]);
+    await sortModeSaved(controller.profile, 'recently-used');
+    await controller.app.close();
+
+    const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
+    await waitForConnections(restarted.page, x, 2);
+    await waitForConnections(restarted.page, w, 1);
+    await expect(statusRowLocator(cardLocator(restarted.page, x))).toContainText('Duplicate directory');
+    await expect(statusRowLocator(cardLocator(restarted.page, w))).toHaveText('Unassigned');
+    await away(restarted.page);
+    await expect.soft(sortOptionLocator(restarted.page, 'Recently used', { selected: true })).toBeVisible();
+    await expect.soft.poll(() => listSequenceOf(restarted.page, [x, w])).toEqual([RECENTLY_USED_HEADING, x, w]);
+    await expect.soft(themeControlLocator(restarted.page, { on: true })).toBeVisible();
+
+    await sortOptionLocator(restarted.page, 'Attention').click();
+    await sortModeSaved(controller.profile, 'attention');
+    await restarted.app.close();
+    const again = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
+    await expect.soft(sortOptionLocator(again.page, 'Attention', { selected: true })).toBeVisible();
+    await expect.soft(themeControlLocator(again.page, { on: true })).toBeVisible();
+  } finally {
+    await h.dispose();
+  }
+});
 
 for (const enlarged of ['maximized', 'full screen'] as const) {
   test(`a window ${enlarged} at Quit relaunches neither maximized nor full screen, at its bounds from before`, { tag: '@ownapp' }, async () => {

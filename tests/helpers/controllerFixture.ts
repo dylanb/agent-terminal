@@ -15,7 +15,7 @@ export function createControllerFixture() {
     const shell = join(bin, 'bash');
     writeFileSync(shell, '#!/bin/sh\nif [ "$1" = "-l" ]; then shift; fi\nif [ "$#" = 0 ]; then printf "started\\n" >> "$CONTROLLER_TEST_SHELL_STARTS"; fi\nexec /bin/bash --noprofile --norc "$@"\n', { mode: 0o700 });
     const env: Record<string, string> = {};
-    for (const key of ['HOME', 'PATH', 'DISPLAY', 'XAUTHORITY', 'TMPDIR', 'SystemRoot']) {
+    for (const key of ['HOME', 'PATH', 'DISPLAY', 'XAUTHORITY', 'TMPDIR', 'SystemRoot', 'APP_AGENT_COMMANDS']) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     Object.assign(env, {
@@ -37,6 +37,8 @@ export function createControllerFixture() {
       git(dir, 'config', 'user.name', 'Controller fixture');
       git(dir, 'config', 'user.email', 'fixture@example.invalid');
       git(dir, 'commit', '--allow-empty', '-m', 'fixture');
+      // The app names origin's repository on every gh read, so each fixture repository is a GitHub one.
+      git(dir, 'remote', 'add', 'origin', `https://github.com/example/${parent}-project.git`);
       return dir;
     });
     const worktrees = ['worktree-a', 'worktree-b'].map(name => {

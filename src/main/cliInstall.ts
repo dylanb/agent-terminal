@@ -1,6 +1,3 @@
-// agent-terminal CLI shim installer (§23.4 / #25): writes the launch shim and ensures it is on PATH
-// for new shells, idempotently reconciling to the running build.
-
 import fs from 'node:fs';
 import path from 'node:path';
 import { errMsg } from './errno';
@@ -8,12 +5,8 @@ import type { CliInstallResult } from '../shared/ipc';
 import { shellQuote } from '../shared/shellQuote';
 import { isValidCliInstall } from './ipcValidation';
 import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
+import { ownerOnlyChain, ownerOnlyPath } from './ownerOnlyPath';
 
-/** The resolved filesystem work of one install. Internal to this module — the public seam is
- *  RuntimeInfo. `reconcileProfiles` are profiles to strip orphan launcher blocks from (e.g. left by a
- *  former shell), distinct from `profiles`, the ones the active shell sources and gets the new block.
- *  `ownsBinDir` is true only for the app-created `~/.agent-terminal/bin`; false for a reused user dir,
- *  which the installer must neither create nor re-permission. */
 interface InstallTarget {
   binDir: string;
   ownsBinDir: boolean;
@@ -36,21 +29,16 @@ const SHELL_PROFILES: Record<string, ShellProfileSpec> = {
   dash: { sources: ['.profile'], create: ['.profile'] },
 };
 
-/** Dotfiles any supported shell might source — derived from SHELL_PROFILES so the two cannot drift.
- *  The installer keeps the existing ones to pick those the active shell reads and to reconcile orphan
- *  blocks left in profiles a former shell sourced. */
 const PROFILE_CANDIDATES = [
   ...new Set(Object.values(SHELL_PROFILES).flatMap((s) => [...s.sources, ...s.create])),
 ];
 
-/** The running build's launch facts the installer needs (§23.4 / #25) — its single public input.
- *  Names domain concepts, not the process/fs shapes that supply them: the user's home, their shell
- *  (which dotfiles to extend PATH in), the current PATH, and a resolved launch invocation. */
 export interface RuntimeInfo {
   home: string;
   shell: string;
   currentPath: string;
   invocation: LaunchInvocation;
+  uid: number;
   /** The checker runtime script of this build, which the installed `--validate-flow` runs. */
   checkerScript: string;
 }
@@ -75,43 +63,90 @@ function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): Inst
   };
 }
 
-/** User bin directories the installer prefers when one is ALREADY on PATH — landing the command where
- *  the user's shells already look means no profile edit and no new shell (the original failure: a
- *  launcher installed into a dir nobody's PATH includes). */
 const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
 
-/** Whether a pre-existing on-PATH user dir is safe to host the launcher. A reused dir is never
- *  re-permissioned, so it must be vetted and, failing that, declined for the dedicated dir — otherwise
- *  another local user could rename the dir (or an ancestor) and substitute a hostile launcher
- *  (CWE-276/426), the same attack the dedicated-dir path blocks by hardening its own parent to 0o700.
- *  Symlinks are resolved first (CWE-59): a symlinked dir's real ancestors are what an attacker
- *  manipulates, not the lexical path. */
-function isSafeReuseDir(dir: string, home: string): boolean {
-  let real: string;
+function isSafeReuseDir(dir: string, home: string, uid: number): boolean {
   let realHome: string;
   try {
-    const st = fs.statSync(dir);
-    if (!st.isDirectory() || (st.mode & 0o022) !== 0) return false;
+    if (!fs.statSync(dir).isDirectory()) return false;
     fs.accessSync(dir, fs.constants.W_OK);
-    real = fs.realpathSync(dir);
     realHome = fs.realpathSync(home);
   } catch {
     return false;
   }
-  for (let cur = path.dirname(real); cur !== realHome && cur !== path.dirname(cur); cur = path.dirname(cur)) {
-    try {
-      if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
-    } catch {
+  const check = ownerOnlyChain(dir, uid, realHome);
+  switch (check.kind) {
+    case 'ownerOnly':
+      return true;
+    case 'othersCanWrite':
+    case 'ownedByAnother':
       return false;
-    }
+    // untestable: the dir was just stat-ed, so its chain is unreadable only if it changes in between; tracked in #153.
+    case 'unreadable':
+      return false;
+    default:
+      return check satisfies never;
   }
-  return true;
 }
 
-function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
+function appImageRefusal(appImage: string, uid: number): string | undefined {
+  const folder = path.dirname(appImage);
+  const unsafe = (what: string, reason: string, fix: string): string =>
+    `Not installing the command: ${what} ${reason}, who could swap the app. ${fix}, then install again.`;
+  const unreadable = (what: string, e: unknown): string =>
+    `Not installing the command: could not check who can write ${what}: ${errMsg(e)}`;
+  let realFile: string;
+  try {
+    realFile = fs.realpathSync(appImage);
+  } catch (e) {
+    return unreadable(appImage, e);
+  }
+  const named = realFile === appImage ? appImage : `${appImage} (${realFile})`;
+  const moveIt = 'Keep the AppImage somewhere only you can write';
+  const checks = [
+    { checked: folder, what: `${folder} (or a folder above it)`, run: () => ownerOnlyChain(folder, uid), writableFix: moveIt },
+    {
+      checked: path.dirname(realFile),
+      what: `${appImage}, or a folder above ${realFile},`,
+      run: () => ownerOnlyChain(path.dirname(realFile), uid),
+      writableFix: moveIt,
+    },
+    { checked: named, what: named, run: () => ownerOnlyPath(realFile, uid), writableFix: `Run chmod go-w ${shellQuote(realFile)}` },
+  ];
+  for (const { checked, what, run, writableFix } of checks) {
+    const check = run();
+    switch (check.kind) {
+      case 'ownerOnly':
+        continue;
+      case 'othersCanWrite':
+        return unsafe(what, 'can be written by other users', writableFix);
+      case 'ownedByAnother':
+        return unsafe(what, 'is owned by another user', 'Copy the AppImage somewhere only you can write');
+      // untestable: the AppImage path just resolved, so these are unreadable only if they change in between; tracked in #153.
+      case 'unreadable':
+        return unreadable(checked, check.error);
+      default:
+        return check satisfies never;
+    }
+  }
+  return undefined;
+}
+
+function launchTargetRefusal(invocation: LaunchInvocation, uid: number): string | undefined {
+  switch (invocation.kind) {
+    case 'binary':
+      return undefined;
+    case 'appImage':
+      return appImageRefusal(invocation.appImage, uid);
+    default:
+      return invocation satisfies never;
+  }
+}
+
+function preferredOnPathBinDir(home: string, currentPath: string, uid: number): string | undefined {
   for (const rel of PREFERRED_BIN_DIRS) {
     const dir = path.join(home, rel);
-    if (onPath(dir, currentPath) && isSafeReuseDir(dir, home)) return dir;
+    if (onPath(dir, currentPath) && isSafeReuseDir(dir, home, uid)) return dir;
   }
   return undefined;
 }
@@ -150,7 +185,6 @@ function onPath(binDir: string, currentPath: string): boolean {
   return currentPath.split(path.delimiter).includes(binDir);
 }
 
-
 function reconcileOrphanBlocks(target: InstallTarget): void {
   const writeTargets = new Set(target.profiles);
   for (const profile of target.reconcileProfiles ?? []) {
@@ -165,21 +199,18 @@ function reconcileOrphanBlocks(target: InstallTarget): void {
   }
 }
 
-/** The cli:install handler (§6 / §23.4): reject anything that is not a valid live-session request
- *  before any environment or filesystem work, else install onto PATH. `gatherRuntime` is consulted
- *  only on the accepted path, so a rejected request produces no install side effects. */
 export function handleCliInstall(m: unknown, gatherRuntime: () => RuntimeInfo): CliInstallResult {
   if (!isValidCliInstall(m)) return { ok: false, error: 'invalid install request' };
   return installCliShim(gatherRuntime());
 }
 
-/** Install the launcher for `runtime` onto PATH, idempotently reconciling to the current build, and
- *  report whether it is now runnable from a new shell (§23.4 / #25). */
 export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
+  const refusal = launchTargetRefusal(runtime.invocation, runtime.uid);
+  if (refusal) return { ok: false, error: refusal };
   const existingProfiles = PROFILE_CANDIDATES.map((n) => path.join(runtime.home, n)).filter((p) =>
     fs.existsSync(p),
   );
-  const preferred = preferredOnPathBinDir(runtime.home, runtime.currentPath);
+  const preferred = preferredOnPathBinDir(runtime.home, runtime.currentPath, runtime.uid);
   if (preferred) {
     const result = performInstall({
       binDir: preferred,
@@ -200,9 +231,7 @@ function performInstall(target: InstallTarget): CliInstallResult {
   try {
     if (target.ownsBinDir) {
       fs.mkdirSync(target.binDir, { recursive: true });
-      // Owner-only on the on-PATH executable dir AND its app-owned parent: a world-traversable/writable
-      // ancestor lets another user rename bin and substitute a hostile launcher (CWE-276/426). 0o700 also
-      // matches auditRecorder's hardening of the shared ~/.agent-terminal root rather than re-widening it.
+      // CWE-276/426. The parent is ~/.agent-terminal, which also holds the audit logs at 0o700; anything wider re-opens them.
       fs.chmodSync(path.dirname(target.binDir), 0o700);
       fs.chmodSync(target.binDir, 0o700);
     }

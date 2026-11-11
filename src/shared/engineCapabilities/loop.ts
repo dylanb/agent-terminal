@@ -39,7 +39,7 @@ export const PROMOTE_KIND = 'promote' satisfies ActedSideEffectKind;
 /** The side-effect kind the loader refuses: a program is declared once, on the top-level `exec` key (CWE-829). */
 export const EXEC_SIDE_EFFECT_KIND = 'exec';
 
-export const ACTED_GH_ACTIONS = ['mark-ready', 'update-issue-body', 'publish-pr-body'] as const;
+export const ACTED_GH_ACTIONS = ['mark-ready', 'update-issue-body', 'publish-pr-body', 'publish-pr-review'] as const;
 export type ActedGhAction = (typeof ACTED_GH_ACTIONS)[number];
 
 /** The agent caps a goal at 4000 characters, and the engine's framing around the condition must fit beside it. */
@@ -173,6 +173,7 @@ const SIDE_EFFECT_KIND_DOCS: Record<ActedSideEffectKind, Explanation> = {
 };
 
 const GH_ACTION_DOCS: Record<ActedGhAction, Explanation> = {
+  'publish-pr-review': { does: 'Publishes the adopted pull request review.', when: 'Use on an adopted pull request run with its review artifact.' },
   'mark-ready': {
     does: 'Marks the run’s draft pull request ready for review. With no pull request it is skipped with a notice.',
     when: 'Choose it on the last loop of a flow, when the work is ready for people to review.',

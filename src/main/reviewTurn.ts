@@ -15,7 +15,7 @@ import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/ph
 import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
 import { PRE_REVIEW_BOUNDARY, type PolishPolicy } from '../shared/engineCapabilities/loop';
@@ -30,6 +30,7 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
 /** A reviewer persona and the confined path of its charter (§27.4). The one shape the roster source, the
  *  prompt request, and the engine's in-flight review turn all share, so the three cannot drift. */
 export interface RosterEntry {
+  flow?: string;
   loop: string;
   persona: string;
   charter: string;
@@ -39,12 +40,12 @@ export interface RosterEntry {
 /** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
  *  subset selection is the consolidator's job (N4). */
 export function reviewRoster(def: LoopDefV2): RosterEntry[] {
-  return def.reviewers.map((r) => ({ loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
+  return def.reviewers.map((r) => ({ ...(def.flow !== undefined ? { flow: def.flow } : {}), loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
 }
 
 /** §27.4 */
-export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'loop' | 'persona'>): string {
-  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona) : reviewerAgentName(r.loop, r.persona);
+export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'flow' | 'loop' | 'persona'>): string {
+  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona, r.flow) : reviewerAgentName(r.loop, r.persona, r.flow);
 }
 
 /** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
@@ -91,6 +92,8 @@ export interface ReviewAndFixPromptReq {
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
    *  or a phase-result file (the reviewers then pull the diff themselves). */
   subjectRel?: string;
@@ -167,22 +170,25 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
+export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'adoption' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
 
 /** §27.4 */
 export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   const lines: string[] = [];
-  lines.push(
-    req.ticket !== undefined
-      ? `Review the work for GitHub issue #${req.ticket}. Read the issue and its comments with \`gh issue view ${req.ticket} --comments\`.`
-      : "Review this loop's work.",
-  );
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption).slice(1));
+  else {
+    lines.push(
+      req.ticket !== undefined
+        ? `Review the work for GitHub issue #${req.ticket}. Read the issue and its comments with \`gh issue view ${req.ticket} --comments\`.`
+        : "Review this loop's work.",
+    );
+  }
   if (req.subjectRel !== undefined) {
     lines.push(
       `Grade ${req.subjectRel}, the artifact this loop produced, not the issue body on GitHub. The issue is the`,
       'intent the artifact must honour, and it can still hold text the artifact has since fixed.',
     );
-  } else {
+  } else if (req.adoption === undefined) {
     lines.push(
       "The code and tests under review are this branch's change: its commits since it left the repository's",
       'default branch, plus any uncommitted changes. See them with git: `git log`, `git status`, and `git diff HEAD`.',
@@ -195,7 +201,7 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
     lines.push('Grade it against these documents, beside the ticket:', ...req.carried.map((i) => `  - ${i.id}: ${i.rel}`));
   }
   lines.push(
-    ...flowDocumentLines('described-elsewhere').slice(1),
+    ...(req.adoption === undefined ? flowDocumentLines('described-elsewhere').slice(1) : []),
     'Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only',
     'the targeted tests that checking a specific finding needs.',
     'Do not change any file: report your findings, and the fixer makes every change.',
@@ -336,7 +342,8 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     );
   }
   // §19.1 — bind the turn to the engine-resolved ticket it hands each reviewer (one shared source).
-  if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
+  if (req.adoption !== undefined) lines.push(...adoptedRunLines(req.adoption));
+  else if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   if (req.subjectRel !== undefined) {
     lines.push(
       '',
@@ -357,7 +364,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       `\`${NEEDS_HUMAN_DISPOSITION}\` (a different mechanism or a narrower criterion), never another patch.`,
     );
   }
-  lines.push(...flowDocumentLines());
+  if (req.adoption === undefined) lines.push(...flowDocumentLines());
   lines.push(...fixCriterionLines(), ...designCheckLines());
   if (req.polish === 'defer') lines.push(...polishDeferLines());
   lines.push(...rosterLines(req.roster, req.agentKind));

@@ -38,7 +38,7 @@ export function createApproveDriver(opts: {
   const deps: AppGateDecisionDeps = {
     readRunState: () => ({ loop: loopOf(gateStep), step: gateStep, turnKey: `work-${gateStep}`, status: 'complete', round: 1, verdict: 'clean' }),
     resolveDef: (_repoDir, loopName) => resolveLoopDefV2(loopName, loops),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'nothing-to-commit' }),
     runPushSideEffect: async () => {},

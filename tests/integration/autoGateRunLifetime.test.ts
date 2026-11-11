@@ -38,6 +38,7 @@ import { createGitRepoFixture } from '../helpers/gitRepo';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { createVirtualClock } from '../helpers/virtualClock';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // §27.9.1 N9b.2, N9b.5(b), N9b.8 — #137 plan rows "Terminate ends the engine-held run", "Restart and Undo
@@ -182,7 +183,7 @@ function makeRig(opts: RigOpts = {}): Rig {
 
   const clock = createVirtualClock(0);
   const recorder = createAuditRecorder({ root: auditRoot, now: () => new Date(T0 + 1_000), flowName: () => null });
-  const resolve = createRunResolver(globalDir);
+  const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
   const held = new Map<string, StartRun>();
   const toRun = (r: { load: ReturnType<typeof resolve>['load']; binding?: DispositionRead }): StartRun | null =>
     r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
@@ -194,7 +195,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const gate = createAutoGate({
     audit: (dir, cmd, exit) => recorder.recordCommand(dir, 'gate', cmd, exit),
     resolveDef: (dir) => plantedResolution(dir),
-    currentRun: composeCurrentRun(globalDir),
+    currentRun: composeCurrentRun(globalDir, repoOnlyDefTiers()),
     runInProgressAt: opts.runInProgressAtThrows
       ? () => {
           throw new Error('flow-state could not be read');
@@ -220,7 +221,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const approveDepsFor = (): AppGateDecisionDeps => ({
     readRunState: (dir) => readAppLoopState(dir),
     resolveDef: (dir, name) => resolveLoopDefV2(name, ctxFor(dir)),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' }),
     runPushSideEffect: async () => {},

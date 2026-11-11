@@ -76,7 +76,10 @@
       <!-- FULL-BLEED MAIN -->
       <main class="main">
         <!-- §22.3.1 -->
-        <div id="status-bar" class="status-bar"></div>
+        <div class="status-bar">
+          <span id="setup-needed" class="sb-setup-slot"></span>
+          <div id="status-bar" class="sb-body"></div>
+        </div>
         <div class="viewport">
           <!-- VIEW 1 — Terminal (real xterm + selection, §7) -->
           <div data-viewpane="1" class="on">
@@ -136,6 +139,8 @@
     <div id="flow-confirm-host"></div>
     <!-- §27.13: the held run's ticket-and-PR dialog, raised by the app on its own. -->
     <div id="pickup-confirm-modal-host"></div>
+    <div id="adopt-ticket-choice-modal-host"></div>
+    <div id="setup-check-host"></div>
     <!-- Bootstrap-failure error-alert host (§27.10): createErrorDialog renders the blocking pickup-failure
          alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
     <div id="flow-error-host"></div>

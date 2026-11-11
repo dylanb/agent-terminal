@@ -1,9 +1,11 @@
+import { writeExampleFlow } from './fakeTools';
+import { reviewerAgentFor } from '../../src/main/reviewTurn';
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { stopApp } from './stopApp';
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -12,6 +14,8 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
+import { PS_ARGS } from '../../src/main/waitingLookup';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
@@ -584,6 +588,59 @@ test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async
   expect(app.windows()).toHaveLength(0);
 });
 
+test('quitting while the shell runs waits for the shell to finish exiting, and the app exits cleanly (§5)', { tag: '@ownapp' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-quit-'));
+  const marker = join(dir, 'shell-exited');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_QUIT_GRACE_MS: '600000' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`trap 'sleep 2; : > "${marker}"' EXIT; echo "trap-""armed"`);
+  await expect(termRows()).toContainText('trap-armed');
+  const proc = app.process();
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
+    proc.once('exit', (code, signal) => done({ code, signal }));
+  });
+  await app.close();
+  expect.soft(existsSync(marker)).toBe(true);
+  expect.soft(await exited).toEqual({ code: 0, signal: null });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('quitting kills a shell that ignores the hang-up once the quit grace runs out, and the app exits cleanly (§5)', { tag: '@ownapp' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-quit-kill-'));
+  const pidFile = join(dir, 'shell-pid');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_QUIT_GRACE_MS: '200' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`echo $$ > "${pidFile}"; trap '' HUP; exec sleep 600`);
+  await expect.poll(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '').toBe(true);
+  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  const proc = app.process();
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((done) => {
+    proc.once('exit', (code, signal) => done({ code, signal }));
+  });
+  const shellAlive = (): boolean => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  // A shell that survives the quit keeps the app from exiting and close() from resolving, so the shell's end
+  // is checked first and close() is settled after it.
+  const closed = app.close();
+  try {
+    await expect.poll(shellAlive, { timeout: 30_000 }).toBe(false);
+    expect.soft(await exited).toEqual({ code: 0, signal: null });
+  } finally {
+    if (shellAlive()) process.kill(pid, 'SIGKILL');
+    await closed;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an immediate shell startup failure keeps the app open (§5 grace exception)', { tag: '@ownapp' }, async () => {
   // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
   // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
@@ -639,6 +696,31 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
     w.setSize(width + 120, height + 80);
   });
   await expect.poll(() => app.evaluate(({ app: a }) => a.isReady()), { timeout: 8000 }).toBe(true);
+});
+
+test('a kept-open window stops reading the process table once its shell exits (#319)', { tag: '@ownapp' }, async () => {
+  const shimDir = mkdtempSync(join(tmpdir(), 'waiting-ps-'));
+  const log = join(shimDir, 'lookups');
+  const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(shimDir, 'ps'), `#!/bin/sh\n[ "$*" = ${shellQuote(PS_ARGS.join(' '))} ] && echo lookup >> ${shellQuote(log)}\nexec ${shellQuote(realPs)} "$@"\n`);
+  chmodSync(join(shimDir, 'ps'), 0o755);
+  const lookups = (): number => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  try {
+    app = await electron.launch({
+      args: launchArgs(),
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+    });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await expect.poll(lookups, { timeout: 20_000 }).toBeGreaterThan(0);
+    await typeCommand('exit');
+    await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+    const atExit = lookups();
+    const closed = await app.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false);
+    expect({ closed, lookupsAfterExit: lookups() - atExit }).toEqual({ closed: false, lookupsAfterExit: 0 });
+  } finally {
+    rmSync(shimDir, { recursive: true, force: true });
+  }
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -1565,9 +1647,13 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted — survives a renderer reload (§20.2).
+  // Persisted — survives a renderer reload (§20.2). A chord pressed before the reloaded renderer installs its
+  // key handler is dropped, so the press repeats until the view it selects is showing.
   await page.reload();
-  await page.keyboard.press('Control+2');
+  await expect(async () => {
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect.poll(() => treeW()).toBe('318px');
 
   // Reset to default so the persisted width doesn't leak into later runs.
@@ -2412,7 +2498,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'groom-goal-loop', 'groom-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'plan-goal-loop', 'plan-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
@@ -2421,18 +2507,21 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
   // §27.4 — each bundled reviewer landed where Claude Code discovers a sub-agent, its charter as its instructions.
-  const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
-  expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
+  const reviewer = { flow: 'feature-dev-v3', loop: 'green-loop', persona: 'impl-review-principal' };
+  const claudeReviewer = reviewerAgentFor('claude-code', reviewer);
+  const codexReviewer = reviewerAgentFor('codex', reviewer);
+  const reviewerAgent = readIf(join(configDir, 'agents', `${claudeReviewer}.md`));
+  expect(reviewerAgent).toContain(`name: ${claudeReviewer}`);
   expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
   // §18.1 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
   const codexLoopRel = join('loops-v2', 'feature-dev-v3', 'integration-slice-loop', 'integration-slice-loop.yaml');
   expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
   await expect(installReportGroup('codexLoops')).toContainText('integration-slice-loop.yaml');
   // Each bundled reviewer landed as a Codex custom agent, its charter as its instructions.
-  const codexAgent = readIf(join(codexHome, 'agents', 'green_loop__impl_review_principal.toml'));
-  expect(codexAgent).toContain('name = "green_loop__impl_review_principal"');
+  const codexAgent = readIf(join(codexHome, 'agents', `${codexReviewer}.toml`));
+  expect(codexAgent).toContain(`name = "${codexReviewer}"`);
   expect(codexAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
-  await expect(installReportGroup('codexAgents')).toContainText('green_loop__impl_review_principal.toml');
+  await expect(installReportGroup('codexAgents')).toContainText(`${codexReviewer}.toml`);
   // The skill telling Codex where the loops are and how to run their reviewers landed too.
   const skillRel = join('agent-terminal-loops', 'SKILL.md');
   expect(readIf(join(codexHome, 'skills', skillRel))).toBe(readFileSync(join('example', 'codex-skills', skillRel), 'utf8'));
@@ -2715,7 +2804,7 @@ test('the shipped-flow migration is confirm-first and a decline preserves the ex
   expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
   const installedFlow = readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8');
   expect(installedFlow).not.toBe(customFlow);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2842,22 +2931,23 @@ test('after install, the active step offers its bundled todo template as the pic
 
   writeFileSync(
     join(home, '.agent-terminal', 'flow.yaml'),
-    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: ticket-grooming\n',
+    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: polish\n',
   );
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom-ticket active (todo_template: ticket-grooming)
+  await flowControl().click(); // Start → groom-ticket active (todo_template: polish)
 
   await openQuickSend('todo');
   const toggle = page.locator('#todo-list .tmpl-toggle');
   await expect(toggle).toBeVisible({ timeout: 10_000 });
   await toggle.click();
-  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('ticket-grooming'); // the step's bundled default
+  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('polish'); // the step's bundled default
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0);
   await page.locator('#todo-list .tmpl-add').click();
   // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
-  await expect(page.locator('.todo').filter({ hasText: 'run grooming skill' })).not.toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('#todo-list .todo')).not.toHaveCount(0, { timeout: 10_000 });
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2903,7 +2993,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     `name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
   );
@@ -2922,7 +3012,7 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     `name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
   );
@@ -3050,7 +3140,7 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
   cpSync(exampleConfigDir, cfg, { recursive: true });
-  const missingAgent = `plan-loop--${PLAN_V2_ROSTER[1]}`;
+  const missingAgent = reviewerAgentFor('claude-code', { flow: 'v2-work', loop: 'plan-loop', persona: PLAN_V2_ROSTER[1] });
   rmSync(join(cfg, 'agents', `${missingAgent}.md`), { force: true });
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noagent-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
@@ -3186,7 +3276,7 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
   expect(injectedLog).toContain(`no record for ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
   expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
   // §27.4 — each reviewer is spawned as the sub-agent installed for it, never told to go and read a charter.
-  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: plan-loop--${persona}`);
+  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: ${reviewerAgentFor('claude-code', { flow: 'v2-work', loop: 'plan-loop', persona })}`);
   expect(injectedLog).not.toMatch(/charter\/[\w-]+\.md/);
 
   // The agent ran the checker the prompt handed it: it passed the repaired report.
@@ -3208,7 +3298,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
   );
@@ -3429,7 +3519,7 @@ test('a run rebound after a relaunch, onto a flow that names no PR, is held unti
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n  - id: done\n    kind: manual\n',
   );
@@ -3475,7 +3565,8 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     await loopReadout().click({ timeout: 10_000 });
     await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
     await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
-    await page.evaluate((repoKey) => window.flow.advance(repoKey, 'done'), repo);
+    await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+    await flowControl().click();
     await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
     rmSync(saved);
@@ -3532,7 +3623,7 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-chain\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n' +
@@ -3550,7 +3641,7 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-bootstrap\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -3850,7 +3941,7 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   const beforeRestartProbes = (readGhLog(logFile).match(/^git status --porcelain$/gm) ?? []).length;
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: v2-bootstrap-restart\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
@@ -3879,7 +3970,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const other = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-refs-other-'));
   mkdirSync(join(other, '.git'), { recursive: true });
   mkdirSync(join(other, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(other, '.agent-terminal', 'flow.yaml'),
     'name: other\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n',
   );
@@ -3893,12 +3984,13 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   );
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n',
+    config,
   );
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-resume-refs-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
@@ -3964,7 +4056,7 @@ test('a pickup still in flight when its held run is resumed onto another flow is
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-pickup-home-'));
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(resumeEntry, FLOW_DEF_FILE),
     'name: resume-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4092,7 +4184,7 @@ test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branc
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-a\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4153,7 +4245,7 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-f\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
@@ -4253,14 +4345,14 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
 test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (AC 4)', { tag: '@ownapp' }, async () => {
   const legacyRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-legacy-'));
   mkdirSync(join(legacyRepo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(legacyRepo, '.agent-terminal', 'flow.yaml'),
     'name: legacy-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: legacy\n',
   );
   writeFileSync(join(legacyRepo, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: not_started\n');
   const badRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-bad-'));
   mkdirSync(join(badRepo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(badRepo, '.agent-terminal', 'flow.yaml'),
     'name: bad-ns-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: aap\n',
   );
@@ -4923,7 +5015,7 @@ test('a pickup recorded by an earlier run does not hold a newly started run to t
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: v2-stale-pickup\nsteps:\n' +
       '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n',
@@ -5773,7 +5865,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
@@ -6893,7 +6985,7 @@ function seedFlowRepoBase(
     mkdirSync(join(dir, dirname(opts.seedTestFile)), { recursive: true });
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
-  if (opts.flowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  if (opts.flowYaml !== undefined) writeExampleFlow(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
@@ -7450,12 +7542,14 @@ async function passAutoGate(home: string, repo: string, step: string, consumes?:
       .toMatch(new RegExp(`^step: ${step}$[\\s\\S]*chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`, 'm'));
   }
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: AUTO_GATE_PASS_MS }).not.toContain(`step: ${step}\n`);
-  const deciders = auditRunFiles(home, repo).flatMap((f) =>
-    stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
-      e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
-    ),
-  );
-  expect(deciders, step).toEqual(['engine']);
+  // The audit recorder writes off the flow path, so the decision can land after the flow has moved on.
+  const deciders = () =>
+    auditRunFiles(home, repo).flatMap((f) =>
+      stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
+        e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
+      ),
+    );
+  await expect.poll(deciders, { message: step, timeout: AUTO_GATE_PASS_MS }).toEqual(['engine']);
 }
 
 /** Approve `human` step `step` once its gate is clean, and wait for the flow to leave it. */
@@ -7828,7 +7922,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   mkdirSync(join(dir, '.git'), { recursive: true });
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
-  writeFileSync(
+  writeExampleFlow(
     join(at, 'flow.yaml'),
     'name: epic-no-ticket\nsteps:\n  - id: plan-approve\n    kind: loop\n    loop: plan-approve-loop\n    loop_namespace: app\n  - id: done\n    kind: manual\n',
   );
@@ -8093,7 +8187,7 @@ for (const integration of ['1', '0']) test(`§27.4 — under Codex, detected fro
   await flowControl().click();
   await passAutoGate(home, repo, 'groom-intent');
 
-  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toMatch(/agent: [a-z0-9_]+__[a-z0-9_]+/);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toMatch(/agent: [a-z0-9_]+/);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).not.toContain('subagent_type');
 
   await app.close();
