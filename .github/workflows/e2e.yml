@@ -77,6 +77,8 @@ jobs:
         env:
           SHARD: ${{ matrix.shardIndex }}/${{ strategy.job-total }}
         run: |
+          sudo sysctl -w kernel.core_pattern=core
+          ulimit -c 0
           # Xvfb stderr is only the display server's own log (non-fatal xkbcomp "Could not resolve
           # keysym" noise from an xkb-data older than Chromium's keymap); test reporting comes from
           # Playwright, so discard it.
