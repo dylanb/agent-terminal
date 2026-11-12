@@ -100,6 +100,7 @@ import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { createAgentQuestion } from './agentQuestion';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { sliceCountToSource } from '../shared/slicePlan';
+import { undecidedAdvanceNotice } from '../shared/flowBranch';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -136,7 +137,7 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isGateAccepted, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
@@ -146,7 +147,8 @@ import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
-import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
+import { runAppGateDecision as runAppGateDecisionImpl, recordOnFlow, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
+import { clearDecisionFile, readFlowStepDecision } from './stepDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
@@ -165,6 +167,7 @@ import {
   composeRecordFlowTransition,
   composeRunInProgressAt,
   composeStartTransition,
+  composeStepDecisionRead,
 } from './autoGateComposition';
 import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
 import {
@@ -284,6 +287,8 @@ async function createWindow(): Promise<void> {
   const flowRequestError = (): FlowStateView => ({
     stepName: '',
     steps: [],
+    stepRuns: [],
+    decisions: {},
     position: 0,
     total: 0,
     status: 'error',
@@ -464,6 +469,7 @@ async function createWindow(): Promise<void> {
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
   const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let nextAutoGateTimer = 0;
+  const observedResolveDef = composeObservedResolveDef(appDefContext);
   const autoGate = createAutoGate({
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     resolveDef: (repoDir, loop) => defResolutionOf(observedResolveDef(repoDir, loop)),
@@ -491,8 +497,8 @@ async function createWindow(): Promise<void> {
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
     askAgentWhy: (question) => agentQuestion.ask(question),
     withdrawAgentQuestion: () => agentQuestion.withdraw(),
+    readStepDecision: composeStepDecisionRead(observedResolveDef),
   });
-  const observedResolveDef = composeObservedResolveDef(appDefContext);
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
@@ -528,6 +534,11 @@ async function createWindow(): Promise<void> {
     },
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
     reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
+    clearDecision: clearDecisionFile,
+    stepDecides: (repoDir, stepId) => {
+      const load = resolveActiveDefinition(repoDir);
+      return load.ok ? (load.definition.steps.find((st) => st.id === stepId)?.decides ?? null) : null;
+    },
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };
@@ -743,6 +754,7 @@ async function createWindow(): Promise<void> {
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
       provideAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor, (n) => observedResolveDef(repoKey, n)),
+    gateAccepted: isGateAccepted,
   });
 
   const tokenMeter = createTokenMeter({
@@ -814,7 +826,7 @@ async function createWindow(): Promise<void> {
       if (step.kind !== 'loop' || step.loop === undefined) return null;
       const resolved = observedResolveDef(repoKey, step.loop);
       return resolved.ok ? resolved.def.pickup : null;
-    });
+    }, view.stepRuns);
     const held = awaitingPickupConfirm({
       run,
       pickupInFlight: pickupInFlight?.repoKey === repoKey,
@@ -968,6 +980,7 @@ async function createWindow(): Promise<void> {
     globalDir: flowGlobalDir,
     loadDefinition: repoKey => resolveRun(repoKey),
     readAppLoopView: (repoKey, name) => observeAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor),
+    gateAccepted: isGateAccepted,
   });
   const controllerStatus = createControllerStatus({
     current: () => {
@@ -1181,6 +1194,9 @@ async function createWindow(): Promise<void> {
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
+    readStepDecision: (repoDir, step, def) => readFlowStepDecision(resolveActiveDefinition(repoDir), step, def),
+    recordDecision: recordOnFlow(flow),
+    auditDecision: (repoDir, step, value) => audit.recordDecision(repoDir, step, value),
     // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, the last
     // one winning: the polished plan, then any RED that split its own slice. resolveInputs sets the input WITHOUT
     // re-entering the step (re-entering a planning step here would restart its loop).
@@ -1495,6 +1511,8 @@ async function createWindow(): Promise<void> {
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const held = pickupHoldRefusal(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
+        const awaits = flow.pendingDecision(m.repoKey);
+        if (awaits !== null) return trackLoop(m.repoKey, { ...pre, notice: undecidedAdvanceNotice(awaits) });
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = humanRunners.advance(m.repoKey, m.step);
         if (view === null) {

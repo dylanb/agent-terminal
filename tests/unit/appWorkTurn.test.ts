@@ -450,3 +450,29 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
     expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
   });
 });
+
+describe('composeAppWorkPrompt — a deciding step is told where its decision goes', () => {
+  const base = {
+    recipeBody: '# work turn\nTriage the ticket.',
+    turnKey: 'work-triage',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: null,
+  };
+  const decision = { rel: '.agent-terminal/loop/artifacts/d.json', values: ['defect', 'working-as-designed'], checkCommand: 'CHECK-CMD' };
+
+  it("a deciding turn's prompt names its decision file, each value and the check command", () => {
+    const prompt = composeAppWorkPrompt({ ...base, decision });
+    expect(prompt).toContain(decision.rel);
+    expect(prompt).toContain('defect');
+    expect(prompt).toContain('working-as-designed');
+    expect(prompt).toContain('CHECK-CMD');
+  });
+
+  it('a turn with no decision names no decision check', () => {
+    const without = composeAppWorkPrompt(base);
+    expect(without).not.toContain(decision.rel);
+    expect(without).not.toContain('CHECK-CMD');
+    expect(without).not.toContain('defect');
+    expect(without).not.toContain('working-as-designed');
+  });
+});

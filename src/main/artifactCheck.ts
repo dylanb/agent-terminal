@@ -11,15 +11,18 @@ import { goalLegEnd } from '../shared/goalProgress';
 import { phaseOutputRel, phaseResultEnd, type PhaseResultWant } from '../shared/phaseResult';
 import { isPhaseOutcome } from '../shared/phaseOutcome';
 import { isBuildOutcome, type BuildOutcome } from '../shared/buildOutcome';
+import { decisionProblemText } from '../shared/flowBranch';
+import { readDecisionFile } from './stepDecision';
 
 /** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, a
- *  goal session's progress file against the leg it is on (§27.3), or a phase result against what completes its
- *  phase (§28.5.3). */
+ *  goal session's progress file against the leg it is on (§27.3), a phase result against what completes its
+ *  phase (§28.5.3), or a decision file against the values its step declares (§18.2). */
 export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
   | { kind: 'verdict'; rel: string; catalog: string[] }
   | { kind: 'progress'; rel: string; leg: number; legs: boolean }
-  | ({ kind: 'result'; rel: string } & PhaseResultWant);
+  | ({ kind: 'result'; rel: string } & PhaseResultWant)
+  | { kind: 'decision'; rel: string; values: string[] };
 
 const IN_LEGS = 'legs';
 const ONE_LEG = 'one-leg';
@@ -60,6 +63,8 @@ function checkArgv(check: ArtifactCheck): string[] {
       return ['progress', check.rel, String(check.leg), check.legs ? IN_LEGS : ONE_LEG];
     case 'result':
       return ['result', check.rel, check.outcome, check.build ?? NO_BUILD, ...(check.acceptsVerificationOnly ? [VERIFICATION_ONLY] : [])];
+    case 'decision':
+      return ['decision', check.rel, csv(check.values)];
   }
 }
 
@@ -88,9 +93,10 @@ export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: Artif
   return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
 }
 
-const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}]\n`;
+const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}] | decision <file> <values,...>\n`;
 
-/** Run the check `argv` describes against the file `read` returns (null = missing). Exit 0 prints
+/** Run the check `argv` describes against the file `read` returns (null = missing); a decision file is read
+ *  through the approve's own reader instead, so the check and the approve cannot disagree. Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
 export function runArtifactCheck(argv: string[], read: (rel: string) => string | null): { exitCode: 0 | 1 | 2; output: string } {
   const [kind, rel, ...rest] = argv;
@@ -111,6 +117,9 @@ export function runArtifactCheck(argv: string[], read: (rel: string) => string |
     const found = content === null ? [`${rel} does not exist`] : resultProblems(rel, content, read(phaseOutputRel(rel)), rest);
     if (found === null) return { exitCode: 2, output: USAGE };
     problems = found;
+  } else if (kind === 'decision' && rel !== undefined && rest.length === 1) {
+    const parsed = readDecisionFile(rel, fromCsv(rest[0]));
+    problems = parsed.ok ? [] : [decisionProblemText(parsed.problem)];
   } else {
     return { exitCode: 2, output: USAGE };
   }

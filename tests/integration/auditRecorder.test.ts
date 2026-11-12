@@ -287,6 +287,20 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(eventsIn(runFiles()[0])).toEqual(['flow.started', 'input.resolved', 'ticket.assoc']);
   });
 
+  it('records a step\'s decision to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordDecision(repo, 'plan', 'b');
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'decision']);
+    expect(events[1]).toMatchObject({ type: 'decision', step: 'plan', value: 'b' });
+  });
+
+  it('records nothing for a decision when no run is open', () => {
+    recorder().recordDecision(repo, 'plan', 'b');
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
   it('records nothing for resolved inputs when no run is open', () => {
     recorder().recordInputs(repo, { ticket: '176' }, { ticket: 'github-ticket' });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);

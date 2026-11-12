@@ -84,14 +84,14 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
         await expect.soft(controller.page.getByRole('status')).not.toContainText(/Human needed|stop for a human/);
       } else {
         await approve.click();
-        await expect(terminal.page.locator('#flow-strip')).toContainText('verify');
+        await expect(terminal.page.locator('#flow-strip')).toContainText('Verify');
         await expect.poll(async () => (await terminal.page.evaluate(directory => window.flow.state(directory), repo)).stepName).toBe('verify');
         if (outage === 'crash') {
           h.fixture.env.APP_HOME_DIR = controllerHome;
           controller = await h.launch(controllerTarget, h.fixture.nonGit);
           h.fixture.env.APP_HOME_DIR = h.fixture.home;
         }
-        const current = await observeStatus(controller.page, repo, { step: /verify/, flow: /recovery-flow/ }, { start: 'registration', holdMs: ABSENCE_WINDOW_MS });
+        const current = await observeStatus(controller.page, repo, { step: /Verify/, flow: /recovery-flow/ }, { start: 'registration', holdMs: ABSENCE_WINDOW_MS });
         online = true;
         const observed = await current();
         expect.soft(observed.shown).toEqual({ step: true, flow: true });
@@ -144,7 +144,7 @@ test('repeated recovery keeps one conflict after work context changes and preser
         await expect(terminals[0].page.locator('#flow-strip .flow-control')).toHaveText('Start');
       }
       await terminals[0].page.locator('#flow-strip .flow-control').click();
-      await expect(terminals[0].page.locator('#flow-strip')).toContainText(round === 0 ? 'first-1' : 'next-1');
+      await expect(terminals[0].page.locator('#flow-strip')).toContainText(round === 0 ? 'First 1' : 'Next 1');
       for (const [index, terminal] of terminals.entries()) {
         await terminal.page.locator('.xterm-screen').click();
         await terminal.page.keyboard.type(`printf 'RECOVER_${round}_%s\\n' "$RECOVERY_PEER"`);
@@ -155,7 +155,7 @@ test('repeated recovery keeps one conflict after work context changes and preser
       await waitForConnections(controller.page, a, 2);
       await expect.soft(cardLocator(controller.page, a)).toHaveCount(1);
       const panes = cardLocator(controller.page, a);
-      expect.soft((await panes.allTextContents()).join(' ')).not.toMatch(/recovery-[01]|first-[01]|next-[01]/);
+      expect.soft((await panes.allTextContents()).join(' ')).not.toMatch(/recovery-[01]|First [01]|Next [01]/);
       expect.soft((await panes.allTextContents()).join(' ')).toContain('Duplicate directory');
       expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       await expect.soft(cardLocator(controller.page, b)).toHaveCount(0);

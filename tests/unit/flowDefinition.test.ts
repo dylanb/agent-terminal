@@ -269,6 +269,104 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
     expect(loadFlowDefinition(dir, null).ok).toBe(false); // missing back_to
   });
+
+  describe('branch conditions', () => {
+    const deciding = '  - id: d\n    kind: loop\n    loop: l\n    decides: [a, b]\n';
+    const rejects = (stepsYaml: string, error: string): void => {
+      writeFlow(`name: f\nsteps:\n${stepsYaml}`);
+      expect(loadFlowDefinition(dir, null)).toEqual({ ok: false, error });
+    };
+
+    it('loads decides, halt_on_decision and when onto the parsed steps', () => {
+      writeFlow(
+        'name: f\nsteps:\n' +
+          '  - id: d\n    kind: loop\n    loop: l\n    gate_authority: auto\n    decides: [a, b]\n    halt_on_decision: [b]\n' +
+          '  - id: x\n    kind: manual\n    when: { d: a }\n' +
+          '  - id: z\n    kind: manual\n',
+      );
+      const load = loadFlowDefinition(dir, null);
+      expect(load.ok).toBe(true);
+      if (load.ok) {
+        const [d, x, z] = load.definition.steps;
+        expect(d.decides).toEqual(['a', 'b']);
+        expect(d.haltOnDecision).toEqual(['b']);
+        expect(x.when).toEqual({ step: 'd', value: 'a' });
+        expect([z.decides, z.haltOnDecision, z.when]).toEqual([undefined, undefined, undefined]);
+      }
+    });
+
+    it('rejects decides on a step that is not a loop', () => {
+      rejects('  - id: x\n    kind: manual\n    decides: [a, b]\n', 'flow.yaml step "x" "decides" is only valid on a loop step');
+    });
+
+    it('rejects decides that is empty, repeated or names an unsafe value', () => {
+      const error = 'flow.yaml step "x" decides must be a non-empty list of unique names';
+      for (const decides of ['[]', '[a, a]', '["../a"]', 'a', '[1]']) {
+        rejects(`  - id: x\n    kind: loop\n    loop: l\n    decides: ${decides}\n`, error);
+      }
+    });
+
+    it('rejects a halt_on_decision value that is not in decides', () => {
+      rejects(
+        '  - id: x\n    kind: loop\n    loop: l\n    decides: [a, b]\n    halt_on_decision: [a, c]\n',
+        'flow.yaml step "x" halt_on_decision value "c" is not in decides',
+      );
+    });
+
+    it('rejects a halt_on_decision that is not a list', () => {
+      rejects(
+        '  - id: x\n    kind: loop\n    loop: l\n    decides: [a, b]\n    halt_on_decision: b\n',
+        'flow.yaml step "x" halt_on_decision must be a list of values from decides',
+      );
+    });
+
+    it('rejects a when that is not a one-key mapping', () => {
+      const error = 'flow.yaml step "x" when must name exactly one earlier step';
+      for (const when of ['d', '{}', '{ d: a, e: b }', '{ d: [a] }']) {
+        rejects(`${deciding}  - id: x\n    kind: manual\n    when: ${when}\n`, error);
+      }
+    });
+
+    it('rejects a when that names a later step, an unknown step or a step that does not decide', () => {
+      const error = 'flow.yaml step "x" when step "d" is not an earlier step that decides';
+      rejects(`  - id: x\n    kind: manual\n    when: { d: a }\n${deciding}`, error);
+      rejects('  - id: x\n    kind: manual\n    when: { d: a }\n', error);
+      rejects('  - id: d\n    kind: loop\n    loop: l\n  - id: x\n    kind: manual\n    when: { d: a }\n', error);
+    });
+
+    it('rejects a when value the named step does not decide', () => {
+      rejects(`${deciding}  - id: x\n    kind: manual\n    when: { d: c }\n`, 'flow.yaml step "x" when value "c" is not one "d" decides');
+    });
+
+    it('rejects a repeat.back_to whose when differs from the repeat step\'s', () => {
+      const error = 'flow.yaml step "x" repeat.back_to "r" does not share this step\'s when';
+      const repeatTo = '    repeat:\n      back_to: r\n      count_input: n\n';
+      rejects(`${deciding}  - id: r\n    kind: manual\n    when: { d: a }\n  - id: x\n    kind: manual\n${repeatTo}`, error);
+      rejects(`${deciding}  - id: r\n    kind: manual\n    when: { d: a }\n  - id: x\n    kind: manual\n    when: { d: b }\n${repeatTo}`, error);
+    });
+
+    it('loads a loop-back that runs entirely inside one branch', () => {
+      writeFlow(
+        'name: f\nsteps:\n' + deciding +
+          '  - id: red\n    kind: manual\n    when: { d: a }\n' +
+          '  - id: refactor\n    kind: manual\n    when: { d: a }\n    repeat:\n      back_to: red\n      count_input: n\n',
+      );
+      const load = loadFlowDefinition(dir, null);
+      expect(load.ok).toBe(true);
+      if (load.ok) {
+        expect(load.definition.steps[2].when).toEqual({ step: 'd', value: 'a' });
+        expect(load.definition.steps[2].repeat).toEqual({ backTo: 'red', countInput: 'n' });
+      }
+    });
+
+    it('rejects halt_on_decision on a step that decides nothing', () => {
+      rejects('  - id: d\n    kind: loop\n    loop: l\n    halt_on_decision: [a]\n', 'flow.yaml step "d" halt_on_decision value "a" is not in decides');
+    });
+
+    it('rejects a step id that repeats an earlier one', () => {
+      rejects('  - id: x\n    kind: manual\n  - id: y\n    kind: manual\n  - id: x\n    kind: manual\n', 'flow.yaml has a duplicate step id "x"');
+    });
+  });
 });
 
 describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
@@ -288,6 +386,24 @@ describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
     const flow = createFlowMachine(okLoad);
     expect(flow.start().status).toBe('in_progress');
     expect(flow.advance().status).toBe('done');
+  });
+
+  it('reports which steps run on the path known so far, with no decision recorded', () => {
+    const flow = createFlowMachine({
+      ok: true,
+      definition: {
+        name: 'f',
+        steps: [
+          { id: 'd', kind: 'loop', loop: 'l', decides: ['a', 'b'] },
+          { id: 'x', kind: 'manual', when: { step: 'd', value: 'a' } },
+          { id: 'z', kind: 'manual' },
+        ],
+      },
+      flowDir: '/tmp/f/.agent-terminal',
+    });
+    const view = flow.start();
+    expect(view.stepRuns).toEqual(['runs', 'unresolved', 'runs']);
+    expect(view.decisions).toEqual({});
   });
 
   it('surfaces an inert error state (no throw, no transition) when the load failed', () => {

@@ -14,7 +14,7 @@ const todo = (id: string, status: TodoStatus): TodoItem => ({
   createdAt: '2026-01-01T00:00:00.000Z',
 });
 
-const inProgress: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'in_progress' };
+const inProgress: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress' };
 
 describe('deriveFlowView (§24.2.2 S5 — derived live status)', () => {
   it('augments an in_progress view with activity + n/m done + not-ready', () => {
@@ -44,9 +44,9 @@ describe('deriveFlowView (§24.2.2 S5 — derived live status)', () => {
   });
 
   it('passes a non-in_progress view through unchanged (no step is being worked)', () => {
-    const notStarted: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'not_started' };
+    const notStarted: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started' };
     expect(deriveFlowView(notStarted, [todo('a', 'active')], 'active')).toEqual(notStarted);
-    const done: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'done' };
+    const done: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'done' };
     expect(deriveFlowView(done, [], 'quiet').derived).toBeUndefined();
   });
 });

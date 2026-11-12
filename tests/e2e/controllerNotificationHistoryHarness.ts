@@ -83,7 +83,7 @@ export async function historyGate() {
           const turn = (await window.flow.state(directory)).loop!.appTurn!;
           window.flow.appGateDecision(directory, turn.step, turn.turnKey, 'approve');
         }, repo);
-        await expect(terminal.page.locator('#flow-strip')).toContainText('verify');
+        await expect(terminal.page.locator('#flow-strip')).toContainText('Verify');
       },
       async disconnect() { const current = relay; relay = undefined; await current?.dispose(); },
       async reconnect() { relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome); },

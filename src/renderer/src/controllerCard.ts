@@ -2,6 +2,7 @@ import { ACTIVITY_WORDS, cardStatus } from '../../shared/controllerCardClassific
 import { workConditions, type WorkCondition } from './controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerWorkStatus } from '../../shared/ipc';
+import { stepLabel } from '../../shared/stepLabel';
 import type { ControllerDirectoryCard } from '../../shared/controllerCards';
 import { createClampedReason, type ClampedReason } from './clampedReason';
 import { createPressGroup, onPress, type PressGroup } from './pressable';
@@ -181,7 +182,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   }
 
   function appendWork(work: ControllerWorkStatus): void {
-    const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
+    const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${stepLabel(work.flow.step)}` : FLOW_TEXT[work.flow.availability];
     body.append(' ', ticketLine(work), ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', ACTIVITY_WORDS[work.activity]));
     for (const condition of workConditions(work)) appendCondition(condition);
   }

@@ -109,6 +109,13 @@ describe('audit stream serialize ↔ parse (§25.3)', () => {
     expect(parseAuditStream(stream).events).toEqual([ev]);
   });
 
+  it('round-trips a recorded decision as a complete stream', () => {
+    const ev: AuditEvent = { ts: '2026-06-23T10:00:01Z', type: 'decision', step: 'triage', value: 'b' };
+    const parsed = parseAuditStream(serializeDoc(header) + serializeDoc(ev));
+    expect(parsed.events).toEqual([ev]);
+    expect(parsed.incomplete).toBe(false);
+  });
+
   it('tolerates a trailing partial document from a crash mid-append (discards it)', () => {
     const good = serializeDoc(header) + serializeDoc(events[0]);
     const stream = good + '---\nts: 2026-06-23T10:30:00Z\ntype: "step.ent'; // crash mid-append: unterminated
@@ -924,10 +931,10 @@ describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
 });
 
 describe('auto-halt entries name every reason that holds (N9b.9)', () => {
-  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'stop-for-a-human'] as const;
+  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'decision-held', 'decision-invalid', 'stop-for-a-human'] as const;
   const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
 
-  it('round-trips a halt naming all 11 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
+  it('round-trips a halt naming all 13 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
     const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason })));
     const event: AuditEvent = { ts: 'T1', type: 'command', source: 'gate', cmd, exit: 0 };
     const [read] = reconstructTimeline([header, event].map(serializeDoc).join('')).commands;
@@ -939,7 +946,7 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
 
   it('writes the N9b.6 letters, in N9b.6 order, into the halt slot', () => {
     expect(autoHaltAuditCmd(ALL.map((reason) => ({ reason })))).toMatch(
-      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
+      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, m, n, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
     );
   });
 

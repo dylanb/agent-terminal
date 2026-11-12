@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { RED_COMPLETION, exampleCapturedOutput, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { execFileSync } from 'node:child_process';
 import { ARTIFACT_CHECK_PASSED, artifactCheckCommand, runArtifactCheck, type ArtifactCheck } from '../../src/main/artifactCheck';
@@ -6,6 +9,7 @@ import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { DECISION_FILE_MAX_BYTES, DECISION_NOTE_MAX, decisionProblemText } from '../../src/shared/flowBranch';
 
 // §27.12 — the agent-runnable checker: the command the prompt hands the agent, parsed back by the checker, runs
 // the same predicates the engine gates on. Asserted end to end through the argv the command line carries.
@@ -90,6 +94,52 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
     const unclaimed = runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('passed'), ...run }));
     expect(unclaimed.exitCode).toBe(1);
     expect(unclaimed.output).toContain('reports passed, not failed-assertion');
+  });
+
+  describe('a decision file, read the way the approve reads it', () => {
+    let dir: string;
+    let decision: ArtifactCheck;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'artifact-check-decision-'));
+      decision = { kind: 'decision', rel: join(dir, 'verdict.json'), values: ['bug', 'not-a-bug'] };
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('passes a decision file holding a declared value', () => {
+      writeFileSync(decision.rel, '{"decision":"not-a-bug","note":"feature request"}');
+      const r = runArtifactCheck(argvOf(decision), files({}));
+      expect(r).toEqual({ exitCode: 0, output: expect.stringContaining(ARTIFACT_CHECK_PASSED) });
+    });
+
+    it.each([
+      ['missing', null],
+      ['too-large', JSON.stringify({ decision: 'bug', pad: 'x'.repeat(DECISION_FILE_MAX_BYTES) })],
+      ['not-json', 'decision: bug'],
+      ['no-decision-field', '{"verdict":"bug"}'],
+      ['undeclared-value', '{"decision":"Bug"}'],
+      ['note-too-long', JSON.stringify({ decision: 'bug', note: 'x'.repeat(DECISION_NOTE_MAX + 1) })],
+    ] as const)('fails a decision file that is %s, saying so in the words the gate shows', (problem, content) => {
+      if (content !== null) writeFileSync(decision.rel, content);
+      const r = runArtifactCheck(argvOf(decision), files({}));
+      expect(r.exitCode).toBe(1);
+      expect(r.output).toContain(decisionProblemText(problem));
+    });
+
+    it('fails a decision path that is a symlink or a directory as unreadable, as the approve refuses it', () => {
+      const target = join(dir, 'elsewhere.json');
+      writeFileSync(target, '{"decision":"bug"}');
+      symlinkSync(target, decision.rel);
+      const linked = runArtifactCheck(argvOf(decision), files({}));
+      expect(linked.exitCode).toBe(1);
+      expect(linked.output).toContain(decisionProblemText('unreadable'));
+      rmSync(decision.rel);
+      mkdirSync(decision.rel);
+      const folder = runArtifactCheck(argvOf(decision), files({}));
+      expect(folder.exitCode).toBe(1);
+      expect(folder.output).toContain(decisionProblemText('unreadable'));
+    });
   });
 
   it('fails a missing file, naming it', () => {

@@ -16,6 +16,7 @@ import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
 import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
+import { DECISION_NOTE_MAX, exampleDecisionFile } from '../shared/flowBranch';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -111,6 +112,13 @@ export interface AppWorkPromptReq {
   goalProgress?: string[];
   /** §27.10 */
   reportSections?: ReportSectionTarget[];
+  decision?: DecisionPrompt;
+}
+
+export interface DecisionPrompt {
+  rel: string;
+  values: readonly string[];
+  checkCommand: string;
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
@@ -257,6 +265,19 @@ export function designCheckLines(): string[] {
 /** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
 const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
 
+export function decisionLines(d: DecisionPrompt, moment?: string): string[] {
+  return [
+    '',
+    `DECISION: this step decides which path the flow takes. Write your decision to ${d.rel}, choosing exactly one of: ${d.values.join(', ')}.`,
+    'The file is JSON, for example:',
+    '',
+    `    ${exampleDecisionFile(d.values[0])}`,
+    '',
+    `A "note" field is optional: a short reason of at most ${DECISION_NOTE_MAX} characters.`,
+    ...checkerLines(d.checkCommand, 'decision file', moment),
+  ];
+}
+
 /** Compose the §27 work-turn prompt (§27.3): the loop brief and the def's recipe body, then — for a
  *  file-producing turn — the instruction to end the artifact with the completion marker, then the shared
  *  done-signal instruction pointing at the §27 done-file (and, for a file-producing turn, verifying the
@@ -279,6 +300,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
     );
   }
+  if (req.decision !== undefined) parts.push(...decisionLines(req.decision, resultCheckMoment(req)));
   if (req.reportSections !== undefined) parts.push(...reportSectionLines(req.reportSections));
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
   // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no

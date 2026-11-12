@@ -72,7 +72,7 @@ describe('controller card body', () => {
     expect([
       ...(status === text ? [] : [`status row reads ${status}`]),
       ...missingInOrder(element?.textContent ?? '', [
-        text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Idle',
+        text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: Implement', 'Idle',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
       ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
@@ -98,7 +98,7 @@ describe('controller card body', () => {
   ] as const)('reads the %s activity line, after the flow line, as %s', (activity, word) => {
     const { element } = mount(withWork({ activity, attention: { status: 'needs a human', reasons: ['Approve the plan'] } }));
     const text = element?.textContent ?? '';
-    const flowLine = 'Flow: feature-dev — Step: implement';
+    const flowLine = 'Flow: feature-dev — Step: Implement';
     const afterFlow = text.slice(text.indexOf(flowLine) + flowLine.length);
     expect({ flowLine: text.includes(flowLine), activityLine: afterFlow.trimStart().slice(0, word.length) }).toEqual({ flowLine: true, activityLine: word });
   });
@@ -106,7 +106,7 @@ describe('controller card body', () => {
   it('shows the activity apart from the status text', () => {
     const { element } = mount(STATUS_CASES.idle.terminal);
     const status = element ? statusRowIn(element) : null;
-    expect({ status: status?.textContent?.trim(), activity: missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: implement', 'Idle']) })
+    expect({ status: status?.textContent?.trim(), activity: missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: Implement', 'Idle']) })
       .toEqual({ status: 'Idle', activity: [] });
   });
 
@@ -163,7 +163,7 @@ describe('controller card loop message', () => {
     const dismiss = element ? dismissLoopMessageIn(element) : undefined;
     dismiss?.click();
     expect([
-      ...missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: implement', title, reason, 'Dismiss']),
+      ...missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: Implement', title, reason, 'Dismiss']),
       ...(controlName(dismiss).startsWith(name) && controlName(dismiss).includes(terminal.launchDirectory) ? [] : [`Dismiss is named ${controlName(dismiss)}`]),
       ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
       ...(calls.bringForward === 0 ? [] : ['brought forward']),

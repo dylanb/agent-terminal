@@ -5,9 +5,10 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { exampleDecisionFile } from '../../src/shared/flowBranch';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { shellQuote } from '../../src/shared/shellQuote';
@@ -622,6 +623,59 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
   if (swapped === withCompletion) throw new Error('seedCompletionGateConfig: plan-loop gh gate not found to swap for commit');
   writeFileSync(defPath, swapped);
   return cfg;
+}
+
+export const DECIDING_STEP = 'triage';
+const DECISION_FILE = 'verdict.json';
+const GROOM_ROSTER = (load(readFileSync(join(exampleConfigDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'), 'utf8')) as { reviewers: { persona: string }[] })
+  .reviewers.map((r) => r.persona);
+
+// Clone the example config and give its groom-loop a JSON `verdict` output named as its decision output.
+export function seedDecisionConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'groom-loop', 'groom-loop.yaml');
+  const def = load(readFileSync(defPath, 'utf8')) as { outputs: { id: string; path: string }[] } & Record<string, unknown>;
+  def.outputs.push({ id: 'verdict', path: DECISION_FILE });
+  def.decision = { output: 'verdict' };
+  writeFileSync(defPath, dump(def));
+  return cfg;
+}
+
+/** The fake agent of the `triage` groom-loop step: its work turn writes the groomed ticket and the decision file. */
+export function decidingAgent(value: string, note?: string): StepScript & { stepId: string } {
+  const decision = exampleDecisionFile(value, note);
+  const rel = `.agent-terminal/loop/artifacts/${DECISION_FILE}`;
+  return {
+    stepId: DECIDING_STEP,
+    artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md',
+    work: 'complete',
+    roster: GROOM_ROSTER,
+    extraShell: { work: [`mkdir -p "$(dirname ${rel})"; printf %s '${b64(decision)}' | base64 -d > ${rel}`] },
+  };
+}
+
+/** Clone the example config and give its groom-goal-loop a JSON `verdict` output named as its decision output. */
+export function seedGoalDecisionConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'groom-goal-loop', 'groom-goal-loop.yaml');
+  const def = load(readFileSync(defPath, 'utf8')) as { outputs: { id: string; path: string }[] } & Record<string, unknown>;
+  def.outputs.push({ id: 'verdict', path: DECISION_FILE });
+  def.decision = { output: 'verdict' };
+  writeFileSync(defPath, dump(def));
+  return cfg;
+}
+
+/** The `/goal` arm of the `triage` groom-goal-loop step: writes the groomed ticket, its report and the decision
+ *  file, then finishes the goal and runs the decision check its prompt hands it. */
+export function goalDecidingAgent(value: string, note?: string): string {
+  const rel = `.agent-terminal/loop/artifacts/${DECISION_FILE}`;
+  return (
+    `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker(DECIDING_STEP)])}; ` +
+    `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ` +
+    `printf %s '${b64(exampleDecisionFile(value, note))}' | base64 -d > ${rel}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`
+  );
 }
 // ---- §28.10 — chain e2e budgets ----
 // A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the

@@ -1,3 +1,71 @@
+## Halt (m) reads as the spec names it
+
+§27.9.1 N9b.6: halt reason (m) is shown and logged as `decision held`, the name the spec gives it. §18.2 writes the checker's `decision` usage as the checker prints it. §18.2 and §27.8: an approve records its decision before it accepts, so one the flow cannot record refuses the approve or halts an `auto` gate with (l) and leaves the gate open for a retry, and a decision file that is a link is refused at the approve and deleted as the link, never its target, when the step starts fresh. §18.2: Advance on a deciding step that has no recorded decision stays put and names that step, even when the next step runs on every path, so the run can no longer leave the step whose gate is the only place its decision is recorded. §19.1: a run saved past a deciding step whose recorded value flow.yaml no longer declares, while a step it has not finished waits on that step, is not resumed; the strip shows the flow-load error naming the step and the value and offers Terminate, and putting the value back resumes it. §18.2: an approve that records a decision and then stops before the accept for any reason, a throw included, puts the earlier decision back. §18.2: the decision file is refused when its `note` is not a string (`note-not-text`) or it holds a field other than `decision` and `note` (`unknown-field`), so the agent's check reports a dropped or misnamed note instead of losing it. §18.2 and §19.1: a decision an approve records names its gate turn and counts only once that gate's accept has persisted, so Advance pressed while the approve's side effects run, a held approve whose push fails, and a reload after a crash mid-approve all leave the run on the deciding step with its gate open for Approve; the Advance off the step drops the gate turn. §18.2: an approve whose recorded decision the flow still holds and cannot take back shows the operator why, and one whose decision was already cleared, such as by a Terminate during its side effects, shows nothing extra. §18.2 and §27.9.1 N9b.6(n): while the flow definition does not load, the approve of any step is refused, and an `auto` gate halts with (n), with the new `flow-unresolved` problem, instead of accepting a deciding step with no decision. §18.2: the decision note also loses every other invisible formatting character, such as the soft hyphen and the tag characters, and any lone surrogate.
+
+## Diagrams for branching and for clearing decisions
+
+§18.2 gains two Mermaid diagrams: how an approve on a deciding step picks the path and how Advance moves along it, and which moves clear recorded decisions and when a deciding step's decision file is deleted. §27: the loop diagram shows that a human approve on a deciding step can be refused when its decision file is invalid.
+
+## The rail marks the current step for screen readers
+
+§24.2.3 T1: the current step's station carries `aria-current="step"`, so the run's position stays available to a screen-reader user when a branched flow's header shows no step count.
+
+## The input dialog and the back-to-RED brief name the step in sentence case
+
+§24.2.3 T1: the dialog that asks for a step's input and the label of the back-to-RED brief field now show the step in sentence case, as every other place that shows a step name does.
+
+## A decision note loses its control characters without gaps
+
+§18.2 and §19.1: a control or invisible formatting character inside a decision note is now removed, as the spec says, rather than turned into a space, so a note an agent wrote to the 60-character rule is no longer refused or shown with extra gaps. The escape-sequence removal moves into the shared display strip.
+
+## Advance on an undecided step says why
+
+§18.2: when the next step that could run is still waiting on a decision, the strip's Advance is refused with a notice naming the step whose decision it waits on, instead of doing nothing and reporting that it advanced. The refused press writes no run-log transition and leaves an `auto` gate with the engine.
+
+## A step the decisions skipped no longer counts as reached
+
+§27.13: a run relaunched on one path of a branched flow is no longer held for a pickup that only a skipped step on the other path runs. §24.2.3 T7 and §27.15: a ticket or pull request input surfaces once its step is entered, and a skipped step is never entered; the loop view comes from the last loop step the run took, never from one it skipped.
+
+## A deciding step decides afresh
+
+§27.8: when a deciding step's work turn starts fresh, on entry or on a redo, the engine deletes its decision file first, so a decision left by an earlier run never satisfies the goal or the approve. A resumed turn, a Retry, Undo and a bootstrap rollback keep the file. A file that cannot be deleted is recorded in the run log and the turn still starts. §18.2: a deciding step's review-and-fix prompt carries the same decision block as its work prompt.
+
+## A deciding step is told where its decision goes
+
+§18.2: the work prompt of a step that declares `decides` and whose loop names a `decision` output now carries the decision file's repo-relative path, the allowed values, an example file and the checker command to run before the step finishes. A step that decides nothing gets none of this. A turn resumed after a relaunch gets the same block.
+
+## A step from the step library can decide and branch
+
+§18.2: a step definition may set `decides`, and a step reference may set `halt_on_decision` and `when`. `decides` describes what the step's loop produces, so it lives with the step; `halt_on_decision` is gate policy and `when` names another step of the flow, so they live with the flow, as `gate_authority` and `repeat` already do. A definition that sets `halt_on_decision` or `when`, or a reference that sets `decides`, fails to load. The branching load checks run on the steps after references are expanded, so a `when` can name a referenced deciding step by its flow id, and a reference's `halt_on_decision` is checked against its definition's `decides`.
+
+## Branching fixes: a fresh run keeps no old decisions, and the checker reads the decision file like the approve
+
+§19.1: a run whose persisted step is gone from the definition starts fresh without the old run's decisions, and a recorded note is read by the same rule as the decision file's note (escapes and control characters removed, a note that is then empty or longer than 60 characters dropped). §18.2: the bundled checker's `decision` kind reads the file the way the approve does, so a symlink or a directory is reported as unreadable rather than missing or passed. §28.4.1: the back-to-RED control is not offered when the recorded decisions rule out its return step. §24.2.3 T1: the back-to-RED control names its return step in sentence case (`Back to Dev`), as the composer already did.
+
+## Running a deciding step again clears its decision
+
+§18.2: a move that runs a step again (back-to-RED, a repeat loop-back) clears the decisions recorded at that step and at every later step, so the path after it shows as undecided until the step decides again. Undo and a bootstrap rollback do not run the step they land on again: they keep its decision, clear only later ones, and Advance takes the chosen path again. A decision recorded earlier is always kept. Restart and Terminate clear every decision. §19.1: a relaunch keeps the recorded decisions, and keeps only those whose value the current flow definition still declares on that step. §28.4.1: how `repeat` and `when:` combine, including that a loop-back clears the decisions made inside the slice.
+
+## An auto deciding step approves itself unless the value needs a human
+
+§27.9.1 N9b.6: two new pre-approve halt reasons. (m) decision held: on an `auto` step, a decision value its `halt_on_decision:` lists stops the gate for a human, who sees the value; any other declared value is approved by the engine and the run takes its path. The approve operation itself also refuses an engine approve of a listed value before anything is accepted, and that refusal halts as (m); a human may still approve it. (n) decision invalid: a decision that cannot be read as a declared value halts the gate with the same fixed words a refused human approve shows, and is no longer reported as (l) approve did not persist, including when the approve's own read finds it invalid or the step's loop could not be loaded. Both are recorded in the run log as the letters `m` and `n`. N9b.5(d): a later `loop` step the recorded decisions rule out no longer keeps the run open, so a failed effect is reported at the run's real end. §18.2: a decision note loses whole terminal escape sequences, not only their control characters.
+
+## An approve whose decision is missing or undeclared is refused
+
+§18.2: a human approve of a deciding step is refused before anything is accepted when its decision file is missing, unreadable, larger than 4096 bytes, not JSON, names no decision, names a value the step does not declare, or carries a note longer than 60 characters; the operator sees the problem in fixed words and the flow stays on the deciding step. A value that differs from a declared one only by case or whitespace is refused. The note loses its control characters and surrounding space, and an empty note is dropped. The bundled checker gains a `decision` kind that runs the same parser. A symlink, a directory or a file without read permission is now reported as unreadable rather than missing, and an oversized file as too large rather than not JSON.
+
+## Approving a deciding step records its decision and takes its path
+
+§27.8: a LoopDef may name the output that holds its decision, `decision: { output: <output id> }`. §18.2: when the gate of a step that declares `decides:` is approved, the engine reads that JSON file and records the value and its optional note before the flow advances; `advance()` then passes over every step the decision rules out and stays put while the next step that could run is undecided. §19.1: `flow-state.yaml` keeps the recorded values under `decisions`. §25.5: a `decision` event logs each recorded value. §24.2.3 T1: the deciding station shows its value, and its note, as a tag. A missing or unreadable decision file at approve is not yet refused; the flow then stays on the deciding step.
+
+## Flow steps can carry branch conditions, and the rail hides undecided steps
+
+§18.2: a `loop` step may declare `decides:` and `halt_on_decision:`, and a later step `when: { <step>: <value> }`. The loader checks each one and rejects a malformed flow with a named reason, including a `repeat.back_to` whose target runs under a different `when`. §24.2.3 T1: the rail leaves out steps whose condition is false and shows one `next steps depend on the verdict` line in place of steps still waiting on a decision; the header reads `steps` after the word `Flow` until the rest of the path is known. No step records a decision yet, so every conditional step stays undecided, and a flow with no `when:` looks and runs as before.
+
+## Step names show in sentence case
+
+§24.2.3 T1: the rail, the loop panel names, the composer titles, the controller card, the flow picker and the bootstrap error now show a step as `Plan approve` instead of `plan-approve`: each hyphen becomes a space and the first letter is capitalised. Only the displayed text changes. Step ids in flow files, state, IPC and audit are unchanged.
+
 ## #79: build steps run targeted e2e, and the full e2e runs at integration-slice and finalize
 
 §28.8 item 4 already said each phase runs a targeted subset and the full Podman e2e runs at the integration gate and finalization, but the build-step prompts and `CLAUDE.md` still asked for the whole suite at every step. The work prompts of `feature-dev-v3`'s `infra-loop`, `red-loop`, `green-loop` and `refactor-loop`, and of `simple-dev-loop-v1`, now run the unit, integration and `browser` suites plus only the end-to-end tests for the slice or increment, if it has one, and those that cover the files the step changed, counting a test that uses a changed harness, fixture or fake as covering it, and record which end-to-end tests were chosen under `### Test evidence`. The `red-loop` goal now requires every other test that ran to pass, and the `infra-loop` goal requires the tests the step ran to pass. Both finalize prompts name the full end-to-end suite. `CLAUDE.md` and `CODE-STANDARDS.md` say the same. No spec text changes. Installed example loops pick the changes up on the next Install examples.

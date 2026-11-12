@@ -10,6 +10,7 @@ import {
   composeLifecycleEndRun,
   composeLoopBindingResolve,
   composeObservedResolveDef,
+  composeStepDecisionRead,
   composeRecordFlowTransition,
   composeRunInProgressAt,
   composeStartTransition,
@@ -207,6 +208,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     askAgentWhy: (question) => void asked.push(question),
     withdrawAgentQuestion: () => {},
     currentSlice: () => 1,
+    readStepDecision: composeStepDecisionRead(composeObservedResolveDef(ctxFor)),
   });
   const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({
@@ -242,6 +244,9 @@ function makeRig(opts: RigOpts = {}): Rig {
     reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => null,
+    auditDecision: () => {},
   });
   const engineApprove = composeEngineApprove(approveDepsFor, () => 'app');
   gate.attachApprove((dir, step, turnKey, decider) => {
@@ -660,7 +665,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
     const iEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('failed-effect')).length;
     const iBeforeEnd = iEntries();
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(iEntries()).toBe(iBeforeEnd + 1);
     expect(rig.errors).toEqual(['A gate side-effect failed earlier in this run: approve threw before settling']);
   });
@@ -941,7 +946,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
 
     const hEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('engine-input-missing')).length;
     const hBeforeEnd = hEntries();
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     const letters = (engineHalts(rig.gateEntries(T0)) ?? []).flatMap((c) => parseAutoHaltReasons(c) ?? []);
     expect(letters).not.toContain('failed-effect');
     expect(hEntries()).toBe(hBeforeEnd + 1);
@@ -958,7 +963,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const v = rig.view();
     expect(v.autoGate?.failedEffect?.state).toBe('unknown');
     expect(v.autoGate?.haltReasons.find((r) => r.reason === 'engine-input-missing')?.detail).toBe('the run\'s gate state is missing');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state is missing']);
   });
 
@@ -976,7 +981,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(before.flowStart(before.wt).status).toBe('in_progress');
     const rig = before.relaunch();
     await rig.reachGate('clean');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual([]);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();
   });
@@ -989,7 +994,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     writeFileSync(file, 'schema_version: [unclosed\n');
     const rig = before.relaunch();
     await rig.reachGate('clean');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual([]);
     expect(engineHalts(rig.gateEntries(T0)) ?? []).toEqual([]);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();

@@ -36,12 +36,21 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(f!.querySelector('input')).toBeTruthy();
     // The helper names the bound def's OWN bootstrap contract that runs on entry (AC 10), scoped to the
     // element aria-describedby resolves to — its accessible description — and cites no retired section (AC 9).
-    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
+    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('Plan');
     expect(host.textContent).toContain('pickup');
     const helpId = f!.querySelector('input')!.getAttribute('aria-describedby')!;
     const help = host.querySelector(`#${helpId}`)!;
     expect(help.textContent).toContain("bound loop definition's own branch-and-draft-PR setup");
     expect(help.textContent).not.toContain('§');
+  });
+
+  it('names the step in sentence case in its title and description', () => {
+    createFlowInputModal(host).render(prompt(), 'plan-approve', vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    for (const text of [dialog.querySelector('h3')?.textContent ?? '', dialog.querySelector('.ph')?.textContent ?? '']) {
+      expect(text).toContain('Plan approve');
+      expect(text).not.toContain('plan-approve');
+    }
   });
 
   it('Confirm collects the typed values and calls submit with the name→value map', () => {

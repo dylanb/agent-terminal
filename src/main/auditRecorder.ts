@@ -89,6 +89,8 @@ export interface AuditRecorder {
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
    *  `reason` is the OS's untrusted message; the record bounds and strips it. */
   recordNotifyFailed(repoKey: string, reason: string): void;
+  /** Record the value a deciding step's approve recorded (§25.5), only while a run is open. */
+  recordDecision(repoKey: string, step: string, value: string): void;
   /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
    *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
   recordTerminate(repoKey: string): void;
@@ -301,6 +303,14 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [notifyFailedEvent(reason, auditEventTimestamp(now()))]);
       } catch (e) {
         log('audit recordNotifyFailed failed', e);
+      }
+    },
+
+    recordDecision(repoKey, step, value) {
+      try {
+        appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'decision', step, value }]);
+      } catch (e) {
+        log('audit recordDecision failed', e);
       }
     },
 

@@ -11,7 +11,7 @@ import {
   type DefResolution,
   type StartRun,
 } from '../../src/main/autoGate';
-import { stepScopedAdvance, type AppGateDecisionDeps, type ApproveClaim, type ApproveDecider, type GateApproveOutcome } from '../../src/main/appGateDecision';
+import { recordOnFlow, stepScopedAdvance, type AppGateDecisionDeps, type ApproveClaim, type ApproveDecider, type GateApproveOutcome } from '../../src/main/appGateDecision';
 import {
   composeEngineApprove,
   composeHumanDecisionRunners,
@@ -19,7 +19,10 @@ import {
   composeObservedResolveDef,
   composeRecordFlowTransition,
   composeStartTransition,
+  composeStepDecisionRead,
 } from '../../src/main/autoGateComposition';
+import { readStepDecision } from '../../src/main/stepDecision';
+import { decisionProblemText } from '../../src/shared/flowBranch';
 import { createFlowManager } from '../../src/main/flow';
 import type { GateDecisionOption } from '../../src/shared/ipc';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
@@ -30,6 +33,7 @@ import {
   armInterrupt,
   clearBaselineCommit,
   loopAreaFile,
+  isGateAccepted,
   readAppLoopState,
   readArmedInterrupt,
   readBaselineCommit,
@@ -172,13 +176,15 @@ const flowView = (loop: FlowLoopView): FlowStateView => ({
   stepName: STEP,
   runStarted: 'never-started' as const,
   steps: [STEP, 'next'],
+  stepRuns: ['runs', 'runs'],
+  decisions: {},
   position: 1,
   total: 2,
   status: 'in_progress',
   loop,
 });
 
-function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defThrows?: () => boolean; defFor?: (loop: string) => DefResolution | null; runInProgress?: () => boolean; onPush?: (repoKey: string) => void; env?: NodeJS.ProcessEnv } = {}): Rig {
+function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; decisionRead?: AutoGateDeps['readStepDecision']; defThrows?: () => boolean; defFor?: (loop: string) => DefResolution | null; runInProgress?: () => boolean; onPush?: (repoKey: string) => void; env?: NodeJS.ProcessEnv } = {}): Rig {
   const clock = createVirtualClock(0);
   const audits: Rig['audits'] = [];
   const errors: Rig['errors'] = [];
@@ -223,6 +229,7 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
     askAgentWhy: (question: string) => void asked.push(question),
     withdrawAgentQuestion: () => void (withdrawn += 1),
     currentSlice: () => sliceNow,
+    readStepDecision: opts.decisionRead ?? composeStepDecisionRead(composeObservedResolveDef(ctxFor)),
   } as AutoGateDeps);
   if (opts.approveAttached !== false) gate.attachApprove((dir, step, turnKey, decider) => {
     const a: Approval = { repoDir: dir, step, turnKey, decider: decider.kind };
@@ -1686,6 +1693,9 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
     reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => null,
+    auditDecision: () => {},
     ...over,
   };
 }
@@ -1694,7 +1704,7 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
 const plantedApproveDeps = (over: Partial<AppGateDecisionDeps> & { advances?: string[] } = {}): AppGateDecisionDeps =>
   approveDeps({ readRunState: (dir) => readAppLoopState(dir), resolveDef: (dir, name) => resolveLoopDefV2(name, ctxFor(dir)), ...over });
 
-const inProgress = (stepName: string): FlowStateView => ({ stepName, runStarted: 'never-started' as const, steps: [stepName], position: 1, total: 1, status: 'in_progress' });
+const inProgress = (stepName: string): FlowStateView => ({ stepName, runStarted: 'never-started' as const, steps: [stepName], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress' });
 
 // The S1 production composition (plan "The slice that introduces each factory"): built in `index.ts`'s order
 // against the real controller, so a missing attach or a factory that needs a later one fails here, not at startup.
@@ -1702,13 +1712,14 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
   const git = { fx: null as ReturnType<typeof createGitRepoFixture> | null };
   afterEach(() => git.fx?.cleanup());
 
-  it('constructs createAutoGate → composeObservedResolveDef, composeRecordFlowTransition → composeEngineApprove → attachApprove → composeStartTransition, composeLoopBindingResolve, and the first clean `auto` gate advances', async () => {
+  it('constructs composeObservedResolveDef → createAutoGate, composeRecordFlowTransition → composeEngineApprove → attachApprove → composeStartTransition, composeLoopBindingResolve, and the first clean `auto` gate advances', async () => {
     git.fx = createGitRepoFixture();
     repoDir = git.fx.makeGitRepo('autogate-compose');
     git.fx.writeRepoFile(repoDir, 'README.md', 'compose\n');
     git.fx.commitAll(repoDir, 'init');
     const clock = createVirtualClock(0);
     const advances: string[] = [];
+    const observed = composeObservedResolveDef((dir) => ({ tiers: tiers(), repoDir: dir }));
     const gate = createAutoGate({
       audit: () => {},
       resolveDef: (dir) => plantedResolution(dir),
@@ -1722,8 +1733,8 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       askAgentWhy: () => {},
       withdrawAgentQuestion: () => {},
       currentSlice: () => 1,
+      readStepDecision: composeStepDecisionRead(observed),
     });
-    const observed = composeObservedResolveDef((dir) => ({ tiers: tiers(), repoDir: dir }));
     const record = composeRecordFlowTransition({ recordTransition: () => {} }, gate);
     const engineApprove = composeEngineApprove(() => plantedApproveDeps({ advances }), () => 'app');
     gate.attachApprove(engineApprove);
@@ -1957,6 +1968,8 @@ const flowAt = (steps: FlowStepDef[], stepName: string, status: FlowStateView['s
   stepName,
   runStarted: 'never-started' as const,
   steps: steps.map((st) => st.id),
+  stepRuns: steps.map(() => 'runs' as const),
+  decisions: {},
   position: Math.max(1, steps.findIndex((st) => st.id === stepName) + 1),
   total: steps.length,
   status,
@@ -2416,6 +2429,220 @@ describe('autoGate — a run that ends with the marker set reports it (AC13 run 
     await markerSet(rig);
     const { record } = recorded(rig);
     record(repoDir, 'advance', flowAt(STEPS_MARKER, STEP), flowAt(STEPS_MARKER, 'human-step'));
+    expect(rig.errors).toEqual([]);
+    expect(autoHalts(rig)).toEqual([]);
+  });
+});
+
+// §27.9.1 N9b.6(m)/(n): an `auto` step that decides a value halts on a value its flow lists, or on a decision it
+// cannot read, and the engine approves any other value onto its path.
+describe('autoGate — an `auto` deciding step', () => {
+  const VERDICT_REL = '.agent-terminal/loop/artifacts/verdict.json';
+  const DECIDING_DEF_YAML = `${DEF_YAML}outputs:\n  - id: verdict\n    path: verdict.json\ndecision:\n  output: verdict\n`;
+  const TRIAGE: FlowStepDef = { id: STEP, kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto', decides: ['a', 'b'], haltOnDecision: ['a'] };
+  const BRANCHED: FlowStepDef[] = [TRIAGE, { id: 'b1', kind: 'manual', when: { step: STEP, value: 'b' } }, { id: 'a2', kind: 'loop', loop: LOOP, loopNamespace: 'app', when: { step: STEP, value: 'a' } }];
+
+  const writeDecision = (text: string, dir = repoDir): void => {
+    mkdirSync(dirname(join(dir, VERDICT_REL)), { recursive: true });
+    writeFileSync(join(dir, VERDICT_REL), text);
+  };
+
+  beforeEach(() => plantDef(DECIDING_DEF_YAML));
+
+  it('a halting decision value halts the auto gate', async () => {
+    const rig = makeRig();
+    startTrusted(rig, BRANCHED);
+    writeDecision('{"decision":"a"}');
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.haltReasons).toEqual([{ reason: 'decision-held', detail: 'a' }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-held']]);
+  });
+
+  it('an invalid decision halts the auto gate', async () => {
+    const rig = makeRig();
+    startTrusted(rig, BRANCHED);
+    writeDecision('{"decision":"c"}');
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.haltReasons).toEqual([{ reason: 'decision-invalid', detail: decisionProblemText('undeclared-value') }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-invalid']]);
+  });
+
+  it('a decision file missing at the approve halts the auto gate as an invalid decision, not as an approve that did not persist', async () => {
+    const rig = makeRig({ decisionRead: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }) });
+    rig.gate.attachApprove(composeEngineApprove(() => plantedApproveDeps({ readStepDecision: (_dir, step, def) => readStepDecision(BRANCHED, step, def) }), () => 'app'));
+    startTrusted(rig, BRANCHED);
+    await reachGate(rig, 'clean');
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'decision-invalid', detail: decisionProblemText('missing') }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-invalid']]);
+  });
+
+  it('a value that turns into a held one after the gate check is refused at the approve and halts as decision held, not (l)', async () => {
+    const rig = makeRig({ decisionRead: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }) });
+    const accepts: AppLoopRunState[] = [];
+    rig.gate.attachApprove(
+      composeEngineApprove(
+        () =>
+          plantedApproveDeps({
+            readStepDecision: () => ({ kind: 'ok', decision: { value: 'a' }, haltsAuto: true }),
+            persistAccept: (_dir, state) => void accepts.push(state),
+          }),
+        () => 'app',
+      ),
+    );
+    startTrusted(rig, BRANCHED);
+    await reachGate(rig, 'clean');
+    expect(accepts).toEqual([]);
+    expect(rig.view().humanNeeded).toBe(true);
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'decision-held', detail: 'a' }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-held']]);
+  });
+
+  it('a deciding auto step whose loop def does not resolve halts as an invalid decision and runs no approve', async () => {
+    const rig = makeRig();
+    rmSync(join(appDir, 'loops-v2', LOOP), { recursive: true, force: true });
+    startTrusted(rig, BRANCHED);
+    writeDecision('{"decision":"b"}');
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'decision-invalid', detail: decisionProblemText('loop-unresolved') }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-invalid']]);
+  });
+
+  it('a decision that turns invalid after the gate check is refused at the approve and halts as decision invalid, not (l)', async () => {
+    const rig = makeRig({ decisionRead: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }) });
+    const accepts: AppLoopRunState[] = [];
+    rig.gate.attachApprove(
+      composeEngineApprove(
+        () =>
+          plantedApproveDeps({
+            readStepDecision: () => ({ kind: 'invalid', problem: 'undeclared-value' }),
+            persistAccept: (_dir, state) => void accepts.push(state),
+          }),
+        () => 'app',
+      ),
+    );
+    startTrusted(rig, BRANCHED);
+    await reachGate(rig, 'clean');
+    expect(accepts).toEqual([]);
+    expect(rig.view().humanNeeded).toBe(true);
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'decision-invalid', detail: decisionProblemText('undeclared-value') }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['decision-invalid']]);
+  });
+
+  it('a decision the flow cannot record stops the auto gate for a person before anything is accepted', async () => {
+    const rig = makeRig({ decisionRead: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }) });
+    const accepts: AppLoopRunState[] = [];
+    const decisionAudits: string[] = [];
+    rig.gate.attachApprove(
+      composeEngineApprove(
+        () =>
+          plantedApproveDeps({
+            readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+            recordDecision: () => {
+              throw new Error('EACCES: flow-state.yaml');
+            },
+            auditDecision: (_dir, _step, value) => void decisionAudits.push(value),
+            persistAccept: (_dir, state) => void accepts.push(state),
+          }),
+        () => 'app',
+      ),
+    );
+    startTrusted(rig, BRANCHED);
+    await reachGate(rig, 'clean');
+    await vi.waitFor(() => expect(rig.view().humanNeeded).toBe(true), { timeout: 5000 });
+    expect(accepts).toEqual([]);
+    expect(decisionAudits).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).toEqual(['approve-not-persisted']);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['approve-not-persisted']]);
+  });
+
+  it('a decision read that throws halts the auto gate as an unreadable decision', async () => {
+    const rig = makeRig({
+      decisionRead: () => {
+        throw new Error('decision read failed');
+      },
+    });
+    startTrusted(rig, BRANCHED);
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'decision-invalid', detail: decisionProblemText('unreadable') }]);
+  });
+
+  it('a decision value on a `human` step changes nothing: no approve and no halt reason', async () => {
+    const rig = makeRig();
+    startTrusted(rig, [{ ...TRIAGE, gateAuthority: 'human' }, ...BRANCHED.slice(1)]);
+    writeDecision('{"decision":"a"}');
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    expect(autoHalts(rig)).toEqual([]);
+  });
+
+  describe('over the real flow manager', () => {
+    const fx = createWorktreeFixture();
+    afterEach(() => fx.cleanup());
+
+    it('a non-halting decision is engine-approved and takes its path', async () => {
+      const wt = fx.makeWorktree('engine-decides-b');
+      const flowFile = fx.writeFlowHome(wt, { name: 'branched', stepIds: [STEP] });
+      writeFileSync(
+        flowFile,
+        [
+          'name: branched',
+          'steps:',
+          `  - { id: ${STEP}, kind: loop, loop: ${LOOP}, loop_namespace: app, gate_authority: auto, decides: [a, b], halt_on_decision: [a] }`,
+          `  - { id: a1, kind: manual, when: { ${STEP}: a } }`,
+          `  - { id: b1, kind: manual, when: { ${STEP}: b } }`,
+          '  - { id: wrap, kind: manual }',
+          '',
+        ].join('\n'),
+      );
+      const flow = createFlowManager({ globalDir: fx.outsideDir('engine-decides-b-global'), onEnterStep: () => {}, gateAccepted: isGateAccepted });
+      expect(flow.start(wt).stepName).toBe(STEP);
+      const steps: FlowStepDef[] = [TRIAGE, { id: 'a1', kind: 'manual' }, { id: 'b1', kind: 'manual' }, { id: 'wrap', kind: 'manual' }];
+      const rig = makeRig();
+      rig.gate.attachApprove(
+        composeEngineApprove(
+          () =>
+            plantedApproveDeps({
+              readStepDecision: (_dir, step, def) => readStepDecision(steps, step, def),
+              recordDecision: recordOnFlow(flow),
+              persistAccept: (dir, state) => writeAppLoopState(dir, state),
+              advanceFlow: stepScopedAdvance((dir) => flow.state(dir).stepName, (dir) => void flow.advance(dir)),
+            }),
+          () => 'app',
+        ),
+      );
+      startTrusted(rig, steps, wt);
+      writeDecision('{"decision":"b"}', wt);
+      await reachGate(rig, 'clean', 'verdict', wt);
+      await vi.waitFor(() => expect(flow.state(wt).stepName).toBe('b1'), { timeout: 5000 });
+      expect(autoHalts(rig)).toEqual([]);
+    });
+  });
+
+  it('reachedRunEnd ignores skipped loop steps: with decision b, a later loop step taken only on a does not keep the run open', async () => {
+    const rig = makeRig();
+    writeDecision('{"decision":"b"}');
+    await markerSet(rig, BRANCHED);
+    const record = composeRecordFlowTransition({ recordTransition: () => {} }, rig.gate);
+    record(repoDir, 'advance', flowAt(BRANCHED, STEP), { ...flowAt(BRANCHED, 'b1'), decisions: { [STEP]: { value: 'b' } } });
+    expect(rig.errors).toHaveLength(1);
+    expect(rig.errors[0].reason).toContain(EFFECT_FAILURE);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
+  });
+
+  it('negative pair: with no decision recorded, a later loop step that may still run keeps the run open', async () => {
+    const rig = makeRig();
+    writeDecision('{"decision":"b"}');
+    await markerSet(rig, BRANCHED);
+    const record = composeRecordFlowTransition({ recordTransition: () => {} }, rig.gate);
+    record(repoDir, 'advance', flowAt(BRANCHED, STEP), flowAt(BRANCHED, 'b1'));
     expect(rig.errors).toEqual([]);
     expect(autoHalts(rig)).toEqual([]);
   });

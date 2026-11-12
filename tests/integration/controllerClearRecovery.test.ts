@@ -13,7 +13,7 @@ it('real source/client recovery keeps a continuing cleared per-step stop empty a
   const registry = await startControllerTransport(home);
   const source = createLoopNotifier();
   const view = (humanNeeded: boolean, status = 'complete'): FlowStateView => ({
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status, iteration: 1, humanNeeded, pr: null, branch: null, ready: false,
       autoGate: { deciding: !humanNeeded, hung: false, haltReasons: humanNeeded ? [{ reason: 'stop-for-a-human' }] : [] } },
   });
@@ -58,7 +58,7 @@ it('a disposed source cannot refill its cleared directory after a fresh terminal
   const registry = await startControllerTransport(home);
   const oldSource = createLoopNotifier(); const replacement = createLoopNotifier();
   const view = (iteration: number): FlowStateView => ({
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status: 'complete', iteration, humanNeeded: true, pr: null, branch: null, ready: false },
   });
   const identity = { launchDirectory: '/work', repositoryRoot: '/work' };

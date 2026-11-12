@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writePhaseResult } from '../helpers/phaseResults';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,6 +33,9 @@ import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
+import { createFlowMachine, type FlowStepDef } from '../../src/main/flow';
+import { readStepDecision } from '../../src/main/stepDecision';
+import { exampleDecisionFile } from '../../src/shared/flowBranch';
 import type { FlowStateView } from '../../src/shared/ipc';
 import {
   CONSOLIDATE_KEY,
@@ -48,6 +51,7 @@ import {
   flushRedGate,
 } from '../helpers/appLoopEngineHarness';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { linkDecisionFile, resolveDecidingLoop } from '../helpers/linkedDecisionLoop';
 
 // §27.3/§27.12 — the §27 work-turn engine, driven at its observable boundary with REAL fs (the run-state
 // file, the completion artifact) and its domain ports as controllable fakes (hostedAgent injectability, the
@@ -404,6 +408,220 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable(); // boundary drained + idle-confirm → the work prompt injects
     expect(h.injected[1]).toContain('#133');
+  });
+
+  describe('a deciding step is told where its decision goes', () => {
+    const VERDICT_REL = '.agent-terminal/loop/artifacts/verdict.json';
+    const decidingDef = (): LoopDefV2 => {
+      const base = h.fileDef();
+      const verdict = binding('verdict', join(h.repo, '.agent-terminal', 'loop', 'artifacts', 'verdict.json'));
+      return { ...base, outputs: [...base.outputs, verdict], decision: { output: 'verdict', path: verdict.path, rel: verdict.rel } };
+    };
+
+    it('the work prompt of a deciding step names its decision output', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
+      engine.onInjectable();
+      expect(h.injected[1]).toContain(VERDICT_REL);
+      expect(h.injected[1]).toContain('check-artifact decision');
+      expect(h.injected[1]).toContain('a,b');
+    });
+
+    it('a step whose flow declares no decides gets no decision check', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = null;
+      engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
+      engine.onInjectable();
+      expect(h.injected[1]).not.toContain(VERDICT_REL);
+      expect(h.injected[1]).not.toContain('check-artifact decision');
+    });
+
+    it('a deciding turn resumed after a relaunch names its decision output again', () => {
+      h.defResult = h.resolved(decidingDef());
+      writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      engine.resume(h.repo);
+      engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+      engine.onInjectable();
+      engine.onInjectable();
+      const prompt = h.injected.find((p) => p.includes('Produce the plan.'));
+      expect(prompt).toContain(VERDICT_REL);
+      expect(prompt).toContain('check-artifact decision');
+    });
+
+    const reachGate = (engine: ReturnType<typeof makeEngine>): void => {
+      driveToConsolidateInjected(engine);
+      completeConsolidate(engine, 1, verdictOutput('clean'));
+    };
+
+    it("a deciding step's review-and-fix round names its decision output", () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      reachGate(engine);
+      engine.requestChanges(h.repo, STEP, CONSOLIDATE_KEY, 'The verdict should be b.');
+      engine.onInjectable();
+      engine.onInjectable();
+      const prompt = h.injected[h.injected.length - 1];
+      expect(prompt).toContain('The verdict should be b.');
+      expect(prompt).toContain(VERDICT_REL);
+      expect(prompt).toContain('check-artifact decision');
+      expect(prompt).toContain('a,b');
+    });
+
+    it('a review-and-fix round of a step whose flow declares no decides gets no decision check', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = null;
+      reachGate(engine);
+      engine.requestChanges(h.repo, STEP, CONSOLIDATE_KEY, 'The verdict should be b.');
+      engine.onInjectable();
+      engine.onInjectable();
+      const prompt = h.injected[h.injected.length - 1];
+      expect(prompt).toContain('The verdict should be b.');
+      expect(prompt).not.toContain(VERDICT_REL);
+      expect(prompt).not.toContain('check-artifact decision');
+    });
+
+    const decisionFile = (): string => join(h.repo, VERDICT_REL);
+    const leaveDecision = (value: string): void => {
+      mkdirSync(dirname(decisionFile()), { recursive: true });
+      writeFileSync(decisionFile(), exampleDecisionFile(value));
+    };
+
+    it('entering a deciding step removes the decision an earlier run left', () => {
+      h.defResult = h.resolved(decidingDef());
+      leaveDecision('b');
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      expect(engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance')).toBe('entered');
+      expect(existsSync(decisionFile())).toBe(false);
+    });
+
+    it('entering a deciding step whose decision output is a link removes the link, keeps its target, and names the declared file', () => {
+      const tierRoot = mkdtempSync(join(tmpdir(), 'linked-decision-tier-'));
+      try {
+        const linked = linkDecisionFile(h.repo, 'b');
+        const r = resolveDecidingLoop(tierRoot, h.repo);
+        if (!r.ok) throw new Error(r.reason);
+        h.defResult = r;
+        const engine = makeEngine();
+        h.stepDecidesResult = ['a', 'b'];
+        expect(engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance')).toBe('entered');
+        expect(() => lstatSync(linked.link)).toThrow(/ENOENT/);
+        expect(readFileSync(linked.target, 'utf8')).toBe(linked.targetText);
+        engine.onInjectable();
+        const prompt = h.injected.find((p) => p.includes('Produce the plan.'));
+        expect(prompt).toContain(VERDICT_REL);
+        expect(prompt).not.toContain('saved.json');
+      } finally {
+        rmSync(tierRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('entering a step whose flow declares no decides leaves the file alone', () => {
+      h.defResult = h.resolved(decidingDef());
+      leaveDecision('b');
+      const engine = makeEngine();
+      h.stepDecidesResult = null;
+      expect(engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance')).toBe('entered');
+      expect(readFileSync(decisionFile(), 'utf8')).toBe(exampleDecisionFile('b'));
+    });
+
+    it('a redo of a deciding step removes the decision its last run wrote', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      reachGate(engine);
+      leaveDecision('b');
+      expect(engine.redo(h.repo, STEP, CONSOLIDATE_KEY, 'Decide again.')).toBe(true);
+      expect(existsSync(decisionFile())).toBe(false);
+    });
+
+    it('a redo of a step whose flow declares no decides leaves the file alone', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = null;
+      reachGate(engine);
+      leaveDecision('b');
+      expect(engine.redo(h.repo, STEP, CONSOLIDATE_KEY, 'Decide again.')).toBe(true);
+      expect(readFileSync(decisionFile(), 'utf8')).toBe(exampleDecisionFile('b'));
+    });
+
+    const plantDirectoryAtDecision = (): void => {
+      mkdirSync(join(decisionFile(), 'stuck'), { recursive: true });
+    };
+
+    it('entering a deciding step whose decision cannot be cleared still starts the work turn and records the failed clear', () => {
+      h.defResult = h.resolved(decidingDef());
+      plantDirectoryAtDecision();
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      expect(engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance')).toBe('entered');
+      engine.onInjectable();
+      expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+      expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('clear-decision failed'), 1);
+    });
+
+    it('a redo of a deciding step whose decision cannot be cleared still starts the work turn and records the failed clear', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      reachGate(engine);
+      plantDirectoryAtDecision();
+      const before = h.injected.length;
+      expect(engine.redo(h.repo, STEP, CONSOLIDATE_KEY, 'Decide again.')).toBe(true);
+      engine.onInjectable();
+      engine.onInjectable();
+      expect(h.injected.slice(before).some((p) => p.includes('Decide again.'))).toBe(true);
+      expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('clear-decision failed'), 1);
+    });
+
+    it('a deciding turn resumed after a relaunch and retried keeps its decision file', () => {
+      h.defResult = h.resolved(decidingDef());
+      leaveDecision('b');
+      writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      engine.resume(h.repo);
+      engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+      engine.onInjectable();
+      engine.onInjectable();
+      expect(readFileSync(decisionFile(), 'utf8')).toBe(exampleDecisionFile('b'));
+    });
+
+    it('a bootstrap rollback onto a deciding step keeps its decision, and the run advances on it', () => {
+      h.defResult = h.resolved(decidingDef());
+      const engine = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      const steps: FlowStepDef[] = [
+        { id: STEP, kind: 'loop', loop: 'plan-loop', decides: ['a', 'b'] },
+        { id: 'build', kind: 'loop', loop: 'build-loop', bootstrap: 'pickup', when: { step: STEP, value: 'b' } },
+      ];
+      const flow = createFlowMachine({ ok: true, definition: { name: 'f', steps }, flowDir: join(h.repo, '.agent-terminal') }, undefined, (step) => {
+        if (step.id === STEP) engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
+      });
+      flow.start();
+      engine.onInjectable();
+      driveFromWorkToGate(engine);
+      leaveDecision('b');
+      const read = readStepDecision(steps, STEP, decidingDef());
+      expect(read).toMatchObject({ kind: 'ok', decision: { value: 'b' } });
+      if (read.kind === 'ok') flow.recordDecision(STEP, read.decision);
+      expect(flow.advance().stepName).toBe('build');
+
+      expect(flow.revertStep('build').stepName).toBe(STEP);
+      const relaunched = makeEngine();
+      h.stepDecidesResult = ['a', 'b'];
+      relaunched.resume(h.repo);
+
+      expect(readStepDecision(steps, STEP, decidingDef())).toMatchObject({ kind: 'ok', decision: { value: 'b' } });
+      expect(flow.advance().stepName).toBe('build');
+    });
   });
 
   it('emits no ticket line in the work prompt when the flow resolved no ticket', () => {

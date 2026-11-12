@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, MAX_SLICES, type FlowLoad, type FlowStepDef } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
 import { MAX_ECHOED_LOAD_ERROR_LENGTH } from '../../src/shared/controlChars';
@@ -1294,5 +1294,441 @@ describe('flow state machine — the load-error echo (§18.7.6)', () => {
     expect(error).toMatch(/flow\.yaml step/);
     expect(error).not.toMatch(/[‍‮]/u);
     expect(error.length).toBeLessThanOrEqual(MAX_ECHOED_LOAD_ERROR_LENGTH);
+  });
+});
+
+describe('flow machine branching on a recorded decision', () => {
+  const branched = (...steps: FlowStepDef[]): FlowLoad => ({ ok: true, definition: { name: 'f', steps }, flowDir: '/tmp/f/.agent-terminal' });
+  const d: FlowStepDef = { id: 'd', kind: 'loop', loop: 'l', decides: ['a', 'b'] };
+  const x: FlowStepDef = { id: 'x', kind: 'manual', when: { step: 'd', value: 'a' } };
+  const y: FlowStepDef = { id: 'y', kind: 'manual', when: { step: 'd', value: 'b' } };
+  const z: FlowStepDef = { id: 'z', kind: 'manual' };
+
+  it('advance after a recorded decision skips the steps it rules out', () => {
+    const flow = createFlowMachine(branched(d, x, y, z));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    const v = flow.advance();
+    expect(v.stepName).toBe('y');
+    expect(v.position).toBe(3);
+  });
+
+  it('never lands on a step the decision rules out', () => {
+    const flow = createFlowMachine(branched(d, x, y, z));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    const landed: string[] = [];
+    for (let v = flow.advance(); v.status === 'in_progress'; v = flow.advance()) {
+      expect(v.stepRuns[v.position - 1]).toBe('runs');
+      landed.push(v.stepName);
+    }
+    expect(landed).toEqual(['y', 'z']);
+  });
+
+  it('advance completes the run when every later step is skipped', () => {
+    const flow = createFlowMachine(branched(d, x));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.advance().status).toBe('done');
+  });
+
+  it('advance does not move into an unresolved step', () => {
+    const flow = createFlowMachine(branched(d, x));
+    flow.start();
+    const v = flow.advance();
+    expect(v.position).toBe(1);
+    expect(v.status).toBe('in_progress');
+  });
+
+  it('names the step whose missing decision keeps Advance from moving', () => {
+    const flow = createFlowMachine(branched(d, x, y, z));
+    flow.start();
+    expect(flow.pendingDecision()).toBe('d');
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.pendingDecision()).toBeNull();
+  });
+
+  it('names the first undecided step when the step Advance waits on hangs off another undecided one', () => {
+    const p: FlowStepDef = { id: 'p', kind: 'manual' };
+    const e: FlowStepDef = { id: 'e', kind: 'loop', loop: 'l', decides: ['a', 'b'], when: { step: 'd', value: 'a' } };
+    const ea: FlowStepDef = { id: 'ea', kind: 'manual', when: { step: 'e', value: 'a' } };
+    const flow = createFlowMachine(branched(d, p, e, ea));
+    flow.start();
+    flow.advance();
+    expect(flow.pendingDecision()).toBe('d');
+  });
+
+  it('Advance on a deciding step that has not decided stays put even when the next step runs on every path, and the step can still decide', () => {
+    const flow = createFlowMachine(branched(d, z, x));
+    flow.start();
+    const v = flow.advance();
+    expect([v.stepName, v.status]).toEqual(['d', 'in_progress']);
+    expect(flow.pendingDecision()).toBe('d');
+    flow.recordDecision('d', { value: 'a' });
+    expect(flow.state().decisions).toEqual({ d: { value: 'a' } });
+    expect(flow.advance().stepName).toBe('z');
+    expect(flow.advance().stepName).toBe('x');
+  });
+
+  it('Advance on a last deciding step that has not decided stays put', () => {
+    const flow = createFlowMachine(branched(z, d));
+    flow.start();
+    flow.advance();
+    expect(flow.advance().status).toBe('in_progress');
+    expect(flow.pendingDecision()).toBe('d');
+  });
+
+  it('names no step when Advance moves on: a step with no condition next, the run end, or a loop-back', () => {
+    const flow = createFlowMachine(branched(d, z, x));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.pendingDecision()).toBeNull();
+    flow.advance();
+    expect(flow.pendingDecision()).toBeNull();
+    const done = createFlowMachine(branched(d));
+    done.start();
+    done.recordDecision('d', { value: 'b' });
+    expect(done.pendingDecision()).toBeNull();
+    const looped = createFlowMachine(branched(d, { id: 'r', kind: 'manual', repeat: { backTo: 'd', countInput: 'slices' } }, x), memStore(() => ({ step: 'r', status: 'in_progress', inputs: { slices: '2' } }), () => undefined));
+    expect(looped.pendingDecision()).toBeNull();
+  });
+
+  it('names no step while the run is not in progress', () => {
+    const flow = createFlowMachine(branched(d, x));
+    expect(flow.pendingDecision()).toBeNull();
+  });
+
+  it('recordDecision ignores a step that is not current or a value it does not declare', () => {
+    const p: FlowStepDef = { id: 'p', kind: 'manual' };
+    const flow = createFlowMachine(branched(p, d, x));
+    flow.recordDecision('d', { value: 'a' });
+    expect(flow.state().decisions).toEqual({});
+    flow.start();
+    flow.recordDecision('d', { value: 'a' });
+    flow.recordDecision('p', { value: 'a' });
+    expect(flow.state().decisions).toEqual({});
+    flow.advance();
+    flow.recordDecision('d', { value: 'c' });
+    expect(flow.state().decisions).toEqual({});
+  });
+
+  it('the view carries the recorded decision', () => {
+    const flow = createFlowMachine(branched(d, x, y, z));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.state().decisions).toEqual({ d: { value: 'b' } });
+    expect(flow.state().stepRuns).toEqual(['runs', 'skipped', 'runs', 'runs']);
+  });
+
+  it('a failed bootstrap on the chosen path reverts past the steps the decision rules out', () => {
+    const pickup: FlowStepDef = { ...y, bootstrap: 'pickup' };
+    const flow = createFlowMachine(branched(d, x, pickup, z));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.advance().stepName).toBe('y');
+    const v = flow.revertStep('y');
+    expect(v.stepName).toBe('d');
+    expect(v.stepRuns[v.position - 1]).toBe('runs');
+  });
+
+  it('back to red stays put when the slice it returns to is ruled out', () => {
+    const red: FlowStepDef = { id: 'red', kind: 'manual', when: { step: 'd', value: 'a' } };
+    const refactor: FlowStepDef = { id: 'refactor', kind: 'manual', when: { step: 'd', value: 'a' }, repeat: { backTo: 'red', countInput: 'slices' } };
+    const flow = createFlowMachine(branched(d, red, refactor, z));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.advance().stepName).toBe('z');
+    const v = flow.reopenSlice();
+    expect(v.stepName).toBe('z');
+    expect(v.stepRuns[v.position - 1]).toBe('runs');
+  });
+
+  it('undo after every later step is ruled out returns to the deciding step', () => {
+    const flow = createFlowMachine(branched(d, x));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    expect(flow.advance().status).toBe('done');
+    const v = flow.undo();
+    expect([v.status, v.stepName]).toEqual(['in_progress', 'd']);
+  });
+
+  it('undo or a bootstrap rollback onto a deciding step keeps its decision and the run takes its path again', () => {
+    const pickup: FlowStepDef = { ...y, bootstrap: 'pickup' };
+    const reverted = createFlowMachine(branched(d, x, pickup, z));
+    reverted.start();
+    reverted.recordDecision('d', { value: 'b' });
+    reverted.advance();
+    const back = reverted.revertStep('y');
+    expect(back.stepName).toBe('d');
+    expect(back.decisions).toEqual({ d: { value: 'b' } });
+    expect(reverted.advance().stepName).toBe('y');
+
+    const undone = createFlowMachine(branched(d, x));
+    undone.start();
+    undone.recordDecision('d', { value: 'b' });
+    undone.advance();
+    const v = undone.undo();
+    expect([v.stepName, v.status]).toEqual(['d', 'in_progress']);
+    expect(v.decisions).toEqual({ d: { value: 'b' } });
+    expect(undone.advance().status).toBe('done');
+  });
+
+  it('a bootstrap rollback clears the decisions recorded after the step it lands on', () => {
+    const e: FlowStepDef = { id: 'e', kind: 'loop', loop: 'l', decides: ['c', 'f'], bootstrap: 'pickup' };
+    const u: FlowStepDef = { id: 'u', kind: 'manual', when: { step: 'e', value: 'c' } };
+    const flow = createFlowMachine(branched(d, y, e, u));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    flow.advance();
+    flow.advance();
+    flow.recordDecision('e', { value: 'c' });
+    const v = flow.revertStep('e');
+    expect(v.stepName).toBe('y');
+    expect(v.decisions).toEqual({ d: { value: 'b' } });
+    expect(v.stepRuns).toEqual(['runs', 'runs', 'runs', 'unresolved']);
+  });
+
+  it('re-entering a deciding step clears its decision and every later one', () => {
+    const e: FlowStepDef = { id: 'e', kind: 'loop', loop: 'l', decides: ['c', 'f'] };
+    const u: FlowStepDef = { id: 'u', kind: 'manual', when: { step: 'e', value: 'c' } };
+
+    const r: FlowStepDef = { id: 'r', kind: 'manual', repeat: { backTo: 'd', countInput: 'slices' } };
+    const reopened = createFlowMachine(branched(d, y, e, u, r));
+    reopened.start();
+    reopened.recordDecision('d', { value: 'b' });
+    reopened.advance();
+    reopened.advance();
+    reopened.recordDecision('e', { value: 'f' });
+    expect(reopened.advance().stepName).toBe('r');
+    const v = reopened.reopenSlice();
+    expect(v.stepName).toBe('d');
+    expect(v.decisions).toEqual({});
+    expect(v.stepRuns).toEqual(['runs', 'unresolved', 'runs', 'unresolved', 'runs']);
+
+    const looped = createFlowMachine(branched(d, y, e, u, r));
+    looped.start();
+    looped.resolveInputs({ slices: '2' });
+    looped.recordDecision('d', { value: 'b' });
+    looped.advance();
+    looped.advance();
+    looped.recordDecision('e', { value: 'f' });
+    looped.advance();
+    const back = looped.advance();
+    expect(back.stepName).toBe('d');
+    expect(back.decisions).toEqual({});
+
+    const first = createFlowMachine(branched({ ...d, bootstrap: 'pickup' }, x));
+    first.start();
+    first.recordDecision('d', { value: 'b' });
+    expect(first.revertStep('d').decisions).toEqual({});
+    expect(first.start().decisions).toEqual({});
+  });
+
+  it('restart and terminate clear every decision', () => {
+    const restarted = createFlowMachine(branched(d, x));
+    restarted.start();
+    restarted.recordDecision('d', { value: 'b' });
+    expect(restarted.advance().status).toBe('done');
+    const v = restarted.restart();
+    expect(v.decisions).toEqual({});
+    expect(v.stepRuns).toEqual(['runs', 'unresolved']);
+
+    const terminated = createFlowMachine(branched(d, x, y, z));
+    terminated.start();
+    terminated.recordDecision('d', { value: 'b' });
+    terminated.advance();
+    expect(terminated.terminate().decisions).toEqual({});
+    terminated.start();
+    expect(terminated.advance().stepName).toBe('d');
+  });
+
+  it('moving back to a step after the deciding step keeps the decision', () => {
+    const pickup: FlowStepDef = { ...z, bootstrap: 'pickup' };
+    const flow = createFlowMachine(branched(d, x, y, pickup));
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    flow.advance();
+    flow.advance();
+    expect(flow.revertStep('z').decisions).toEqual({ d: { value: 'b' } });
+    flow.advance();
+    expect(flow.advance().status).toBe('done');
+    const v = flow.undo();
+    expect(v.stepName).toBe('z');
+    expect(v.decisions).toEqual({ d: { value: 'b' } });
+  });
+
+  it('hydrate drops a recorded decision the definition no longer declares', () => {
+    const plain: FlowStepDef = { id: 'plain', kind: 'manual' };
+    const persisted: PersistedFlowState = {
+      step: 'd',
+      status: 'in_progress',
+      decisions: { d: { value: 'c' }, plain: { value: 'a' }, gone: { value: 'a' } },
+    };
+    const flow = createFlowMachine(branched(d, x, plain), memStore(() => persisted, () => undefined));
+    expect(flow.state().decisions).toEqual({});
+    const v = flow.advance();
+    expect([v.stepName, v.status]).toEqual(['d', 'in_progress']);
+  });
+
+  it('a run whose persisted step is gone starts fresh without the old run decisions', () => {
+    let saved: PersistedFlowState | null = { step: 'gone', status: 'in_progress', decisions: { d: { value: 'b', note: 'old run' } } };
+    const store = memStore(() => saved, (s) => void (saved = s));
+    const flow = createFlowMachine(branched(d, x, y, z), store);
+    expect(flow.state().decisions).toEqual({});
+    expect(flow.start().decisions).toEqual({});
+    expect(createFlowMachine(branched(d, x, y, z), store).state().decisions).toEqual({});
+    const v = flow.advance();
+    expect([v.stepName, v.status]).toEqual(['d', 'in_progress']);
+  });
+
+  it('the loop view comes from the last loop step the run took, never from one the decision skipped', () => {
+    const skippedLoop: FlowStepDef = { id: 'xl', kind: 'loop', loop: 'skipped-loop', when: { step: 'd', value: 'a' } };
+    const viewOf = (name: string): FlowLoopView => ({ status: 'planning', iteration: 1, pr: null, branch: name, ready: false, actionable: false, humanNeeded: false });
+    const flow = createFlowMachine(branched(d, skippedLoop, y, z), undefined, undefined, viewOf);
+    flow.start();
+    flow.recordDecision('d', { value: 'b' });
+    const v = flow.advance();
+    expect(v.stepName).toBe('y');
+    expect(v.loop?.branch).toBe('l');
+  });
+
+  it('a ticket input surfaces only once the run enters its step, so a skipped step never shows it', () => {
+    const ticketStep: FlowStepDef = { id: 'tk', kind: 'loop', loop: 't', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }], when: { step: 'd', value: 'a' } };
+    const persisted: PersistedFlowState = { step: 'd', status: 'in_progress', inputs: { ticket: '176' } };
+    const flow = createFlowMachine(branched(d, ticketStep, y, z), memStore(() => persisted, () => undefined));
+    flow.recordDecision('d', { value: 'b' });
+    const v = flow.advance();
+    expect(v.stepName).toBe('y');
+    expect(v.refs).toBeUndefined();
+  });
+
+  it('a recorded decision survives a relaunch', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-decision-'));
+    try {
+      const flow = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir));
+      flow.start();
+      flow.recordDecision('d', { value: 'b', note: 'feature request' });
+      const relaunched = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir));
+      expect(relaunched.state().decisions).toEqual({ d: { value: 'b', note: 'feature request' } });
+      expect(relaunched.advance().stepName).toBe('y');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a decision an approve records counts only once its gate accept has persisted', () => {
+  const branched = (...steps: FlowStepDef[]): FlowLoad => ({ ok: true, definition: { name: 'f', steps }, flowDir: '/tmp/f/.agent-terminal' });
+  const d: FlowStepDef = { id: 'd', kind: 'loop', loop: 'l', decides: ['a', 'b'] };
+  const x: FlowStepDef = { id: 'x', kind: 'manual', when: { step: 'd', value: 'a' } };
+  const y: FlowStepDef = { id: 'y', kind: 'manual', when: { step: 'd', value: 'b' } };
+  const z: FlowStepDef = { id: 'z', kind: 'manual' };
+  const gates = (): { accept(step: string, turn: string): void; forget(): void; accepted(step: string, turn: string): boolean } => {
+    const accepted = new Set<string>();
+    return {
+      accept: (step, turn) => void accepted.add(JSON.stringify([step, turn])),
+      forget: () => accepted.clear(),
+      accepted: (step, turn) => accepted.has(JSON.stringify([step, turn])),
+    };
+  };
+
+  it('before the accept, Advance stays on the step, the step is named as undecided, and neither the view nor the rail shows the value', () => {
+    const gate = gates();
+    const flow = createFlowMachine(branched(d, x, y, z), undefined, undefined, undefined, gate.accepted);
+    flow.start();
+    expect(flow.recordDecision('d', { value: 'b' }, 'turn-1')).not.toBeNull();
+    expect(flow.pendingDecision()).toBe('d');
+    const v = flow.advance();
+    expect([v.stepName, v.status]).toEqual(['d', 'in_progress']);
+    expect(v.decisions).toEqual({});
+    expect(v.stepRuns).toEqual(['runs', 'unresolved', 'unresolved', 'runs']);
+
+    gate.accept('d', 'turn-1');
+    expect(flow.pendingDecision()).toBeNull();
+    expect(flow.state().decisions).toEqual({ d: { value: 'b' } });
+    expect(flow.state().stepRuns).toEqual(['runs', 'skipped', 'runs', 'runs']);
+    expect(flow.advance().stepName).toBe('y');
+  });
+
+  it('an accept of another turn of the same step does not count it', () => {
+    const gate = gates();
+    const flow = createFlowMachine(branched(d, x, y, z), undefined, undefined, undefined, gate.accepted);
+    flow.start();
+    gate.accept('d', 'turn-1');
+    flow.recordDecision('d', { value: 'b' }, 'turn-2');
+    expect(flow.pendingDecision()).toBe('d');
+    expect(flow.advance().stepName).toBe('d');
+  });
+
+  it('a reload of a run saved after the decision but before the accept does not follow it, and does once the gate is accepted', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-gated-decision-'));
+    try {
+      const gate = gates();
+      const flow = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir), undefined, undefined, gate.accepted);
+      flow.start();
+      flow.recordDecision('d', { value: 'b', note: 'feature request' }, 'turn-1');
+      const relaunched = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir), undefined, undefined, gate.accepted);
+      expect(relaunched.pendingDecision()).toBe('d');
+      expect(relaunched.state().decisions).toEqual({});
+      expect(relaunched.advance().stepName).toBe('d');
+      gate.accept('d', 'turn-1');
+      const accepted = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir), undefined, undefined, gate.accepted);
+      expect(accepted.state().decisions).toEqual({ d: { value: 'b', note: 'feature request' } });
+      expect(accepted.advance().stepName).toBe('y');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('once Advance has taken the decision, a later move back onto the step keeps it, whatever the gate now reads', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-gated-decision-'));
+    try {
+      const gate = gates();
+      const pickup: FlowStepDef = { ...y, bootstrap: 'pickup' };
+      const flow = createFlowMachine(branched(d, x, pickup, z), createFlowStateStore(dir), undefined, undefined, gate.accepted);
+      flow.start();
+      flow.recordDecision('d', { value: 'b' }, 'turn-1');
+      gate.accept('d', 'turn-1');
+      expect(flow.advance().stepName).toBe('y');
+      gate.forget();
+      const relaunched = createFlowMachine(branched(d, x, pickup, z), createFlowStateStore(dir), undefined, undefined, gate.accepted);
+      const back = relaunched.revertStep('y');
+      expect(back.stepName).toBe('d');
+      expect(back.decisions).toEqual({ d: { value: 'b' } });
+      expect(relaunched.advance().stepName).toBe('y');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('withdrawing a recorded decision puts back what the step held, and succeeds when the decision is already gone', () => {
+    const gate = gates();
+    const flow = createFlowMachine(branched(d, x, y, z), undefined, undefined, undefined, gate.accepted);
+    flow.start();
+    flow.recordDecision('d', { value: 'a' });
+    const recorded = flow.recordDecision('d', { value: 'b' }, 'turn-1');
+    if (recorded === null) throw new Error('not recorded');
+    expect(flow.withdrawDecision('d', recorded)).toBe(true);
+    expect(flow.state().decisions).toEqual({ d: { value: 'a' } });
+
+    const again = flow.recordDecision('d', { value: 'b' }, 'turn-2');
+    if (again === null) throw new Error('not recorded');
+    flow.terminate();
+    expect(flow.withdrawDecision('d', again)).toBe(true);
+    expect(flow.state().decisions).toEqual({});
+  });
+
+  it('withdrawing fails while the recorded decision is still saved and the flow cannot remove it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-gated-decision-'));
+    try {
+      const flow = createFlowMachine(branched(d, x, y, z), createFlowStateStore(dir));
+      flow.start();
+      const recorded = flow.recordDecision('d', { value: 'b' }, 'turn-1');
+      if (recorded === null) throw new Error('not recorded');
+      const unloaded = createFlowMachine({ ok: false, error: 'flow.yaml: bad indentation' }, createFlowStateStore(dir));
+      expect(unloaded.withdrawDecision('d', recorded)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -11,6 +11,7 @@ import type { FlowAutoGateView, FlowLoopView, FlowRefs, GithubRef, GithubRefKind
 import { hasFlowRefs } from '../../shared/ipc';
 import { loopGateActionable } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
+import { stepLabel } from '../../shared/stepLabel';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
 import { autoHaltReasonText, failedEffectNotice } from '../../shared/gateAuthority';
@@ -25,7 +26,7 @@ import { createTokenTable, TOKEN_TABLE_NAME, type TokenTable, type TokenTableVie
 function gateOptionLabel(option: string, reopenTarget: string): string {
   const cleaned = stripDisplayControlChars(option).trim();
   if (cleaned === 'request-changes') return 'changes';
-  if (cleaned === 'back-to-red') return `Back to ${reopenTarget}`;
+  if (cleaned === 'back-to-red') return `Back to ${stepLabel(reopenTarget)}`;
   return cleaned;
 }
 
@@ -185,7 +186,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     const { step, turnKey } = loop.appTurn;
     // A display-only stripped copy for the accessible names; the dispatch keeps the RAW step, which the
     // receiver matches against persisted step identity (§6) — stripping there would dispatch an unmatchable id.
-    const stepLabel = stripDisplayControlChars(step);
+    const shownStep = stepLabel(stripDisplayControlChars(step));
     const group = doc.createElement('div');
     group.className = 'gatebar';
     group.dataset.appRouteOutGroup = '';
@@ -204,8 +205,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       btn.setAttribute(
         'aria-label',
         action === 'terminate'
-          ? `Terminate flow from the ${stepLabel} work turn`
-          : `${label} the ${stepLabel} work turn`,
+          ? `Terminate flow from the ${shownStep} work turn`
+          : `${label} the ${shownStep} work turn`,
       );
       routeOuts.bind(btn, () => deps.appRouteOut?.(step, turnKey, action));
       group.append(btn);
@@ -326,14 +327,14 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     const { step } = loop.appTurn;
     // A display-only stripped copy for the accessible name; the dispatch keeps the RAW step, matched against
     // persisted step identity by the receiver (§6) — stripping there would arm an unmatchable id.
-    const stepLabel = stripDisplayControlChars(step);
+    const shownStep = stepLabel(stripDisplayControlChars(step));
     const btn = doc.createElement('button');
     btn.className = 'pill arm-interrupt';
     btn.dataset.armInterrupt = '';
     btn.textContent = 'Hand back to me';
     // WCAG 2.5.3 Label in Name: the accessible name must contain the visible label contiguously, so a
     // speech-input user saying "click Hand back to me" can activate it.
-    btn.setAttribute('aria-label', `Hand back to me — return the ${stepLabel} loop at the next consolidation`);
+    btn.setAttribute('aria-label', `Hand back to me — return the ${shownStep} loop at the next consolidation`);
     onPress(btn, () => deps.armInterrupt?.(step));
     body.append(btn);
   };

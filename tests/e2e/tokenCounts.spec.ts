@@ -187,24 +187,24 @@ test('rail counts: off by default, then each station shows its step total, the o
   await flowStrip(page).locator('.loopstat').click();
   await expect(approve(page)).toBeVisible();
 
-  await expect(await railCountsLocator(page, ['red', 'verify', 'ship'])).toHaveCount(0);
+  await expect(await railCountsLocator(page, ['Red', 'Verify', 'Ship'])).toHaveCount(0);
   await expect(await panelTokenTableLocator(page)).toHaveCount(0);
 
   await setTokenCounts(page, true);
-  await expectRail(page, { red: '77.0k counting', verify: '—', ship: '—' }, '77.0k');
+  await expectRail(page, { Red: '77.0k counting', Verify: '—', Ship: '—' }, '77.0k');
   await expect(page.locator('#status-bar')).not.toContainText('77.0k');
   await expectTable(page, { red: ['70,000 counting', '5,200 counting', '210 counting', '1,560 counting'] });
 
   // The operator's own conversation at the gate adds 5,295: 82,265 in all.
   await typeCommand(page, 'one more thing');
-  await expectRail(page, { red: '82.3k counting', verify: '—', ship: '—' }, '82.3k');
+  await expectRail(page, { Red: '82.3k counting', Verify: '—', Ship: '—' }, '82.3k');
   await expect(page.locator('#status-bar')).not.toContainText('82.3k');
 
   await approve(page).click();
-  await expectRail(page, { red: '82.3k', verify: '0 counting', ship: '—' }, '82.3k');
+  await expectRail(page, { Red: '82.3k', Verify: '0 counting', Ship: '—' }, '82.3k');
 
   await setTokenCounts(page, false);
-  await expect(await railCountsLocator(page, ['red', 'verify', 'ship'])).toHaveCount(0);
+  await expect(await railCountsLocator(page, ['Red', 'Verify', 'Ship'])).toHaveCount(0);
   await expect(await panelTokenTableLocator(page)).toHaveCount(0);
 });
 
@@ -277,34 +277,34 @@ async function launchManual(prefix: string, opts: { ticket?: boolean } = {}): Pr
 test('re-runs add up: Undo and Restart add new spend, completion keeps the counts, Terminate shows dashes and a new run counts only its own', { tag: '@ownapp' }, async () => {
   test.setTimeout(budget(1, 14));
   const { page } = await launchManual('agent-term-e2e-tokens-reruns-');
-  await expectRail(page, { one: '—', two: '—' }, '—');
+  await expectRail(page, { One: '—', Two: '—' }, '—');
 
   await flowButton(page, 'Start').click();
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—' }, '12.5k');
   await flowButton(page, 'Advance').click();
   await typeCommand(page, 'bill two');
-  await expectRail(page, { one: '12.5k', two: '3.3k counting' }, '15.7k');
+  await expectRail(page, { One: '12.5k', Two: '3.3k counting' }, '15.7k');
   await flowButton(page, 'Advance').click();
-  await expectRail(page, { one: '12.5k', two: '3.3k' }, '15.7k');
+  await expectRail(page, { One: '12.5k', Two: '3.3k' }, '15.7k');
 
   await flowButton(page, 'Undo').click();
   await typeCommand(page, 'bill two');
-  await expectRail(page, { one: '12.5k', two: '6.5k counting' }, '19.0k');
+  await expectRail(page, { One: '12.5k', Two: '6.5k counting' }, '19.0k');
   await flowButton(page, 'Advance').click();
   await flowButton(page, 'Restart').click();
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '24.9k counting', two: '6.5k' }, '31.5k');
+  await expectRail(page, { One: '24.9k counting', Two: '6.5k' }, '31.5k');
 
   await flowButton(page, 'Terminate').click();
   await page.locator('#flow-confirm-host .flow-modal .confirm').click();
-  await expectRail(page, { one: '—', two: '—' }, '—');
+  await expectRail(page, { One: '—', Two: '—' }, '—');
 
   // The Claude Code still running hosts the new run but has logged nothing since it started.
   await flowButton(page, 'Start').click();
-  await expectRail(page, { one: 'unavailable counting', two: '—' }, 'unavailable');
+  await expectRail(page, { One: 'unavailable counting', Two: '—' }, 'unavailable');
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—' }, '12.5k');
 });
 
 test('counts survive a relaunch, with spend logged while the app was closed, and the open step keeps counting', { tag: '@ownapp' }, async () => {
@@ -312,10 +312,10 @@ test('counts survive a relaunch, with spend logged while the app was closed, and
   const { page, rig } = await launchManual('agent-term-e2e-tokens-relaunch-', { ticket: true });
   await flowButton(page, 'Start').click();
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—' }, '12.5k');
   await flowButton(page, 'Advance').click();
   await typeCommand(page, 'bill two');
-  await expectRail(page, { one: '12.5k', two: '3.3k counting' }, '15.7k');
+  await expectRail(page, { One: '12.5k', Two: '3.3k counting' }, '15.7k');
   await flowStrip(page).locator('.loopstat').click();
   await expectTable(page, {
     one: ['12,000', '340', '56', '78'],
@@ -329,7 +329,7 @@ test('counts survive a relaunch, with spend logged while the app was closed, and
   const relaunched = await launch(rig.env);
   await expect(relaunched.locator('.xterm-rows')).not.toHaveText('', { timeout: FIRST_PAINT_MS });
   await typeCommand(relaunched, `cd ${shellQuote(rig.repo)}`);
-  await expectRail(relaunched, { one: '12.5k', two: '4.0k counting' }, '16.5k');
+  await expectRail(relaunched, { One: '12.5k', Two: '4.0k counting' }, '16.5k');
   await flowStrip(relaunched).locator('.loopstat').click();
   await expectTable(relaunched, {
     one: ['12,000', '340', '56', '78'],
@@ -339,7 +339,7 @@ test('counts survive a relaunch, with spend logged while the app was closed, and
 
   await typeCommand(relaunched, 'claude');
   await typeCommand(relaunched, 'bill two');
-  await expectRail(relaunched, { one: '12.5k', two: '7.3k counting' }, '19.8k');
+  await expectRail(relaunched, { One: '12.5k', Two: '7.3k counting' }, '19.8k');
   await expectTable(relaunched, {
     two: ['6,700 counting', '470 counting', '21 counting', '86 counting'],
     [RUN_TOTAL_ROW]: ['18,700', '810', '77', '164'],
@@ -423,22 +423,22 @@ test('rollback keeps the failed step\'s spend: the step rolled back to counts on
 
   await flowButton(page, 'Start').click();
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—' }, '12.5k');
   await flowButton(page, 'Advance').click();
   const ticket = page.locator('#flow-modal-host .flow-modal');
   await ticket.locator('.field input').fill('29');
   await ticket.locator('.confirm').click();
   await expect.poll(() => (existsSync(rig.env.FAKE_GHGIT_LOG) ? readFileSync(rig.env.FAKE_GHGIT_LOG, 'utf8') : '')).toMatch(/^held /m);
   await typeCommand(page, 'bill two');
-  await expectRail(page, { one: '12.5k', two: '3.3k counting' }, '15.7k');
+  await expectRail(page, { One: '12.5k', Two: '3.3k counting' }, '15.7k');
 
   rmSync(hold);
   const failed = page.locator('#flow-error-host .flow-modal');
   await expect(failed).toBeVisible();
   await failed.locator('.dismiss').click();
-  await expectRail(page, { one: '12.5k counting', two: '3.3k' }, '15.7k');
+  await expectRail(page, { One: '12.5k counting', Two: '3.3k' }, '15.7k');
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '24.9k counting', two: '3.3k' }, '28.2k');
+  await expectRail(page, { One: '24.9k counting', Two: '3.3k' }, '28.2k');
 });
 
 // ---- Codex and mixed agents (#29) ----
@@ -473,23 +473,23 @@ test('Codex and mixed agents: a Codex step shows its 4 kinds, an earlier Codex\'
   await typeCommand(page, 'codex');
   await flowButton(page, 'Start').click();
   await typeCommand(page, 'bill codex');
-  await expectRail(page, { one: '21.9k counting', two: '—', three: '—' }, '21.9k');
+  await expectRail(page, { One: '21.9k counting', Two: '—', Three: '—' }, '21.9k');
 
   await flowButton(page, 'Advance').click();
   await quitAgent(page);
   await typeCommand(page, rig.earlierCodex!);
   await typeCommand(page, 'bill earlier codex');
-  await expectRail(page, { one: '21.9k', two: '9.4k partly reported counting', three: '—' }, '31.3k partly reported');
+  await expectRail(page, { One: '21.9k', Two: '9.4k partly reported counting', Three: '—' }, '31.3k partly reported');
 
   await flowButton(page, 'Advance').click();
   await quitAgent(page);
   await typeCommand(page, 'claude');
   await typeCommand(page, 'bill claude');
-  await expectRail(page, { one: '21.9k', two: '9.4k partly reported', three: '5.5k counting' }, '36.9k partly reported');
+  await expectRail(page, { One: '21.9k', Two: '9.4k partly reported', Three: '5.5k counting' }, '36.9k partly reported');
   await quitAgent(page);
   await typeCommand(page, rig.earlierCodex!);
   await typeCommand(page, 'bill earlier codex again');
-  await expectRail(page, { one: '21.9k', two: '9.4k partly reported', three: '8.6k partly reported counting' }, '40.0k partly reported');
+  await expectRail(page, { One: '21.9k', Two: '9.4k partly reported', Three: '8.6k partly reported counting' }, '40.0k partly reported');
 
   await flowStrip(page).locator('.loopstat').click();
   await expectTable(page, {
@@ -512,14 +512,14 @@ async function startWithClaudeSpend(page: Page, rig: TokenRig): Promise<void> {
   await typeCommand(page, 'claude');
   await flowButton(page, 'Start').click();
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—', three: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—', Three: '—' }, '12.5k');
 }
 
 /** Every entered step and the run total read unavailable, step three keeps its dash, and the flow still advances. */
 async function expectUnavailableThroughAdvance(page: Page): Promise<void> {
-  await expectRail(page, { one: 'unavailable counting', two: '—', three: '—' }, 'unavailable');
+  await expectRail(page, { One: 'unavailable counting', Two: '—', Three: '—' }, 'unavailable');
   await flowButton(page, 'Advance').click();
-  await expectRail(page, { one: 'unavailable', two: 'unavailable counting', three: '—' }, 'unavailable');
+  await expectRail(page, { One: 'unavailable', Two: 'unavailable counting', Three: '—' }, 'unavailable');
 }
 
 test('unavailable logs: no logs at all, then a dangling symlink in the Claude Code log folder, make every entered step and the run total unavailable, and the flow advances', { tag: '@ownapp' }, async () => {
@@ -532,11 +532,11 @@ test('unavailable logs: no logs at all, then a dangling symlink in the Claude Co
   await expect(flowButton(page, 'Start')).toBeVisible();
 
   await flowButton(page, 'Start').click();
-  await expectRail(page, { one: 'unavailable counting', two: '—', three: '—' }, 'unavailable');
+  await expectRail(page, { One: 'unavailable counting', Two: '—', Three: '—' }, 'unavailable');
 
   await typeCommand(page, 'claude');
   await typeCommand(page, 'bill one');
-  await expectRail(page, { one: '12.5k counting', two: '—', three: '—' }, '12.5k');
+  await expectRail(page, { One: '12.5k counting', Two: '—', Three: '—' }, '12.5k');
 
   const logDir = claudeCodeLogs(exampleConfigDir, rig.repo).dir;
   symlinkSync(join(logDir, 'gone.jsonl'), join(logDir, 'dangling.jsonl'));

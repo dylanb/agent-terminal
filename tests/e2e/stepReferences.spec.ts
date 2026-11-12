@@ -40,8 +40,8 @@ test('a repo flow made of repo step definitions is picked, started and advanced 
   await openPicker(page);
   await pickerOption(page, 'two-step').click();
 
-  await expect(harness.stepName(1)).toHaveText('step-a', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('step-b');
+  await expect(harness.stepName(1)).toHaveText('Step a', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('Step b');
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
   await expect(station(page, 1)).toHaveClass(/\bactive\b/);
@@ -81,7 +81,7 @@ test('a repository step definition wins over a global one of the same name', { t
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('only-global', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Only global', { timeout: 10_000 });
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
 
@@ -91,7 +91,7 @@ test('a repository step definition wins over a global one of the same name', { t
   await expect(flowControl(page)).toHaveText('Start', { timeout: 10_000 });
   await openPicker(page);
   await pickerOption(page, 'clash').click();
-  await expect(harness.stepName(1)).toHaveText('step-a', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Step a', { timeout: 10_000 });
   await flowControl(page).click();
   await expect(inputModal(page)).toBeVisible({ timeout: 10_000 });
   await expect(inputModal(page).locator('.field .nm')).toHaveText(['note']);
@@ -139,8 +139,8 @@ test('a two-step flow of referenced loop steps is picked, waits at the first gat
     await harness.cdInto(repo);
     await openPicker(page);
     await pickerOption(page, 'two-step').click();
-    await expect(harness.stepName(1)).toHaveText('step-a', { timeout: 10_000 });
-    await expect(harness.stepName(2)).toHaveText('step-b');
+    await expect(harness.stepName(1)).toHaveText('Step a', { timeout: 10_000 });
+    await expect(harness.stepName(2)).toHaveText('Step b');
 
     await page.locator('.xterm-screen').click();
     await page.keyboard.type('fake-agent', { delay: 20 });

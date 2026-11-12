@@ -5,6 +5,7 @@ import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { AgentState, FlowAutoGateView, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
+import type { StepRun } from '../../src/shared/flowBranch';
 import type { FlowTokensView } from '../../src/shared/ipc';
 import { accessibleTextOf, railCountsIn, railRunTotalIn, railStationIn, railTotalIn } from '../helpers/tokenCountsUi';
 
@@ -15,7 +16,7 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
   const byKey = new Map<string, FlowStatus>();
   const view = (repoKey: string): FlowStateView => {
     const status = byKey.get(repoKey) ?? initial;
-    return { stepName: `${repoKey}-step`, runStarted: 'never-started' as const, steps: [`${repoKey}-step`], position: 1, total: 1, status };
+    return { stepName: `${repoKey}-step`, runStarted: 'never-started' as const, steps: [`${repoKey}-step`], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status };
   };
   return {
     state: vi.fn(async (repoKey: string) => view(repoKey)),
@@ -87,7 +88,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(stations()).toHaveLength(3));
     expect(deps.state).toHaveBeenCalledWith('/repo');
-    expect(stepName()).toBe('/repo-step');
+    expect(stepName()).toBe('/repo step');
     expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']);
     expect(sect()).toBe('Flow — step 1 / 3'); // synthetic-inclusive: the bookends count toward the total
     expect(control()!.textContent).toBe('Start');
@@ -136,9 +137,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     strip.onRepoChanged('/repoB');
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoB'));
 
-    resolveB({ stepName: 'Repo B', runStarted: 'never-started' as const, steps: ['Repo B'], position: 1, total: 1, status: 'not_started', userTitle: 'B' });
+    resolveB({ stepName: 'Repo B', runStarted: 'never-started' as const, steps: ['Repo B'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started', userTitle: 'B' });
     await vi.waitFor(() => expect(stepName()).toBe('Repo B'));
-    resolveA({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], position: 1, total: 1, status: 'not_started', userTitle: 'A' });
+    resolveA({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started', userTitle: 'A' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(stepName()).toBe('Repo B');
@@ -153,7 +154,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     strip.onRepoChanged('/repo');
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repo'));
     strip.dispose();
-    resolve({ stepName: 'Late', runStarted: 'never-started' as const, steps: ['Late'], position: 1, total: 1, status: 'not_started' });
+    resolve({ stepName: 'Late', runStarted: 'never-started' as const, steps: ['Late'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started' });
     await new Promise((r) => setTimeout(r, 0));
     expect(host.childElementCount).toBe(0);
   });
@@ -165,7 +166,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       ...fakeFlow(),
       state: vi.fn((repoKey: string) =>
         repoKey === '/repoA'
-          ? Promise.resolve({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], position: 1, total: 1, status: 'not_started' as FlowStatus })
+          ? Promise.resolve({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], stepRuns: ['runs' as const], decisions: {}, position: 1, total: 1, status: 'not_started' as FlowStatus })
           : Promise.reject(new Error('repo B unavailable')),
       ),
       onStatusBar,
@@ -191,6 +192,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       state: vi.fn(async () => ({
         stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
+        stepRuns: ['runs' as const],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress' as FlowStatus,
@@ -211,6 +214,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       state: vi.fn(async () => ({
         stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
+        stepRuns: ['runs' as const],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress' as FlowStatus,
@@ -255,10 +260,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView, onStatusBar });
     strip.onRepoChanged('/repo');
     await vi.waitFor(() => expect(onView).toHaveBeenCalled());
-    await vi.waitFor(() => expect(host.textContent).toContain('/repo-step'));
+    await vi.waitFor(() => expect(host.textContent).toContain('/repo step'));
     expect(onStatusBar).toHaveBeenCalledWith(expect.anything(), '/repo');
     await strip.refresh();
-    expect(host.textContent).toContain('/repo-step');
+    expect(host.textContent).toContain('/repo step');
   });
 
   it('tells onView (null, null) when it goes idle: leaving a repo, and a refresh with no repo', async () => {
@@ -287,7 +292,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const onView = vi.fn();
     const pending = new Map<string, (v: FlowStateView) => void>();
     const viewOf = (repoKey: string): FlowStateView => ({
-      stepName: `${repoKey}-step`, steps: [`${repoKey}-step`], position: 1, total: 1, status: 'not_started', runStarted: 'never-started',
+      stepName: `${repoKey}-step`, steps: [`${repoKey}-step`], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started', runStarted: 'never-started',
     });
     const deps = {
       ...fakeFlow('not_started'),
@@ -336,7 +341,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     let fire: () => void = () => {};
     const deps = {
       ...fakeFlow('not_started'),
-      state: vi.fn(async (): Promise<FlowStateView> => ({ stepName: 's', steps: ['s'], position: 1, total: 1, status: 'not_started', runStarted })),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ stepName: 's', steps: ['s'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started', runStarted })),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -373,6 +378,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       state: vi.fn(async () => ({
         stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
+        stepRuns: ['runs' as const],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress' as FlowStatus,
@@ -408,9 +415,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = fakeFlow();
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/a');
-    await vi.waitFor(() => expect(stepName()).toBe('/a-step'));
+    await vi.waitFor(() => expect(stepName()).toBe('/a step'));
     strip.onRepoChanged('/b');
-    await vi.waitFor(() => expect(stepName()).toBe('/b-step'));
+    await vi.waitFor(() => expect(stepName()).toBe('/b step'));
     expect(deps.state).toHaveBeenCalledWith('/b');
   });
 
@@ -482,6 +489,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   const inProgress = (notice?: string): FlowStateView => ({
     stepName: '/repo-step', runStarted: 'never-started' as const,
     steps: ['/repo-step'],
+    stepRuns: ['runs'],
+    decisions: {},
     position: 1,
     total: 1,
     status: 'in_progress',
@@ -599,6 +608,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: '/repo-step', runStarted: 'never-started' as const,
           steps: ['/repo-step'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress',
@@ -629,6 +640,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: '/repo-step', runStarted: 'never-started' as const,
           steps: ['/repo-step'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress',
@@ -662,6 +675,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'plan', runStarted: 'never-started' as const,
           steps: ['groom', 'plan', 'implement'],
+          stepRuns: ['runs', 'runs', 'runs'],
+          decisions: {},
           position: 2,
           total: 3,
           status: 'in_progress',
@@ -680,9 +695,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(stations()).toHaveLength(5));
     expect(stations().map((s) => s.querySelector('.nm')?.textContent)).toEqual([
       'Not started',
-      'groom',
-      'plan',
-      'implement',
+      'Groom',
+      'Plan',
+      'Implement',
       'Completed',
     ]);
     expect([stateOf(0), stateOf(1), stateOf(2), stateOf(3), stateOf(4)]).toEqual([
@@ -702,6 +717,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['groom', 'build'],
+          stepRuns: ['runs', 'runs'],
+          decisions: {},
           position: 2,
           total: 2,
           status: 'in_progress',
@@ -735,6 +752,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const runLess: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -764,6 +783,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -792,6 +813,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -820,6 +843,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
+          stepRuns: ['runs', 'runs'],
+          decisions: {},
           position: 1,
           total: 2,
           status: 'in_progress' as FlowStatus,
@@ -848,6 +873,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
+          stepRuns: ['runs', 'runs'],
+          decisions: {},
           position: 1,
           total: 2,
           status: 'in_progress' as FlowStatus,
@@ -885,6 +912,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -925,6 +954,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
+          stepRuns: ['runs', 'runs'],
+          decisions: {},
           position: 1,
           total: 2,
           status: 'in_progress' as FlowStatus,
@@ -960,6 +991,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -1058,6 +1091,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -1098,6 +1133,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const loopView: FlowStateView = {
       stepName: 'build', runStarted: 'never-started' as const,
       steps: ['groom', 'build'],
+      stepRuns: ['runs', 'runs'],
+      decisions: {},
       position: 2,
       total: 2,
       status: 'in_progress',
@@ -1136,6 +1173,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1177,6 +1216,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1213,6 +1254,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1245,6 +1288,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1279,6 +1324,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1318,6 +1365,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1356,6 +1405,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const promptView: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1400,6 +1451,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const loopView: FlowStateView = {
       stepName: 'build', runStarted: 'never-started' as const,
       steps: ['build'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',
@@ -1449,6 +1502,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: '', runStarted: 'never-started' as const,
           steps: [],
+          stepRuns: [],
+          decisions: {},
           position: 0,
           total: 0,
           status: 'error' as FlowStatus,
@@ -1475,11 +1530,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = fakeFlow('in_progress');
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(stepName()).toBe('/repo-step'));
+    await vi.waitFor(() => expect(stepName()).toBe('/repo step'));
 
     deps.state.mockRejectedValueOnce(new Error('ipc down'));
     await expect(strip.refresh()).resolves.toBeUndefined(); // swallowed, not propagated (§18.1)
-    expect(stepName()).toBe('/repo-step'); // prior UI preserved, host not cleared
+    expect(stepName()).toBe('/repo step'); // prior UI preserved, host not cleared
   });
 
   it('a control can be used again when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
@@ -1532,7 +1587,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(stepName()).toBe('/repo-step'));
+    await vi.waitFor(() => expect(stepName()).toBe('/repo step'));
 
     const callsBeforeDispose = deps.state.mock.calls.length;
     strip.dispose();
@@ -1593,6 +1648,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           async (): Promise<FlowStateView> => ({
             stepName: '', runStarted: 'never-started' as const,
             steps: [],
+            stepRuns: [],
+            decisions: {},
             position: 0,
             total: 0,
             status: 'error' as FlowStatus,
@@ -1618,8 +1675,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       let held = true;
       const view = (): FlowStateView =>
         held
-          ? { stepName: '', runStarted, steps: [], position: 0, total: 0, status: 'error', error: "the run's progression state could not be verified" }
-          : { stepName: 'red', runStarted: 'never-started', steps: ['red'], position: 1, total: 1, status: 'not_started' };
+          ? { stepName: '', runStarted, steps: [], stepRuns: [], decisions: {}, position: 0, total: 0, status: 'error', error: "the run's progression state could not be verified" }
+          : { stepName: 'red', runStarted: 'never-started', steps: ['red'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'not_started' };
       return {
         state: vi.fn(async () => view()),
         start: vi.fn(),
@@ -1816,11 +1873,53 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       return { deps, push: () => fire() };
     };
 
+    it('redraws the rail when a push only changes which steps run', async () => {
+      let stepRuns: StepRun[] = ['runs', 'unresolved', 'runs'];
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'd', runStarted: 'started' as const,
+        steps: ['d', 'x', 'z'],
+        stepRuns,
+        decisions: {},
+        position: 1,
+        total: 3,
+        status: 'in_progress',
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(stations().length).toBeGreaterThan(0));
+      expect(sect()).not.toMatch(/\d+ \/ \d+/);
+
+      stepRuns = ['runs', 'skipped', 'runs'];
+      push();
+      await vi.waitFor(() => expect(sect()).toBe('Flow — step 2 / 4'));
+      expect(stations().map((s) => s.querySelector('.nm')?.textContent)).toEqual(['Not started', 'D', 'Z', 'Completed']);
+    });
+
+    it('redraws the rail when a push only changes a recorded decision', async () => {
+      let decisions: FlowStateView['decisions'] = { d: { value: 'b' } };
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'y', runStarted: 'started' as const,
+        steps: ['d', 'y'],
+        stepRuns: ['runs', 'runs'],
+        decisions,
+        position: 2,
+        total: 2,
+        status: 'in_progress',
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(stations()[1]?.textContent).toBe('Db'));
+
+      decisions = { d: { value: 'b', note: 'later note' } };
+      push();
+      await vi.waitFor(() => expect(stations()[1].textContent).toBe('Db · later note'));
+    });
+
     it('keeps keyboard focus on the focused control across a derived-only push (1918/WCAG 2.4.3)', async () => {
       let activity: AgentState = 'active';
       const { deps, push } = passiveDeps(() => ({
         stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
+        stepRuns: ['runs'],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress',
@@ -1844,6 +1943,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       const { deps, push } = passiveDeps(() => ({
         stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
+        stepRuns: ['runs'],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress',
@@ -1865,6 +1966,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       const { deps, push } = passiveDeps(() => ({
         stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
+        stepRuns: ['runs'],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress',
@@ -1889,6 +1992,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           ? {
               stepName: 'build', runStarted: 'never-started' as const,
               steps: ['build'],
+              stepRuns: ['runs' as const],
+              decisions: {},
               position: 1,
               total: 1,
               status: 'in_progress',
@@ -1897,6 +2002,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
           : {
               stepName: 'build', runStarted: 'never-started' as const,
               steps: ['build'],
+              stepRuns: ['runs' as const],
+              decisions: {},
               position: 1,
               total: 1,
               status: 'in_progress',
@@ -1921,6 +2028,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -1947,6 +2056,8 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
         async (): Promise<FlowStateView> => ({
           stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
+          stepRuns: ['runs'],
+          decisions: {},
           position: 1,
           total: 1,
           status: 'in_progress' as FlowStatus,
@@ -2005,6 +2116,8 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
       async (): Promise<FlowStateView> => ({
         stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
+        stepRuns: ['runs'],
+        decisions: {},
         position: 1,
         total: 1,
         status: 'in_progress' as FlowStatus,
@@ -2061,6 +2174,81 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
   });
 });
 
+describe('flow status strip — a branched flow (§24.2.3)', () => {
+  const render = async (view: Omit<FlowStateView, 'stepName' | 'runStarted' | 'total' | 'decisions'> & { decisions?: FlowStateView['decisions'] }): Promise<void> => {
+    createFlowStrip(host, {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          ...view,
+          stepName: view.steps[view.position - 1],
+          runStarted: 'started',
+          total: view.steps.length,
+          decisions: view.decisions ?? {},
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(stations().length).toBeGreaterThan(0));
+  };
+  const names = (): Array<string | null | undefined> => stations().map((s) => s.querySelector('.nm')?.textContent);
+  const undecided = { steps: ['d', 'x', 'y', 'z'], stepRuns: ['runs', 'unresolved', 'unresolved', 'runs'] satisfies StepRun[], position: 1, status: 'in_progress' as const };
+
+  it('an unresolved branch hides its steps behind one marker line', async () => {
+    await render(undecided);
+    expect(names()).toEqual(['Not started', 'D', 'next steps depend on the verdict', 'Z', 'Completed']);
+  });
+
+  it('the header shows no count while a later step is unresolved', async () => {
+    await render(undecided);
+    expect(sect()).not.toMatch(/\d+ \/ \d+/);
+  });
+
+  it('marks the current step for assistive technology while the header shows no count', async () => {
+    await render({ ...undecided, position: 1 });
+    const current = stations().filter((s) => s.getAttribute('aria-current') === 'step');
+    expect(current.map((s) => s.querySelector('.nm')?.textContent)).toEqual(['D']);
+  });
+
+  it('marks no step current before the run starts or after it ends', async () => {
+    await render({ ...undecided, status: 'not_started' });
+    expect(stations().filter((s) => s.hasAttribute('aria-current'))).toEqual([]);
+  });
+
+  it('skipped steps are not shown and the count covers only shown stations', async () => {
+    await render({ steps: ['d', 'x', 'y', 'z'], stepRuns: ['runs', 'skipped', 'runs', 'runs'], position: 3, status: 'in_progress' });
+    expect(sect()).toBe('Flow — step 3 / 5');
+    expect(names()).not.toContain('X');
+  });
+
+  it('an unbranched flow keeps today\'s header', async () => {
+    await render({ steps: ['p', 'q'], stepRuns: ['runs', 'runs'], position: 1, status: 'in_progress' });
+    expect(sect()).toBe('Flow — step 2 / 4');
+  });
+
+  it('the current step stays on the rail while its own condition is unsettled', async () => {
+    await render({ steps: ['d', 'x', 'y', 'z'], stepRuns: ['runs', 'unresolved', 'unresolved', 'runs'], position: 2, status: 'in_progress' });
+    expect(names()).toEqual(['Not started', 'D', 'X', 'next steps depend on the verdict', 'Z', 'Completed']);
+    expect(stateOf(2)).toBe('active');
+  });
+
+  it('the deciding station shows its decision as a tag', async () => {
+    const decided = { steps: ['d', 'x', 'y', 'z'], stepRuns: ['runs', 'skipped', 'runs', 'runs'] satisfies StepRun[], position: 3, status: 'in_progress' as const };
+    await render({ ...decided, decisions: { d: { value: 'b', note: 'feature request' } } });
+    expect(stations()[1].textContent).toContain('b · feature request');
+    expect(names()).toEqual(['Not started', 'D', 'Y', 'Z', 'Completed']);
+    host.replaceChildren();
+    await render({ ...decided, decisions: { d: { value: 'b' } } });
+    expect(stations()[1].textContent).toBe('Db');
+  });
+});
+
 // #29 — each flow step's station carries its token total, and the run total sits under the step list.
 describe('flow strip token counts', () => {
   type StepCounts = Extract<NonNullable<FlowTokensView['steps'][number]>, { state: 'counted' }>;
@@ -2089,6 +2277,8 @@ describe('flow strip token counts', () => {
     stepName: ['plan', 'build', 'ship'][position - 1],
     runStarted: 'started',
     steps: ['plan', 'build', 'ship'],
+    stepRuns: ['runs', 'runs', 'runs'],
+    decisions: {},
     position,
     total: 3,
     status,
@@ -2122,9 +2312,9 @@ describe('flow strip token counts', () => {
     await vi.waitFor(() => railRunTotalIn(host));
 
     expect({
-      plan: text(railTotalIn(host, 'plan')),
-      build: text(railTotalIn(host, 'build')),
-      ship: text(railTotalIn(host, 'ship')),
+      plan: text(railTotalIn(host, 'Plan')),
+      build: text(railTotalIn(host, 'Build')),
+      ship: text(railTotalIn(host, 'Ship')),
       run: text(railRunTotalIn(host)),
     }).toEqual({ plan: '812.3k', build: '4.5M counting', ship: '—', run: '5.3M' });
   });
@@ -2137,10 +2327,10 @@ describe('flow strip token counts', () => {
     await vi.waitFor(() => railRunTotalIn(host));
 
     expect({
-      plan: accessibleTextOf(railTotalIn(host, 'plan')),
-      build: accessibleTextOf(railTotalIn(host, 'build')),
+      plan: accessibleTextOf(railTotalIn(host, 'Plan')),
+      build: accessibleTextOf(railTotalIn(host, 'Build')),
       run: accessibleTextOf(railRunTotalIn(host)),
-      visibleBuild: text(railTotalIn(host, 'build')),
+      visibleBuild: text(railTotalIn(host, 'Build')),
     }).toEqual({ plan: '9.4k partly reported', build: '8.6k partly reported counting', run: '18.0k partly reported', visibleBuild: '8.6k partly reported counting' });
   });
 
@@ -2150,8 +2340,8 @@ describe('flow strip token counts', () => {
     await vi.waitFor(() => railRunTotalIn(host));
 
     expect({
-      build: accessibleTextOf(railTotalIn(host, 'build')),
-      ship: text(railTotalIn(host, 'ship')),
+      build: accessibleTextOf(railTotalIn(host, 'Build')),
+      ship: text(railTotalIn(host, 'Ship')),
       run: accessibleTextOf(railRunTotalIn(host)),
       visibleRun: text(railRunTotalIn(host)),
     }).toEqual({ build: 'unavailable counting', ship: '—', run: '812.3k incomplete', visibleRun: '812.3k incomplete' });
@@ -2166,31 +2356,37 @@ describe('flow strip token counts', () => {
     await r.push(view('in_progress', 2, { steps: [{ state: 'unavailable' }, { state: 'unavailable' }, null], counting: 1, run: { state: 'unavailable' } }));
     await vi.waitFor(() => expect(text(railRunTotalIn(host))).toBe('unavailable'));
 
-    expect({ partlyAndIncomplete, plan: text(railTotalIn(host, 'plan')) }).toEqual({ partlyAndIncomplete: '9.4k partly reported incomplete', plan: 'unavailable' });
+    expect({ partlyAndIncomplete, plan: text(railTotalIn(host, 'Plan')) }).toEqual({ partlyAndIncomplete: '9.4k partly reported incomplete', plan: 'unavailable' });
   });
 
   it('shows 0 for an entered step that billed nothing', async () => {
     mount(view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) }));
     await vi.waitFor(() => railRunTotalIn(host));
-    expect(text(railTotalIn(host, 'build'))).toBe('0 counting');
+    expect(text(railTotalIn(host, 'Build'))).toBe('0 counting');
+  });
+
+  it('keeps each count on its own step when a skipped step is left off the rail', async () => {
+    mount({ ...view('in_progress', 3, { steps: [PLAN_812K, null, BUILD_4M5], counting: 2, run: run(4_800_000, 462_000, 40_300, 10_045) }), stepRuns: ['runs', 'skipped', 'runs'] });
+    await vi.waitFor(() => railRunTotalIn(host));
+    expect({ plan: text(railTotalIn(host, 'Plan')), ship: text(railTotalIn(host, 'Ship')) }).toEqual({ plan: '812.3k', ship: '4.5M counting' });
   });
 
   it('marks no step counting once the flow is complete, and keeps every count', async () => {
     mount(view('done', 3, { steps: [PLAN_812K, BUILD_4M5, IDLE], counting: null, run: run(4_800_000, 462_000, 40_300, 10_045) }));
     await vi.waitFor(() => railRunTotalIn(host));
-    expect([...['plan', 'build', 'ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['812.3k', '4.5M', '0', '5.3M']);
+    expect([...['Plan', 'Build', 'Ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['812.3k', '4.5M', '0', '5.3M']);
   });
 
   it('shows dashes on every station and the run total while the flow has not started', async () => {
     mount(view('not_started', 1, { steps: [null, null, null], counting: null, run: null }));
     await vi.waitFor(() => railRunTotalIn(host));
-    expect([...['plan', 'build', 'ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['—', '—', '—', '—']);
+    expect([...['Plan', 'Build', 'Ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['—', '—', '—', '—']);
   });
 
   it('shows no count on any station and no run total when the view carries no counts', async () => {
     mount(view('in_progress', 2));
-    await vi.waitFor(() => railStationIn(host, 'ship'));
-    expect(railCountsIn(host, ['plan', 'build', 'ship'])).toHaveLength(0);
+    await vi.waitFor(() => railStationIn(host, 'Ship'));
+    expect(railCountsIn(host, ['Plan', 'Build', 'Ship'])).toHaveLength(0);
   });
 
   it('a push that changes only the counts updates them in place, keeping focus on the control the user is on', async () => {
@@ -2201,7 +2397,7 @@ describe('flow strip token counts', () => {
 
     await push(view('in_progress', 2, { steps: [PLAN_812K, BUILD_4M5, null], counting: 1, run: run(4_800_000, 462_000, 40_300, 10_045) }));
 
-    await vi.waitFor(() => expect(text(railTotalIn(host, 'build'))).toBe('4.5M counting'));
+    await vi.waitFor(() => expect(text(railTotalIn(host, 'Build'))).toBe('4.5M counting'));
     expect({ run: text(railRunTotalIn(host)), focusKept: document.activeElement === advance && advance.isConnected }).toEqual({ run: '5.3M', focusKept: true });
   });
 
@@ -2244,7 +2440,7 @@ describe('flow strip token counts', () => {
     mount(view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) }));
     await vi.waitFor(() => railRunTotalIn(host));
     host.setAttribute('aria-live', 'polite');
-    const counts = railCountsIn(host, ['plan', 'build', 'ship']);
+    const counts = railCountsIn(host, ['Plan', 'Build', 'Ship']);
     expect(counts.map((c) => c.closest('[aria-live]')?.getAttribute('aria-live'))).toEqual(['off', 'off', 'off', 'off']);
   });
 });

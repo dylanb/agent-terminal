@@ -5,6 +5,7 @@
 // dispatches the request-changes decision (window.flow.appGateDecision). Composes createModalShell and
 // supplies the feedback-field body; the caller decides WHEN to open/close it.
 
+import { stepLabel } from '../../shared/stepLabel';
 import { createModalShell } from './modalShell';
 
 /** A review todo the operator may curate into the feedback (§19.4) — the id/text projection of the repo's
@@ -37,17 +38,19 @@ interface PurposeCopy {
 }
 
 function purposeCopy(purpose: FeedbackComposerCtx['purpose'], target: string): PurposeCopy {
-  if (purpose === 'back-to-red')
+  if (purpose === 'back-to-red') {
+    const targetName = stepLabel(target);
     return {
-      title: (step) => `Send this back to ${target} from ${step}`,
-      description: `Optional brief: what must be redone. It is handed to the ${target} step and every test-driven step that runs after it (§28.4.2).`,
-      fieldLabel: `back-to-${target} brief`,
-      submitLabel: `Back to ${target}`,
+      title: (step) => `Send this back to ${targetName} from ${stepLabel(step)}`,
+      description: `Optional brief: what must be redone. It is handed to the ${targetName} step and every test-driven step that runs after it (§28.4.2).`,
+      fieldLabel: `Back to ${targetName} brief`,
+      submitLabel: `Back to ${targetName}`,
       required: false,
-      dropped: `Could not send this back to ${target}. Your brief is kept — try again.`,
+      dropped: `Could not send this back to ${targetName}. Your brief is kept — try again.`,
     };
+  }
   return {
-    title: (step) => `Request changes to ${step}`,
+    title: (step) => `Request changes to ${stepLabel(step)}`,
     description: 'Your feedback joins the next review-and-fix round alongside the reviewers’ findings (§27.9).',
     fieldLabel: 'request-changes feedback',
     submitLabel: 'Submit feedback',

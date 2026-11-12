@@ -364,9 +364,9 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
     panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: 'dev', appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
     const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
-    expect(btn.textContent).toBe('Back to dev');
-    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
-    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · Back to dev');
+    expect(btn.textContent).toBe('Back to Dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to Dev');
+    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · Back to Dev');
     btn.click();
     expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
   });
@@ -465,7 +465,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-app-route-out="terminate"]')).not.toBeNull();
     expect(
       host.querySelector('[data-app-route-out="terminate"]')?.getAttribute('aria-label'),
-    ).toBe('Terminate flow from the plan work turn');
+    ).toBe('Terminate flow from the Plan work turn');
   });
 
   it('each §27 route-out button fires the injected service with its step+turn identity (§6)', () => {
@@ -760,6 +760,15 @@ describe('docked loop panel — the §27 consolidator surface (AC5, AC8, AC9)', 
     expect(name).toContain((btn!.textContent ?? '').toLowerCase()); // 2.5.3: accessible name contains the visible text
   });
 
+  it('the arm-interrupt accessible name shows the step in sentence case', () => {
+    const { deps } = armDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'working', iteration: 2, appTurn: { step: 'plan-approve', turnKey: 'review-plan' } }),
+      'plan-approve',
+    );
+    expect(host.querySelector<HTMLElement>('[data-arm-interrupt]')?.getAttribute('aria-label')).toContain('the Plan approve loop');
+  });
+
   it('offers NO arm-interrupt control when not iterating — at the gate (complete) or in error (AC9)', () => {
     const { deps } = armDeps();
     const panel = createLoopPanel(host, deps);
@@ -981,8 +990,8 @@ describe('docked loop panel — the sweep split', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
     panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: `dev${BIDI}`, appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
     const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
-    expect(btn.textContent).toBe('Back to dev');
-    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
+    expect(btn.textContent).toBe('Back to Dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to Dev');
     btn.click();
     expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
   });

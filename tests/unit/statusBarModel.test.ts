@@ -10,6 +10,8 @@ import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 const view = (over: Partial<FlowStateView> = {}): FlowStateView => ({
   stepName: 'implement', runStarted: 'never-started' as const,
   steps: ['implement'],
+  stepRuns: ['runs'],
+  decisions: {},
   position: 1,
   total: 1,
   status: 'in_progress',

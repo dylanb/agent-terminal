@@ -29,7 +29,7 @@ Event `ts` is ISO 8601 UTC with milliseconds; the header's `started` is ISO 8601
 
 ### 25.5 Event vocabulary (D-audit-5)
 
-The vocabulary is the `AuditEvent` union in `src/shared/audit.ts`. Ticket/PR numbers come only from resolved inputs and the loop engine's run state (§25.7). A §27.9 gate-decision `command` entry the engine decided carries an engine-decided mark; one without it was decided by a human. An `auto` halt records every reason that holds (§27.9.1 N9b.9).
+The vocabulary is the `AuditEvent` union in `src/shared/audit.ts`. Ticket/PR numbers come only from resolved inputs and the loop engine's run state (§25.7). A §27.9 gate-decision `command` entry the engine decided carries an engine-decided mark; one without it was decided by a human. An `auto` halt records every reason that holds (§27.9.1 N9b.9). A `decision` event records the value a deciding step's approve took (§18.2), written only when the flow recorded it.
 
 ### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
 

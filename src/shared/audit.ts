@@ -48,6 +48,7 @@ export type AuditEvent =
   // §24.2.3 T4 — the OS refused to deliver a raised attention notification. Not folded into the
   // RunTimeline's state: a rejected raise is an event about the delivery surface, not about the run.
   | { ts: string; type: 'notify.failed'; reason: string }
+  | { ts: string; type: 'decision'; step: string; value: string }
   | { ts: string; type: 'step.tokens'; step: string; counts: StepTokens }
   | { ts: string; type: 'agent.hosted'; agent: AgentKind };
 
@@ -133,6 +134,7 @@ const eventFields: {
   'loop.cost': { iteration: numberField, usd: numberField, unpriced: (value) => Array.isArray(value) && value.every(textField) },
   'loop.ci': { iteration: numberField, total: numberField, passed: numberField, failed: numberField, pending: numberField },
   'notify.failed': { reason: textField },
+  'decision': { step: textField, value: textField },
   'step.tokens': { step: textField, counts: isStepTokens },
   'agent.hosted': { agent: isAgentKind },
 };

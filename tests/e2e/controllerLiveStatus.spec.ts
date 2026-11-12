@@ -65,15 +65,15 @@ test('real flow advancement updates only its fixed terminal pane', { tag: '@owna
       await expect(control).toHaveText('Advance');
     }
     await terminals[0].page.locator('#flow-strip .flow-control').click();
-    await expect(terminals[0].page.locator('#flow-strip')).toContainText('second-0');
+    await expect(terminals[0].page.locator('#flow-strip')).toContainText('Second 0');
     const leftPane = cardLocator(controller.page, left);
     const rightPane = cardLocator(controller.page, right);
-    await expect.soft(leftPane).toContainText('second-0', { timeout: STATUS_BUDGET_MS });
+    await expect.soft(leftPane).toContainText('Second 0', { timeout: STATUS_BUDGET_MS });
     await expect.soft(leftPane).toContainText('delivery-0', { timeout: STATUS_BUDGET_MS });
-    await expect.soft(rightPane).toContainText('first-1', { timeout: STATUS_BUDGET_MS });
+    await expect.soft(rightPane).toContainText('First 1', { timeout: STATUS_BUDGET_MS });
     await expect.soft(rightPane).toContainText('delivery-1', { timeout: STATUS_BUDGET_MS });
-    await expect.soft(leftPane).not.toContainText(/first-0|first-1|second-1/);
-    await expect.soft(rightPane).not.toContainText(/second-0|first-0/);
+    await expect.soft(leftPane).not.toContainText(/First 0|First 1|Second 1/);
+    await expect.soft(rightPane).not.toContainText(/Second 0|First 0/);
   } finally { await h.dispose(); }
 });
 
@@ -93,6 +93,6 @@ test('hidden terminal flow changes reach the controller including source dispatc
     await expect(control).toHaveText('Advance');
     await terminal.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].hide(); });
     await terminal.page.evaluate(directory => window.flow.advance(directory), repo);
-    await expect(cardLocator(controller.page, repo)).toContainText('measure', { timeout: STATUS_BUDGET_MS });
+    await expect(cardLocator(controller.page, repo)).toContainText('Measure', { timeout: STATUS_BUDGET_MS });
   } finally { await h.dispose(); }
 });

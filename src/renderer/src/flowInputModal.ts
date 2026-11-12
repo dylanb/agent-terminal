@@ -4,6 +4,7 @@
 // strip decides WHEN to open/close it.
 
 import type { FlowPrompt } from '../../shared/ipc';
+import { stepLabel } from '../../shared/stepLabel';
 import { createModalShell } from './modalShell';
 
 export interface FlowInputModal {
@@ -44,11 +45,11 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
         const h3 = doc.createElement('h3');
         h3.className = 'serif';
         h3.id = titleId;
-        h3.textContent = `${stepName} needs an input`;
+        h3.textContent = `${stepLabel(stepName)} needs an input`;
         const ph = doc.createElement('p');
         ph.className = 'ph';
         ph.id = describedById;
-        ph.textContent = `Entering the ${stepName} step — provide its required input to bootstrap the loop.`;
+        ph.textContent = `Entering the ${stepLabel(stepName)} step — provide its required input to bootstrap the loop.`;
         card.append(h3, ph);
 
         const reads: Array<{ name: string; read: () => string }> = [];

@@ -7,16 +7,18 @@ import { pickupMismatch, type PullRequestLookup } from './pullRequestLookup';
 import { runPickupRel } from './trustedPickups';
 import type { AppLoopBootstrap, PickupRecord } from './appLoopState';
 import type { ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
+import type { StepRun } from '../shared/flowBranch';
 
 export const PICKUP_CONFIRM_FIRST =
   'Confirm the run’s ticket and pull request first: the app has no saved pull request for this run, so nothing in it continues until you do.';
 
 export type ReachedPickupStep<C> = { contract: C; at: 'behind' | 'current' } | null;
 
-/** The first step up to the 1-based `position` whose loop runs a pickup. */
-export function reachedPickupStep<S, C>(steps: readonly S[], position: number, contractOf: (step: S) => C | null): ReachedPickupStep<C> {
+/** The first step up to the 1-based `position` that the run did not skip and whose loop runs a pickup. */
+export function reachedPickupStep<S, C>(steps: readonly S[], position: number, contractOf: (step: S) => C | null, runs: readonly StepRun[]): ReachedPickupStep<C> {
   const reached = steps.slice(0, position);
   for (const [i, step] of reached.entries()) {
+    if (runs[i] === 'skipped') continue;
     const contract = contractOf(step);
     if (contract !== null) return { contract, at: i === reached.length - 1 ? 'current' : 'behind' };
   }

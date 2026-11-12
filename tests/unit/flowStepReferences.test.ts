@@ -63,7 +63,14 @@ describe('flow.yaml step references (§18.2)', () => {
     expect(errorOf('name: t\nsteps:\n  - step: step-a\n    gate_authority: auto\n')).toContain('only a loop step may carry');
   });
 
-  it.each(['gate_authority: auto', 'id: x', 'step: other', 'repeat: { back_to: a, count_input: n }'])(
+  it.each([
+    'gate_authority: auto',
+    'id: x',
+    'step: other',
+    'repeat: { back_to: a, count_input: n }',
+    'halt_on_decision: [a]',
+    'when: { a: b }',
+  ])(
     'refuses a step definition that sets %s',
     (line) => {
       step('step-a', `${LOOP_DEF}${line}\n`);
@@ -81,6 +88,95 @@ describe('flow.yaml step references (§18.2)', () => {
   it('refuses a step setting on a reference', () => {
     step('step-a', 'kind: manual\n');
     expect(errorOf('name: t\nsteps:\n  - step: step-a\n    todo_template: x\n')).toContain('belongs in step definition "step-a"');
+  });
+
+  it('refuses decides on a reference', () => {
+    step('step-a', LOOP_DEF);
+    expect(errorOf('name: t\nsteps:\n  - step: step-a\n    decides: [a, b]\n')).toContain('belongs in step definition "step-a"');
+  });
+
+  describe('branching', () => {
+    const DECIDING_DEF = `${LOOP_DEF}decides: [ship, rework]\n`;
+
+    it('takes decides from the definition and halt_on_decision and when from the reference', () => {
+      step('decider', DECIDING_DEF);
+      step('fix', 'kind: manual\n');
+      const r = load(
+        'name: t\nsteps:\n' +
+          '  - step: decider\n    gate_authority: auto\n    halt_on_decision: [rework]\n' +
+          '  - step: fix\n    when: { decider: rework }\n',
+      );
+      expect(r.ok && r.definition.steps).toEqual([
+        { id: 'decider', kind: 'loop', loop: 'plan-loop', loopNamespace: 'app', gateAuthority: 'auto', decides: ['ship', 'rework'], haltOnDecision: ['rework'] },
+        { id: 'fix', kind: 'manual', when: { step: 'decider', value: 'rework' } },
+      ]);
+    });
+
+    it('lets an inline step branch on a referenced step under the id the flow gives it', () => {
+      step('decider', DECIDING_DEF);
+      const r = load('name: t\nsteps:\n  - step: decider\n    id: review\n  - id: ship-it\n    kind: manual\n    when: { review: ship }\n');
+      expect(r.ok && r.definition.steps[1].when).toEqual({ step: 'review', value: 'ship' });
+    });
+
+    it('lets a reference branch on an inline deciding step', () => {
+      step('fix', 'kind: manual\n');
+      const r = load('name: t\nsteps:\n  - id: d\n    kind: loop\n    loop: l\n    decides: [a, b]\n  - step: fix\n    when: { d: b }\n');
+      expect(r.ok && r.definition.steps[1].when).toEqual({ step: 'd', value: 'b' });
+    });
+
+    it('refuses a when on a reference that names a step whose definition decides nothing', () => {
+      step('plain', LOOP_DEF);
+      step('fix', 'kind: manual\n');
+      const error = errorOf('name: t\nsteps:\n  - step: plain\n  - step: fix\n    when: { plain: ship }\n');
+      expect(error).toContain('fix');
+      expect(error).toContain('is not an earlier step that decides');
+    });
+
+    it('refuses a when on a reference whose value the referenced definition does not decide', () => {
+      step('decider', DECIDING_DEF);
+      step('fix', 'kind: manual\n');
+      expect(errorOf('name: t\nsteps:\n  - step: decider\n  - step: fix\n    when: { decider: merge }\n')).toContain(
+        'when value "merge" is not one "decider" decides',
+      );
+    });
+
+    it('refuses a halt_on_decision on a reference that its definition does not decide', () => {
+      step('decider', DECIDING_DEF);
+      expect(errorOf('name: t\nsteps:\n  - step: decider\n    halt_on_decision: [merge]\n')).toContain(
+        'halt_on_decision value "merge" is not in decides',
+      );
+    });
+
+    it('refuses decides in a manual definition', () => {
+      step('manual-decider', 'kind: manual\ndecides: [a, b]\n');
+      expect(errorOf('name: t\nsteps:\n  - step: manual-decider\n')).toContain('"decides" is only valid on a loop step');
+    });
+
+    it('refuses a repeat on a reference whose back_to runs under a different when', () => {
+      step('decider', DECIDING_DEF);
+      step('fix', 'kind: manual\n');
+      step('again', LOOP_DEF);
+      const error = errorOf(
+        'name: t\nsteps:\n  - step: decider\n  - step: fix\n    when: { decider: rework }\n' +
+          '  - step: again\n    repeat: { back_to: fix, count_input: n }\n',
+      );
+      expect(error).toContain('does not share this step\'s when');
+    });
+  });
+
+  it('loads a reference whose loop-back runs entirely inside one branch', () => {
+    step('decider', `${LOOP_DEF}decides: [ship, rework]\n`);
+    step('fix', 'kind: manual\n');
+    step('again', LOOP_DEF);
+    const r = load(
+      'name: t\nsteps:\n  - step: decider\n  - step: fix\n    when: { decider: rework }\n' +
+        '  - step: again\n    when: { decider: rework }\n    repeat: { back_to: fix, count_input: n }\n',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.definition.steps[2].when).toEqual({ step: 'decider', value: 'rework' });
+      expect(r.definition.steps[2].repeat).toEqual({ backTo: 'fix', countInput: 'n' });
+    }
   });
 
   it('applies a repeat set on a reference', () => {

@@ -23,6 +23,7 @@ import {
 } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { probeChainedInput } from '../../src/main/chainedInputProbe';
+import { clearDecisionFile } from '../../src/main/stepDecision';
 import { assembleReportOnDisk } from '../../src/main/reportSections';
 import type { ArtifactBinding, LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
@@ -94,6 +95,7 @@ export class AppLoopEngineHarness {
   /** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null. */
   refactorResultLocationNull!: boolean;
   workRefsResult!: { ticket: number | null; pr: number | null };
+  stepDecidesResult!: readonly string[] | null;
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
   /** The step the engine's `reopenStep` dep names as the back-to-red return step. */
@@ -187,6 +189,7 @@ export class AppLoopEngineHarness {
     this.cancelTimer = vi.fn();
     this.injected = [];
     this.workRefsResult = { ticket: null, pr: null };
+    this.stepDecidesResult = null;
     this.sliceBriefResult = null;
     this.reopenStepResult = null;
     this.currentSliceResult = 1;
@@ -251,6 +254,8 @@ export class AppLoopEngineHarness {
       reviewerAgentProblem: () => null,
       hostedAgentKind: () => 'claude-code',
       workRefs: () => this.workRefsResult,
+      stepDecides: () => this.stepDecidesResult,
+      clearDecision: clearDecisionFile,
       sliceBrief: () => this.sliceBriefResult,
       reopenStep: () => this.reopenStepResult,
       currentSlice: () => this.currentSliceResult,
@@ -261,7 +266,9 @@ export class AppLoopEngineHarness {
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
             : check.kind === 'progress'
               ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
-              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
+              : check.kind === 'decision'
+                ? `check-artifact decision ${check.rel} ${check.values.join(',')}`
+                : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);

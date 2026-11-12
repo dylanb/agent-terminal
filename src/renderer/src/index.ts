@@ -1,4 +1,5 @@
 import { syncDockedPanel } from './dockedPanelSync';
+import { stepLabel } from '../../shared/stepLabel';
 import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
@@ -134,7 +135,7 @@ const showError = (options: ErrorDialogOptions): void => {
 if (errorDialog) {
   window.flow.onBootstrapError((reason, repoKey, step) =>
     showError({
-      title: `Bootstrap failed — ${step}`,
+      title: `Bootstrap failed — ${stepLabel(step)}`,
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );

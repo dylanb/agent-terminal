@@ -1886,13 +1886,13 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
 
   // AC1 — the pointer selects the catalog flow.
   await typeCommand(`cd "${repoCat}"`);
-  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
-  await expect(flowStation(2).locator('.nm')).toHaveText('cat-plan');
+  await expect(flowStepName()).toHaveText('Cat groom', { timeout: 10_000 });
+  await expect(flowStation(2).locator('.nm')).toHaveText('Cat plan');
   await expect(flowError()).toHaveCount(0);
 
   // AC2 — the pick wins over a present local flow.yaml.
   await typeCommand(`cd "${repoLocal}"`);
-  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Cat groom', { timeout: 10_000 });
   expect(await page.locator('#flow-strip').innerText()).not.toContain('local-step');
 
   // AC4 — an unknown pointer refuses to run: the §18.1 error names the pick; neither the local nor the global flow runs.
@@ -1922,10 +1922,10 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   seedCatalogEntry(repoWrite, 'flow-a', 'flow-a', 'a-step');
   seedCatalogEntry(repoWrite, 'flow-b', 'flow-b', 'b-groom', 'b-plan');
   await typeCommand(`cd "${repoWrite}"`);
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset, no local → global fallback
+  await expect(flowStepName()).toHaveText('Global fallback step', { timeout: 10_000 }); // pointer unset, no local → global fallback
   const permit = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
   expect(permit).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 }); // the write re-rendered the strip
+  await expect(flowStepName()).toHaveText('B groom', { timeout: 10_000 }); // the write re-rendered the strip
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
 
   await flowControl().click(); // Start → in_progress: the run has begun
@@ -1942,14 +1942,14 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   await confirmModal().locator('.confirm').click();
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
-  await expect(flowStepName()).toHaveText('b-groom');
+  await expect(flowStepName()).toHaveText('B groom');
   expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('never-started');
   expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('a-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('A step', { timeout: 10_000 });
 
   // AC8 — clearing the selection returns the worktree to the silent global fallback.
   expect(await page.evaluate((rk) => window.flow.clearActiveFlow(rk), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Global fallback step', { timeout: 10_000 });
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
   await expect(flowError()).toHaveCount(0);
 
@@ -1973,7 +1973,7 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   await once(child, 'exit');
   writeFileSync(lockFile, serializeLockHolder({ pid: deadPid, startTime: 'long-gone' }));
   expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('B groom', { timeout: 10_000 });
 
   for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
 });
@@ -2014,14 +2014,14 @@ test('a begun catalog run keeps its source across a relaunch, and a lost source 
   };
 
   await launch();
-  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Sticky one', { timeout: 10_000 });
   await flowControl().click(); // Start → the run begins on the catalog entry
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await app.close();
 
   writeActiveFlow(repo, 'other'); // the pointer changes on disk while the run is begun
   await launch();
-  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Sticky one', { timeout: 10_000 });
   await expect(flowControl()).toHaveText('Advance');
   expect(await page.locator('#flow-strip').innerText()).not.toContain('other-step');
   await app.close();
@@ -2045,7 +2045,7 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await expect(flowStation(0)).toHaveClass(/\bactive\b/); // synthetic "Not started" bookend
   await expect(flowControl()).toHaveText('Start');
 
@@ -2128,7 +2128,7 @@ test('APP_HOME_DIR relocates the global flow.yaml and the audit tree off the rea
 
   await typeCommand(`cd "${workdir}"`);
   // The global flow resolved from APP_HOME_DIR, not $HOME (which has none) — the step id proves the source.
-  await expect(flowStepName()).toHaveText('relocated-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Relocated step', { timeout: 10_000 });
 
   await expect(flowControl()).toHaveText('Start');
   await flowControl().click();
@@ -2284,7 +2284,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
   await flowControl().click(); // Start → groom: run opens
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
   await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
@@ -2321,8 +2321,8 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   await typeCommand(`cd "${repo}"`);
   // Rail: [Not started] · groom · plan · implement · [Completed].
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 });
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
-  await expect(flowStation(3).locator('.nm')).toHaveText('implement');
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom');
+  await expect(flowStation(3).locator('.nm')).toHaveText('Implement');
   await expect(flowStation(0)).toHaveClass(/\bactive\b/); // Not started
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 1 / 5');
   await expect(flowControl()).toHaveText('Start');
@@ -2413,7 +2413,8 @@ test('installing the examples installs every bundled step definition where a rep
   await pickerHost.getByRole('button', { name: /flow/i }).click();
   await pickerHost.getByRole('option', { name: /reuse/ }).click();
   const stationName = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i).locator('.nm');
-  for (const [i, name] of names.entries()) await expect(stationName(i + 1)).toHaveText(name, { timeout: 10_000 });
+  const shownAs = (id: string): string => id.charAt(0).toUpperCase() + id.slice(1).replaceAll('-', ' ');
+  for (const [i, name] of names.entries()) await expect(stationName(i + 1)).toHaveText(shownAs(name), { timeout: 10_000 });
 
   await app.close();
   for (const dir of [home, configDir, repo]) rmSync(dir, { recursive: true, force: true });
@@ -2719,7 +2720,7 @@ test('after install, the active step offers its bundled todo template as the pic
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → groom-ticket active (todo_template: ticket-grooming)
 
   await openQuickSend('todo');
@@ -2747,7 +2748,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
 
   await flowControl().click(); // Start → groom: no skill, nothing injected
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -3470,12 +3471,13 @@ function seedPickupCatalogEntry(home: string, id: string, name: string, extraSte
 // #167 AC 1 (§18.7.5). The budget covers the longest stalled path so a mutant's red is a named assertion, never a
 // test timeout.
 const FLOW_X_ID = 'flow-x-pinned';
-const FLOW_X_STEPS = ['x-groom', 'pickup', 'x-review', 'x-ship'];
 const FLOW_Y_STEPS = ['y-alpha', 'y-beta'];
 const PIN_WAIT = { firstPaint: 15_000, pickupOutcome: 30_000, verdict: 40_000, ui: 10_000 } as const;
 const PIN_GREEN_MS = 9_000;
 const stripStepNames = () => page.locator('#flow-strip .flow.vert .stn .nm');
-const rail = (steps: string[]): string[] => ['Not started', ...steps, 'Completed'];
+const rail = (labels: string[]): string[] => ['Not started', ...labels, 'Completed'];
+const FLOW_X_LABELS = ['X groom', 'Pickup', 'X review', 'X ship'];
+const FLOW_Y_LABELS = ['Y alpha', 'Y beta'];
 const pickerTrigger = () => flowPicker().locator('.flow-picker-trigger');
 const pickerOption = (id: string) => flowPicker().getByRole('option', { name: new RegExp(id) });
 const budget = (uiWaits: number): number =>
@@ -3558,7 +3560,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   await expect(pickerTrigger()).toBeEnabled({ timeout: PIN_WAIT.ui });
   await pickerTrigger().click();
   await pickerOption(FLOW_X_ID).click();
-  await expect(stripStepNames()).toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames()).toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect(pickerTrigger()).toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await expect.poll(() => readActiveFlow(repo), { timeout: PIN_WAIT.ui }).toEqual({ kind: 'value', id: FLOW_X_ID });
   await expect(flowControl()).toHaveText('Start', { timeout: PIN_WAIT.ui });
@@ -3570,13 +3572,13 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   if ((await loopReadout().isVisible()) && (await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await expect.soft(loopPanel().locator('[data-gate-option="approve"]'), "X's pickup step still owns the run after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
 
-  await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
-  for (const step of FLOW_Y_STEPS) await expect(stripStepNames()).not.toContainText([step], { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
+  for (const label of FLOW_Y_LABELS) await expect(stripStepNames()).not.toContainText([label], { timeout: PIN_WAIT.ui });
   await expect.soft(pickerTrigger(), 'the picker still shows X after pickup').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
 
   await terminateRun();
   expect.soft(readActiveFlow(repo), 'the selection is still X after Terminate').toEqual({ kind: 'value', id: FLOW_X_ID });
-  await expect.soft(stripStepNames(), 'the strip still shows X after Terminate').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect.soft(stripStepNames(), 'the strip still shows X after Terminate').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect.soft(pickerTrigger(), 'the picker still shows X after Terminate').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await pickerTrigger().click();
   await expect.soft(pickerOption(FLOW_Y_ID), 'Y is listed in the catalog').toBeVisible({ timeout: PIN_WAIT.ui });
@@ -3585,7 +3587,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   await page.keyboard.press('Escape');
 
   await enterPickupStep('the second Start runs X: its pickup step asks for the ticket');
-  await expect(stripStepNames(), 'the strip shows X at the second Start').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows X at the second Start').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect(pickerTrigger(), 'the picker shows X at the second Start').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
@@ -3598,15 +3600,14 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   const catalog = createCatalogFixture();
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(seedAppBootstrapFlowRepo('agent-term-e2e-167-unset-repo-'));
-  const localSteps = ['groom', 'plan'];
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'plan');
 
   await typeCommand(`cd "${repo}"`);
-  await expect(stripStepNames()).toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames()).toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await typeCommand('fake-agent');
   await pickUpServedTicket(repo, logFile);
   await expect.soft.poll(() => readIf(appRunState(repo)), { message: 'the local pickup step runs to its clean gate', timeout: PIN_WAIT.verdict }).toContain('verdict: clean');
-  await expect(stripStepNames(), 'the strip still shows the local flow after pickup').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip still shows the local flow after pickup').toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await terminateRun();
 
   expect.soft(readActiveFlow(repo), 'no selection was written from the ticket').toEqual({ kind: 'unset' });
@@ -3618,7 +3619,7 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   await page.keyboard.press('Escape');
 
   await enterPickupStep('the next Start runs the local flow: its pickup step asks for the ticket');
-  await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
   await closeTicketPinApp(catalog, [repo, home, binDir, ticketDir]);
@@ -4389,7 +4390,7 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
   await expect(errorDialog).toContainText('working tree is not clean');
   await expect(errorDialog).toContainText(repo);
-  await expect(errorDialog).toContainText('plan');
+  await expect(errorDialog).toContainText('Plan');
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
   expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
@@ -5712,7 +5713,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom', { timeout: 10_000 });
   await typeCommand('fake-agent'); // a hosted agent is at the prompt for the §27 work turn
 
   await flowControl().click(); // Start → groom (manual, no prompt)
@@ -5731,7 +5732,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
@@ -5760,7 +5761,7 @@ test('typed-input ticket + PR surface only once the flow enters the step that de
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → in_progress on the manual `groom` step
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStepName()).toHaveText('Groom');
   // The `work` step has not been entered, so nothing ref-derived shows — even though flow-state carries it.
   await expect(loopReadout()).toHaveCount(0);
 
@@ -5838,7 +5839,7 @@ test('Restart clears the ticket/PR display and wipes its resolved inputs (§24.2
   await expect(loopReadout()).toBeVisible(); // still shown at done — the `work` step was entered this run
 
   await flowControl().click(); // Restart → in_progress at the groom step, resolved inputs wiped
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStepName()).toHaveText('Groom');
   await expect(loopReadout()).toHaveCount(0); // cleared — the `work` step is no longer entered
 
   // Re-entering `work` shows nothing: Restart wiped the inputs, and (unlike the retired mirror) there is no
@@ -5869,7 +5870,7 @@ test('a §27 loop step shows a Loop read-out that expands a docked panel reflect
   await typeCommand(`cd "${repo}"`);
   // Rail: [Not started] · groom · build · [Completed]. The pre-loop manual `groom` step shows no read-out.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
-  await expect(flowStation(2).locator('.nm')).toHaveText('build');
+  await expect(flowStation(2).locator('.nm')).toHaveText('Build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
   await flowControl().click(); // Start → groom (manual): the loop step is not entered, so no read-out
@@ -6001,18 +6002,18 @@ test('changing directories swaps flow state; each repo is independent and visiti
 
   // In repo A: start the flow (→ in progress).
   await typeCommand(`cd "${repoA}"`);
-  await expect(flowStepName()).toHaveText('alpha', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Alpha', { timeout: 10_000 });
   await flowControl().click();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
   // cd into repo B: the strip shows B's step at NOT started — A's progress must not leak.
   await typeCommand(`cd "${repoB}"`);
-  await expect(flowStepName()).toHaveText('beta', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Beta', { timeout: 10_000 });
   await expect(flowStation(1)).toHaveClass(/\btodo\b/);
 
   // cd back into repo A: its in-progress state is preserved.
   await typeCommand(`cd "${repoA}"`);
-  await expect(flowStepName()).toHaveText('alpha', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Alpha', { timeout: 10_000 });
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
   // State is per-repo on disk; merely visiting B (never starting) wrote nothing there.
@@ -6062,7 +6063,7 @@ test('the definition falls back to the global flow.yaml, but state is still writ
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 }); // definition from global $HOME
+  await expect(flowStepName()).toHaveText('Global step', { timeout: 10_000 }); // definition from global $HOME
   await flowControl().click(); // Start
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
@@ -6081,7 +6082,7 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
     page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await typeCommand(`cd "${repo}"`);
-    await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   };
 
   await launch();
@@ -6110,7 +6111,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → in progress
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowDerived()).toContainText('0 / 0', { timeout: 10_000 }); // derived live status, no todos yet
@@ -6142,7 +6143,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start
 
   await openQuickSend('todo');
@@ -6181,7 +6182,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await expect(flowControl()).toHaveText('Start');
 
   await flowControl().click();
@@ -6223,7 +6224,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → step active
 
   await openQuickSend('todo');
@@ -6255,7 +6256,7 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
 
   // A busy shell that keeps OUTPUT flowing (printf every 0.2s < QUIET_MS 1s), not a silent `cat`:
   // the running loop holds the OSC-133 command span open (so isShellBusy refuses Start) AND keeps the
@@ -6624,7 +6625,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'launch-marker.md' })).toHaveCount(1);
 
     // At launch the cwd IS launchDir, so its LOCAL flow.yaml drives the strip — the local-first tier.
-    await expect(flowStepName()).toHaveText('launch-local-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Launch local step', { timeout: 10_000 });
 
     // Shell cwd (§5): pwd reports the launch dir before any cd.
     await page.keyboard.press('Control+1');
@@ -6636,7 +6637,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     // Flow global dir (§18.1) = $HOME, not L: cd into a repo with no local flow; the global flow
     // resolves from HOME (home-global-step), NOT the launch dir's local flow.
     await typeCommand(`cd "${noFlowRepo}"`);
-    await expect(flowStepName()).toHaveText('home-global-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Home global step', { timeout: 10_000 });
   } finally {
     await launched.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
     rmSync(launchDir, { recursive: true, force: true });
@@ -6691,7 +6692,7 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
     // Flow global dir (§18.1) = $HOME: cd into a repo with no local flow; the global flow under home
     // resolves — the bogus target never anchors the flow global dir.
     await typeCommand(`cd "${noFlowRepo}"`);
-    await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Global step', { timeout: 10_000 });
   } finally {
     await launched.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
     rmSync(home, { recursive: true, force: true });
@@ -7571,12 +7572,12 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
-  await expect(backToRed).toHaveText('Back to red'); // named after the flow's return step
+  await expect(backToRed).toHaveText('Back to Red'); // named after the flow's return step
   await backToRed.click();
   // The composer opens; submitting it empty is a plain reopen (the brief is optional).
   const composer = page.locator('#feedback-composer-host .flow-modal');
   await expect(composer).toBeVisible({ timeout: 10_000 });
-  await expect(composer.locator('.confirm')).toHaveText('Back to red'); // the composer is told the same return step
+  await expect(composer.locator('.confirm')).toHaveText('Back to Red'); // the composer is told the same return step
   await composer.locator('.confirm').click();
   await expect(composer).toHaveCount(0, { timeout: 15_000 });
 
@@ -7717,7 +7718,7 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
   await atImplApprove();
   const BRIEF = 'Cover the empty-input case the tests missed';
   const backTo = loopPanel().locator('[data-gate-option="back-to-red"]');
-  await expect(backTo).toHaveText('Back to infra');
+  await expect(backTo).toHaveText('Back to Infra');
   await backTo.click();
   const composer = page.locator('#feedback-composer-host .flow-modal');
   await expect(composer).toBeVisible({ timeout: 10_000 });

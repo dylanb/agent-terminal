@@ -1,5 +1,6 @@
 import type { AppBootstrapConflictTarget } from '../appBootstrap';
 import type { ConsolidatorVerdict } from '../consolidatorOutput';
+import type { FlowDecision, StepRun } from '../flowBranch';
 import type { StartednessSignal } from '../flowStarted';
 import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
 import type { LoopActivity } from '../loopActivity';
@@ -277,9 +278,13 @@ export interface FlowPrompt {
  *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
   stepName: string;
-  /** Every step's name, in flow order (§24.2.3 T1) — the §22.3 rail renders one station per entry;
-   *  `stepName` is `steps[position - 1]`. Empty on an `error` view (no steps to show). */
+  /** Every step's name, in flow order (§24.2.3 T1), skipped and undecided ones included; the §22.3 rail
+   *  shows the entries `stepRuns` lets it. `stepName` is `steps[position - 1]`. Empty on an `error` view. */
   steps: string[];
+  /** Whether each entry of `steps` runs on the path decided so far; `position` still indexes `steps`. */
+  stepRuns: StepRun[];
+  /** Each deciding step's latest decision, keyed by step id. */
+  decisions: Record<string, FlowDecision>;
   position: number;
   total: number;
   status: FlowStatus;

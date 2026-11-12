@@ -28,3 +28,12 @@ const JOINERS = new RegExp('[\\u200C\\u200D]', 'gu');
 export function displaySafeEcho(value: string, max: number): string {
   return stripDisplayControlChars(value).replace(JOINERS, '').slice(0, max);
 }
+
+// ECMA-48 CSI and OSC control sequences, 7- and 8-bit.
+const TERMINAL_ESCAPE = new RegExp('(?:\\u001b\\[|\\u009b)[0-?]*[ -/]*[@-~]|(?:\\u001b\\]|\\u009d)[^\\u0007\\u001b\\u009c]*(?:\\u0007|\\u001b\\\\|\\u009c|$)', 'gu');
+
+const INVISIBLE_FORMAT = new RegExp('[\\p{Cf}\\p{Cs}]', 'gu');
+
+export function removeDisplayUnsafe(text: string): string {
+  return text.replace(TERMINAL_ESCAPE, '').replace(DISPLAY_UNSAFE, '').replace(INVISIBLE_FORMAT, '');
+}

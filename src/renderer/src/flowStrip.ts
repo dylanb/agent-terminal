@@ -10,6 +10,7 @@ import { hasFlowRefs } from '../../shared/ipc';
 import { railTotal, type RunTokens, type StepTokens } from '../../shared/tokenCounts';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
 import { isSelectionLocked } from '../../shared/flowStarted';
+import { stepLabel } from '../../shared/stepLabel';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 import { createPressGroup } from './pressable';
@@ -29,18 +30,26 @@ const CONTROL: Record<FlowStatus, { label: string; act: Act } | null> = {
   error: null,
 };
 
-interface RailStation {
-  name: string;
-  st: StationState;
-  isStep: boolean;
-}
+type RailItem = { name: string; st: StationState; step?: number; tag?: string; current?: true } | { marker: string };
 
-// §24.2.3 T1
-function railStations(state: FlowStateView): RailStation[] {
+const UNDECIDED_MARKER = 'next steps depend on the verdict';
+
+/** The rail brackets the shown steps with two synthetic stations: "Not started" (active before the
+ *  flow starts) and "Completed" (active once it finishes). A step the decisions skip is left out, and
+ *  each run of undecided steps folds into one marker line, unless it is the current step (§24.2.3 T1). */
+function railStations(state: FlowStateView): RailItem[] {
   const status = state.status as Exclude<FlowStatus, 'error'>;
   const currentIndex = state.position - 1;
   const notStarted: StationState = status === 'not_started' ? 'active' : 'done';
-  const steps: RailStation[] = state.steps.map((name, i) => {
+  const items: RailItem[] = [{ name: 'Not started', st: notStarted }];
+  state.steps.forEach((id, i) => {
+    const isCurrent = status === 'in_progress' && i === currentIndex;
+    const run = state.stepRuns[i];
+    if (run === 'skipped' && !isCurrent) return;
+    if (run === 'unresolved' && !isCurrent) {
+      if (!('marker' in items[items.length - 1])) items.push({ marker: UNDECIDED_MARKER });
+      return;
+    }
     const st: StationState =
       status === 'not_started'
         ? 'todo'
@@ -48,13 +57,24 @@ function railStations(state: FlowStateView): RailStation[] {
           ? 'done'
           : i < currentIndex
             ? 'done'
-            : i === currentIndex
+            : isCurrent
               ? 'active'
               : 'todo';
-    return { name, st, isStep: true };
+    const decision = Object.hasOwn(state.decisions, id) ? state.decisions[id] : undefined;
+    const tag = decision === undefined ? undefined : decision.note === undefined ? decision.value : `${decision.value} · ${decision.note}`;
+    items.push({ name: stepLabel(id), st, step: i, ...(tag !== undefined ? { tag } : {}), ...(isCurrent ? { current: true as const } : {}) });
   });
   const completed: StationState = status === 'done' ? 'active' : 'todo';
-  return [{ name: 'Not started', st: notStarted, isStep: false }, ...steps, { name: 'Completed', st: completed, isStep: false }];
+  items.push({ name: 'Completed', st: completed });
+  return items;
+}
+
+function headerText(rail: readonly RailItem[]): string {
+  const activeAt = rail.findIndex((s) => 'st' in s && s.st === 'active');
+  if (rail.slice(activeAt + 1).some((s) => 'marker' in s)) return 'Flow steps';
+  const counted = rail.filter((s) => 'st' in s);
+  const position = counted.findIndex((s) => s.st === 'active') + 1;
+  return `Flow — step ${position} / ${counted.length}`;
 }
 
 export interface FlowStrip {
@@ -131,7 +151,7 @@ function railCount(cell: StepTokens | RunTokens | null, counting: boolean): Toke
 }
 
 interface RailCounts {
-  steps: TokenCount[];
+  steps: Map<number, TokenCount>;
   run: TokenCount;
 }
 
@@ -169,6 +189,8 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
     state.status,
     state.status === 'error' ? state.error ?? '' : '',
     state.steps,
+    state.stepRuns,
+    state.decisions,
     state.position,
     !!state.loop,
     // The iteration read-out's PRESENCE is structural — absent for a §27 run-less view — so a
@@ -383,10 +405,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return;
     }
 
-    // The header position counts the synthetic bookends too (e.g. 1/3 → 3/3 for one real step).
+    // The header position counts the shown stations, synthetic bookends included (e.g. 1/3 → 3/3 for one real step).
     const railStn = railStations(state);
-    const activeIndex = railStn.findIndex((s) => s.st === 'active');
-    host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
+    host.append(header(doc, headerText(railStn)));
 
     // The station rail (§24.1). Deliberately deviates from that section's fully-connected mockup to
     // keep the left rail tight.
@@ -394,23 +415,37 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     rail.className = 'flow vert';
     rail.setAttribute('role', 'list');
     rail.setAttribute('aria-label', RAIL_STEP_LIST_NAME);
-    const stepCounts: TokenCount[] = [];
+    const stepCounts = new Map<number, TokenCount>();
     railStn.forEach((s, i) => {
       const stn = doc.createElement('span');
-      stn.className = `stn ${s.st}`;
       stn.setAttribute('role', 'listitem');
-      const dot = doc.createElement('span');
-      dot.className = 'o';
       const name = doc.createElement('span');
       name.className = 'nm';
-      name.textContent = s.name;
-      stn.append(dot, name);
-      if (state.tokens && s.isStep) stepCounts.push(createTokenCount(stn));
+      if ('marker' in s) {
+        stn.className = 'stn marker';
+        name.textContent = s.marker;
+        stn.append(name);
+      } else {
+        stn.className = `stn ${s.st}`;
+        if (s.current) stn.setAttribute('aria-current', 'step');
+        const dot = doc.createElement('span');
+        dot.className = 'o';
+        name.textContent = s.name;
+        stn.append(dot, name);
+        if (s.tag !== undefined) {
+          const tag = doc.createElement('span');
+          tag.className = 'tag';
+          tag.textContent = s.tag;
+          stn.append(tag);
+        }
+        if (state.tokens && s.step !== undefined) stepCounts.set(s.step, createTokenCount(stn));
+      }
       rail.append(stn);
       const next = railStn[i + 1];
-      if (next && (s.st === 'active' || next.st === 'active')) {
+      const st = 'st' in s ? s.st : null;
+      if (next && (st === 'active' || ('st' in next && next.st === 'active'))) {
         const seg = doc.createElement('span');
-        seg.className = s.st === 'done' ? 'seg' : 'seg future';
+        seg.className = st === 'done' ? 'seg' : 'seg future';
         seg.setAttribute('aria-hidden', 'true');
         rail.append(seg);
       }
