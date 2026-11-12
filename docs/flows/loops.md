@@ -50,12 +50,12 @@ The engine sends the session a `/goal` made of the loop's goal (the **Done when*
 
 ## Goal loop without reviewers
 
-`finalize-loop` and `simple-finalize-loop-v1` run this way. The goal has no review passes and no checkpoint, so it runs in 1 leg.
+`finalize-loop` runs this way. The goal has no review passes and no checkpoint, so it runs in 1 leg.
 
 ```mermaid
 flowchart TD
   accTitle: Goal loop without reviewers
-  accDescr: How finalize-loop and simple-finalize-loop-v1 run. The text around the diagram describes every decision in it.
+  accDescr: How finalize-loop runs. The text around the diagram describes every decision in it.
   CLEAR[["/clear"]] --> WORK["/goal session<br/>does the step's work"]
   WORK -->|"the goal holds"| CHECK{"engine's check<br/>passes?"}
   CHECK -->|"yes"| GATE(["reaches the gate clean"])
@@ -69,7 +69,7 @@ It stops for you when the PR or repository can't be confirmed, or when a conflic
 
 ## Single work turn
 
-`groom-intent-loop`, `groom-approve-loop`, `plan-approve-loop`, `impl-approve-loop`, `simple-plan-approve-loop-v1` and `simple-impl-approve-loop-v1` run this way. They have no goal and no reviewers.
+`groom-intent-loop`, `groom-approve-loop`, `plan-approve-loop` and `impl-approve-loop` run this way. They have no goal and no reviewers.
 
 ```mermaid
 flowchart TD

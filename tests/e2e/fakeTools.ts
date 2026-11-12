@@ -15,6 +15,7 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
+import { stepLibraryDir } from '../../src/main/stepLibrary';
 import { agentWorkingDir, claudeCodeProjectLogDir, codexSessionsDir } from '../../src/main/agentUsage/logRoots';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
@@ -586,6 +587,12 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
 export function seedFakeAgentV2(binDir: string, opts: StepScript & { stepId: string }): void {
   const { stepId, ...step } = opts;
   seedFakeAgentSteps(binDir, { [stepId]: step });
+}
+
+/** Copies the shipped step library to `root`'s library, where Install examples would leave it, for a test that
+ *  runs a shipped flow built from step references. */
+export function seedBundledStepLibrary(root: string): void {
+  cpSync(join(process.cwd(), 'example', 'steps'), stepLibraryDir(root), { recursive: true });
 }
 
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {

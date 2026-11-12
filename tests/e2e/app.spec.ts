@@ -45,6 +45,7 @@ import {
   v3PlanApproveWork,
   v3PlanGoal,
   v3Section,
+  seedBundledStepLibrary,
   writeCatalogEntry,
   writePromptedArtifact,
   writeV3,
@@ -6851,6 +6852,7 @@ function seedFlowRepoBase(
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
   if (opts.flowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  seedBundledStepLibrary(dir);
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
@@ -7387,6 +7389,7 @@ function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntr
   });
   if (entry !== undefined) {
     writeCatalogEntry(entry.home, entry.id, flowYaml.replace(/^name:.*$/m, `name: ${JSON.stringify(entry.name)}`));
+    seedBundledStepLibrary(entry.home);
     writeActiveFlow(dir, entry.id);
   }
   mkdirSync(join(dir, V3_ART), { recursive: true });
@@ -7718,9 +7721,10 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
   test.setTimeout(chainBudget(4));
   const SLICE_STEPS = ['red', 'green', 'refactor', 'integration-slice'];
   const returnToInfra = (yaml: string): string => {
-    const flow = load(yaml) as { steps: { id: string; repeat?: unknown }[] };
-    flow.steps = flow.steps.filter((st) => !SLICE_STEPS.includes(st.id));
-    for (const st of flow.steps) if (st.id === 'impl-approve') st.repeat = { back_to: 'infra', count_input: 'never-repeats' };
+    const flow = load(yaml) as { steps: { id?: string; step?: string; repeat?: unknown }[] };
+    const idOf = (st: { id?: string; step?: string }): string | undefined => st.id ?? st.step;
+    flow.steps = flow.steps.filter((st) => !SLICE_STEPS.includes(idOf(st) ?? ''));
+    for (const st of flow.steps) if (idOf(st) === 'impl-approve') st.repeat = { back_to: 'infra', count_input: 'never-repeats' };
     return dump(flow);
   };
   const repo = seedV3ChainRepo('agent-term-e2e-retbrief-', { startStep: 'infra', editFlow: returnToInfra });

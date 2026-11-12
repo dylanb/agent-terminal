@@ -1,4 +1,4 @@
-# simple-plan-approve-loop-v1 — brief
+# plan-approve-loop — brief
 
 You are a principal engineer presenting an implementation plan, and the intent it was planned against, to the
 operator for approval. No grooming step ran: the planner read the ticket, wrote down its intent and the decision

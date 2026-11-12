@@ -1,3 +1,13 @@
+## feature-dev-v3 and simple-dev-v1 share four step definitions
+
+§18.1/§18.2: the bundle's step library gains `dev-preparation`, `dev-plan-approve`, `dev-impl-approve` and `dev-finalize`. `feature-dev-v3` and `simple-dev-v1` now reference them instead of writing those steps inline, under their old step ids, gates and `repeat`. The `dev-` prefix keeps an operator's own `finalize.yaml` or `preparation.yaml` in `~/.agent-terminal/steps/` from replacing a shipped flow's step.
+
+A step definition names its loop, so the shared `simple-plan-approve-loop-v1`, `simple-impl-approve-loop-v1` and `simple-finalize-loop-v1` are renamed `plan-approve-loop`, `impl-approve-loop` and `finalize-loop`. They stay in the shared folder `example/loops-v2/`. `feature-dev-v3` keeps its own copies under the same names in its own folder, and a flow's own folder comes first in the lookup (§27.8), so `simple-dev-v1` keeps its own approval prompts. `integration-slice` stays inline in both flows: its two loops ship different reviewer charters, and one loop name cannot install two charters as one sub-agent.
+
+The loop's run state records the loop by name (§27.12). A `simple-dev-v1` run that is waiting at `plan-approve`, `impl-approve` or `finalize` when the operator runs Install examples no longer shows its gate, and the step must run again. Approve or finish that gate first. No flow reads the old `simple-*-loop-v1` folders an earlier install left any more, so edits made there do not carry over. Install examples still offers to remove the ones in `loops-v2/simple-dev-v1/`.
+
+§18.1: the check that names a retired fallback flow now reads only the flow's `name`, so it still recognizes a retired flow built from step references.
+
 ## Lint, test and e2e run on ready PRs into main
 
 §27.14 N13a: the lint, vitest and e2e workflows now also run on a PR into `main` once it is ready for review, and on each push to it after that; a newer push cancels the previous push's runs. They still skip draft PRs and PRs into other branches, which run them by manual dispatch. Because plan approval flips the PR non-draft, impl pushes now start CI runs. No CI run publishes a `test-proof/*` status, so a PR still merges on its test proof.

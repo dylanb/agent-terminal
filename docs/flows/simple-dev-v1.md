@@ -10,13 +10,13 @@ flowchart TD
   accDescr: The steps of simple-dev-v1 from Not started to Completed. The table below the diagram lists every step, gate and loop-back as text.
   START(["Not started"]) -->|"Start"| PREP[/"preparation<br/>manual"/]
   PREP -->|"Advance"| PLAN["plan<br/>simple-plan-loop-v1<br/>writes the intent and plan, checks fit"]
-  PLAN --> PAPPROVE{{"plan-approve<br/>simple-plan-approve-loop-v1<br/>shows you the plan and fit, edits on request"}}
+  PLAN --> PAPPROVE{{"plan-approve<br/>plan-approve-loop<br/>shows you the plan and fit, edits on request"}}
   PAPPROVE --> EPICQ{"plan classified<br/>an epic?"}
   EPICQ -->|"yes, after you confirm the preview"| PROMOTE[["epic promotion<br/>creates the sub-tickets, closes the PR<br/>and resets the rail to Not started"]]
   EPICQ -->|"no"| DEV["dev<br/>simple-dev-loop-v1<br/>builds each increment, RED then GREEN"]
   DEV --> INTEG["integration-slice<br/>simple-integration-slice-loop-v1<br/>wires the increments together end to end"]
-  INTEG --> IAPPROVE{{"impl-approve<br/>simple-impl-approve-loop-v1<br/>shows you what was built, changes on request"}}
-  IAPPROVE --> FINAL{{"finalize<br/>simple-finalize-loop-v1<br/>syncs and pushes the PR, checks CI"}}
+  INTEG --> IAPPROVE{{"impl-approve<br/>impl-approve-loop<br/>shows you what was built, changes on request"}}
+  IAPPROVE --> FINAL{{"finalize<br/>finalize-loop<br/>syncs and pushes the PR, checks CI"}}
   FINAL --> DONE(["Completed"])
   DEV -.->|"Back to dev"| DEV
   INTEG -.->|"Back to dev"| DEV
@@ -27,11 +27,13 @@ flowchart TD
 |---|---|---|---|---|
 | `preparation` | none | manual | Advance | |
 | `plan` | `simple-plan-loop-v1` | auto | approve, redo | |
-| `plan-approve` | `simple-plan-approve-loop-v1` | human | approve, redo | Marks the PR ready for review. An epic plan is promoted instead, as in `feature-dev-v3`. |
+| `plan-approve` | `plan-approve-loop` | human | approve, redo | Marks the PR ready for review. An epic plan is promoted instead, as in `feature-dev-v3`. |
 | `dev` | `simple-dev-loop-v1` | auto | approve, redo, polish, back-to-red | Commits `dev`. |
 | `integration-slice` | `simple-integration-slice-loop-v1` | auto | approve, redo, polish, back-to-red | Commits `integration`. |
-| `impl-approve` | `simple-impl-approve-loop-v1` | human | approve, redo, back-to-red | Commits `approve` and publishes the plan as the PR body. |
-| `finalize` | `simple-finalize-loop-v1` | human | approve, redo | |
+| `impl-approve` | `impl-approve-loop` | human | approve, redo, back-to-red | Commits `approve` and publishes the plan as the PR body. |
+| `finalize` | `finalize-loop` | human | approve, redo | |
+
+`preparation`, `plan-approve`, `impl-approve` and `finalize` reference the shared step definitions `dev-preparation`, `dev-plan-approve`, `dev-impl-approve` and `dev-finalize` in [`example/steps/`](../../example/steps), which `feature-dev-v3` uses too. The loops those steps run ship in the shared folder `example/loops-v2/`. `feature-dev-v3` keeps its own copies under the same names in its own folder, and a flow's own folder comes first in the lookup, so `plan-approve-loop` and `impl-approve-loop` keep their `simple-dev-v1` prompts.
 
 `plan` asks for the ticket, and entering it opens the run's branch and draft PR (pickup). If pickup fails, the run steps back to `preparation`. `impl-approve` declares a `repeat` only to name `dev` as the `back-to-red` target. Its count never rises above 1, so approving it always moves on to `finalize`. An increment that only adds verification ends at its `RED:` commit.
 

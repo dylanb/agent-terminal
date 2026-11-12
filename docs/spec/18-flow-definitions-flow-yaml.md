@@ -14,7 +14,7 @@
   - **Codex reviewers are read-only by instruction only.** A Codex sub-agent inherits its parent's permissions and an agent file cannot narrow them, so a reviewer whose def lists a tool beyond Read/Grep/Glob/Bash is refused as mispackaged. Codex destinations are skipped, and reported as skipped, when the Codex home does not exist.
   - The action never deletes outside the leftovers it previewed and the user ticked, and never edits a `.gitignore` (§19.1): it is the explicit, user-invoked exemption to the no-silent-rewrite rule.
 
-The shipped flows are in `example/flows/`, and the shipped step definitions are in `example/steps/`. `two-step-example-v1` is the smallest flow built from step references: two manual steps from the step library.
+The shipped flows are in `example/flows/`, and the shipped step definitions are in `example/steps/`. `two-step-example-v1` is the smallest flow built from step references: two manual steps from the step library. `feature-dev-v3` and `simple-dev-v1` share the `dev-preparation`, `dev-plan-approve`, `dev-impl-approve` and `dev-finalize` definitions, under the step ids `preparation`, `plan-approve`, `impl-approve` and `finalize`. Each still ships its own copy of the loops those steps name (§27.8), under the same loop names, so the two flows' loops can still change on their own.
 
 ### 18.2 Steps & kinds (D3/D7/D30)
 

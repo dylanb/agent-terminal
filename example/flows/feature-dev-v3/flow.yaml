@@ -1,8 +1,8 @@
 # §18.1/§27.10/§28.2
 name: feature-dev-v3
 steps:
-  - id: preparation
-    kind: manual
+  - step: dev-preparation
+    id: preparation
   - id: groom-intent
     kind: loop
     gate_authority: auto
@@ -29,11 +29,9 @@ steps:
     loop: plan-goal-loop
     loop_namespace: app
     todo_template: plan-loop-review
-  - id: plan-approve
-    kind: loop
+  - step: dev-plan-approve
+    id: plan-approve
     gate_authority: human
-    loop: plan-approve-loop
-    loop_namespace: app
   - id: infra
     kind: loop
     gate_authority: auto
@@ -71,14 +69,9 @@ steps:
     loop: integration-slice-loop
     loop_namespace: app
     todo_template: impl-loop-review
-  - id: impl-approve
-    kind: loop
+  - step: dev-impl-approve
+    id: impl-approve
     gate_authority: human
-    loop: impl-approve-loop
-    loop_namespace: app
-  - id: finalize
-    kind: loop
+  - step: dev-finalize
+    id: finalize
     gate_authority: human
-    loop: finalize-loop
-    loop_namespace: app
-    todo_template: finalize

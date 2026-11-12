@@ -325,6 +325,21 @@ function expandStepReference(
 /** Bounds the steps one flow.yaml may declare, so references cannot multiply one load's work without limit (CWE-770). */
 export const MAX_FLOW_STEPS = 100;
 
+function flowNameOf(doc: Record<string, unknown>): string | null {
+  return typeof doc.name === 'string' && doc.name.length > 0 ? doc.name : null;
+}
+
+/** The `name` a flow.yaml declares, read without loading its steps, or null when the file has none. */
+export function readFlowDefinitionName(file: string): string | null {
+  let doc: unknown;
+  try {
+    doc = yaml.load(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  return isRecord(doc) ? flowNameOf(doc) : null;
+}
+
 /** `library` is null for a caller that accepts no step references; a reference then fails to load with a reason. */
 function parseFlowDefinition(raw: string, file: string, library: StepLibrary | null): FlowLoad {
   let doc: unknown;
@@ -335,8 +350,8 @@ function parseFlowDefinition(raw: string, file: string, library: StepLibrary | n
   }
 
   if (!isRecord(doc)) return { ok: false, error: 'flow.yaml must be a mapping with name + steps' };
-  if (typeof doc.name !== 'string' || doc.name.length === 0)
-    return { ok: false, error: 'flow.yaml is missing a name' };
+  const name = flowNameOf(doc);
+  if (name === null) return { ok: false, error: 'flow.yaml is missing a name' };
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
   if (doc.steps.length > MAX_FLOW_STEPS)
@@ -356,7 +371,7 @@ function parseFlowDefinition(raw: string, file: string, library: StepLibrary | n
     if (steps.some((s) => s.id === id)) return { ok: false, error: `flow.yaml has a duplicate step id "${id}"` };
     steps.push(parsed);
   }
-  return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
+  return { ok: true, definition: { name, steps }, flowDir: path.dirname(file) };
 }
 
 type BranchFields = Pick<FlowStepDef, 'decides' | 'haltOnDecision' | 'when'>;

@@ -11,7 +11,7 @@ import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
+import { exampleConfigDir, seedBundledStepLibrary, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
 
 export type AutoGateLoop = 'groom-loop' | 'groom-goal-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
@@ -92,6 +92,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
 /** An operator-catalog flow (the global tier under `home`) made active for `repo`. */
 export function seedTrustedFlow(home: string, repo: string, id: string, yaml: string): void {
   writeCatalogEntry(home, id, yaml);
+  seedBundledStepLibrary(home);
   writeActiveFlow(repo, id);
 }
 

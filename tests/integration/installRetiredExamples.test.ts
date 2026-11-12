@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync, readdirSync, chmodSync, cpSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync, readdirSync, chmodSync, cpSync, realpathSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -12,7 +12,7 @@ import {
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { RETIRED_LOOPS, removeRetiredEntry } from '../../src/main/retiredExamples';
 import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
-import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
+import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { listLoopFolders } from '../../src/main/loopFolders';
 import { SESSION_ID, type InstallDestinationId, type RetiredExample, type RetiredKind } from '../../src/shared/ipc';
@@ -99,10 +99,26 @@ const MOVED: readonly string[] = [
   'simple-finalize-loop-v1',
 ];
 const STAYED = 'simple-plan-loop-v1';
+const RENAMED: Readonly<Record<string, string>> = {
+  'simple-plan-approve-loop-v1': 'plan-approve-loop',
+  'simple-impl-approve-loop-v1': 'impl-approve-loop',
+  'simple-finalize-loop-v1': 'finalize-loop',
+};
+const sharedNameOf = (loop: string): string => RENAMED[loop] ?? loop;
+
+/** The bundled loop at `dest`, under the old name an older build gave it. */
+function copyAsOld(loop: string, dest: string): void {
+  const shipped = sharedNameOf(loop);
+  cpSync(bundledLoopDir(shipped), dest, { recursive: true });
+  if (shipped === loop) return;
+  const def = path.join(dest, `${loop}.yaml`);
+  renameSync(path.join(dest, `${shipped}.yaml`), def);
+  writeFileSync(def, readFileSync(def, 'utf8').replace(/^name: .*$/m, `name: ${loop}`));
+}
 
 /** A copy of each bundled loop in `flowDir`, the way an older build installed it under its flow's folder. */
 function plantOldCopies(flowDir: string, loops: readonly string[] = MOVED): void {
-  for (const loop of loops) cpSync(bundledLoopDir(loop), path.join(flowDir, loop), { recursive: true });
+  for (const loop of loops) copyAsOld(loop, path.join(flowDir, loop));
 }
 
 const oldCopyOffers = (destination: InstallDestinationId): RetiredExample[] =>
@@ -152,7 +168,7 @@ describe('the preview lists what the retired flows left behind, and nothing else
 
     expect(applyInstallExamples(dirs, []).ok).toBe(true);
 
-    for (const loop of MOVED) expect(existsSync(path.join(claudeLoops(), loop, `${loop}.yaml`)), loop).toBe(true);
+    for (const loop of MOVED.map(sharedNameOf)) expect(existsSync(path.join(claudeLoops(), loop, `${loop}.yaml`)), loop).toBe(true);
     const after = previewInstallExamples(dirs);
     expect(after.ok).toBe(true);
     if (after.ok) expect(movedLoopOffers(after.retired)).toEqual([]);
@@ -220,7 +236,7 @@ describe('old copies of the loops simple-dev-v1 now shares', () => {
     expect(res.ok).toBe(true);
     for (const loop of MOVED) expect(existsSync(path.join(claudeLoops(), OLD_FLOW, loop)), loop).toBe(false);
     expect(existsSync(path.join(claudeLoops(), OLD_FLOW, STAYED))).toBe(true);
-    for (const loop of MOVED) expect(recipeOf(loop).startsWith(path.join(realClaudeLoops(), loop) + path.sep), loop).toBe(true);
+    for (const loop of MOVED.map(sharedNameOf)) expect(recipeOf(loop).startsWith(path.join(realClaudeLoops(), loop) + path.sep), loop).toBe(true);
   });
 
   it('keeps the old copies when removal is not chosen', () => {
@@ -290,7 +306,7 @@ describe('old copies of the loops simple-dev-v1 now shares', () => {
       const [reshipped, ...stillMoved] = MOVED;
       if (reshipped === undefined) throw new Error('no moved loop');
       cpSync(resolveExampleLoopsV2Dir({ packaged: false, appPath: process.cwd() }), bundle, { recursive: true });
-      cpSync(bundledLoopDir(reshipped), path.join(bundle, OLD_FLOW, reshipped), { recursive: true });
+      copyAsOld(reshipped, path.join(bundle, OLD_FLOW, reshipped));
       const withReshipped = dirs.map((d) => (d.id === 'appLoops' ? { ...d, bundleDir: bundle } : d));
       plantOldCopies(path.join(claudeLoops(), OLD_FLOW));
 
@@ -546,8 +562,8 @@ describe('a removal that fails part-way', () => {
 
 describe('the preview names a fallback flow that is still a retired one', () => {
   const fallback = (body: string): string => plant(path.join(flowHomeDir(home), FLOW_DEF_FILE), body);
-  const shippedFlow = (): string => readFileSync(path.join(resolveFeatureDevFlowDir({ packaged: false, appPath: process.cwd() }), FLOW_DEF_FILE), 'utf8');
-  const named = (id: string): string => shippedFlow().replace(/^name: .*$/m, `name: ${id}`);
+  const inlineFlow = (): string => 'name: feature-dev-v3\nsteps:\n  - id: preparation\n    kind: manual\n';
+  const named = (id: string): string => inlineFlow().replace(/^name: .*$/m, `name: ${id}`);
 
   it.each(RETIRED_FLOW_IDS)('names %s when the fallback flow.yaml is that flow', (id) => {
     fallback(named(id));
@@ -555,10 +571,16 @@ describe('the preview names a fallback flow that is still a retired one', () => 
     expect(preview.ok && preview.retiredFallback).toBe(id);
   });
 
+  it('names a retired fallback flow built from step references', () => {
+    fallback('name: feature-dev-v2\nsteps:\n  - step: a-step-no-library-holds\n');
+    const preview = previewInstallExamples(dirs);
+    expect(preview.ok && preview.retiredFallback).toBe('feature-dev-v2');
+  });
+
   it.each([
-    ['the shipped flow', (): string => shippedFlow()],
+    ['a flow that is not retired', (): string => inlineFlow()],
     ['garbled YAML', (): string => '{{{'],
-    ['a flow with no name', (): string => shippedFlow().replace(/^name: .*$\n/m, '')],
+    ['a flow with no name', (): string => inlineFlow().replace(/^name: .*$\n/m, '')],
   ])('names nothing for %s', (_name, body) => {
     fallback(body());
     const preview = previewInstallExamples(dirs);

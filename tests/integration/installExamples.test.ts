@@ -998,8 +998,8 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       const load = loadFlowDefinitionLocalFirst(localWithoutFlow, home);
       expect(load.ok).toBe(true);
       if (!load.ok) return;
-      const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
-      expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
+      const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id?: string; step?: string }[] };
+      expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id ?? s.step));
     } finally {
       rmSync(localWithoutFlow, { recursive: true, force: true });
     }

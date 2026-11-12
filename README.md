@@ -81,7 +81,7 @@ This builds the terminal into `dist/` and the controller (`electron-builder.cont
 
 [`docs/flows/`](docs/flows/README.md) has a page for each flow with a diagram of its steps, gates and loop-backs and what each step's loop does, plus a page on how the engine runs each kind of loop.
 
-The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
+The definitions live in [`example/flows/`](example/flows), [`example/steps/`](example/steps) and [`example/loops-v2/`](example/loops-v2). `feature-dev-v3` and `simple-dev-v1` share their `preparation`, `plan-approve`, `impl-approve` and `finalize` steps through the `dev-` step definitions in `example/steps/`. You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).
 
 ## Settings (environment variables)
 

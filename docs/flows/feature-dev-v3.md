@@ -46,6 +46,8 @@ flowchart TD
 | `impl-approve` | `impl-approve-loop` | human | approve, redo, back-to-red | Commits `approve` and publishes the plan as the PR body. |
 | `finalize` | `finalize-loop` | human | approve, redo | |
 
+`preparation`, `plan-approve`, `impl-approve` and `finalize` reference the shared step definitions `dev-preparation`, `dev-plan-approve`, `dev-impl-approve` and `dev-finalize` in [`example/steps/`](../../example/steps), which [`simple-dev-v1`](simple-dev-v1.md) uses too.
+
 `groom-intent` asks for the ticket. Entering `plan` opens the run's branch and draft PR (pickup). If pickup fails, the run steps back to `groom-approve` so you can fix the cause and advance again. `red` can split its own slice, which adds to the count of slices still to build.
 
 ## What each loop does in feature-dev-v3

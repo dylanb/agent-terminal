@@ -17,7 +17,7 @@ import {
   resolveExampleStepsDir,
 } from './exampleAssets';
 import { STEP_DEF_EXT, stepLibraryDir } from './stepLibrary';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, readFlowDefinitionName } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
@@ -482,12 +482,12 @@ interface InstallAuthorization {
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
   destinations.flatMap((d) => d.retired.map((r) => ({ destination: d.id, rel: r.rel, kind: r.kind })));
 
-/** The retired flow the installed fallback flow.yaml still is, read by the loader that runs it (§18.7.3). */
+/** The retired flow the installed fallback flow.yaml still is (§18.7.3). */
 function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
   const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
   if (file === undefined) return null;
-  const load = loadFlowDefinitionFromFile(file.real, null);
-  return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
+  const name = readFlowDefinitionName(file.real);
+  return name !== null && RETIRED_FLOW_IDS.includes(name) ? name : null;
 }
 
 function hash(bytes: Buffer): string {

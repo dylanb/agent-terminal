@@ -1,5 +1,5 @@
 version: v2
-name: simple-finalize-loop-v1
+name: finalize-loop
 work:
   recipe: prompts/work.md
   artifact: finalize-summary

@@ -1,0 +1,3 @@
+kind: loop
+loop: plan-approve-loop
+loop_namespace: app

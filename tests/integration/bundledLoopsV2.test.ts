@@ -82,15 +82,16 @@ describe('bundled loop defs ship in the folder of the flow that binds them or in
     }
   });
 
-  it('every loop Install examples treats as moved ships only in the shared folder, from a shipped flow', () => {
+  it('every loop Install examples treats as moved is gone from its flow’s folder and ships shared or is bound by no shipped flow', () => {
     const flows = new Set(flowIds());
+    const bound = new Set(flowIds().flatMap(boundLoops));
     const shared = new Set(listLoopFolders(SOURCE_TREE).flatMap((f) => (f.flow === null ? [f.name] : [])));
     const entries = Object.entries(MOVED_LOOPS);
     expect(entries.length).toBeGreaterThan(0);
     for (const [flow, loops] of entries) {
       expect(flows.has(flow), flow).toBe(true);
       for (const loop of loops) {
-        expect(shared.has(loop), loop).toBe(true);
+        expect(shared.has(loop) || !bound.has(loop), loop).toBe(true);
         expect(existsSync(join(SOURCE_TREE, flow, loop)), `${flow}/${loop}`).toBe(false);
       }
     }

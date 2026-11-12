@@ -1,4 +1,4 @@
-# simple-plan-approve-loop-v1 — work turn
+# plan-approve-loop — work turn
 
 Present the plan for the operator's approval.
 

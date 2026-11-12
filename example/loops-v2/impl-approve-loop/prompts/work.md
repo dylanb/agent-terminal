@@ -1,4 +1,4 @@
-# simple-impl-approve-loop-v1 — work turn
+# impl-approve-loop — work turn
 
 Present the implementation for the operator's approval.
 

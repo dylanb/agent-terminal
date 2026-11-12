@@ -67,8 +67,7 @@ function seed(): { home: string; configDir: string; remnants: string[]; keeper: 
 
 /** The fallback flow.yaml an older build seeded: a valid flow still named for a retired one. */
 function seedRetiredFallback(home: string): void {
-  const shipped = readFileSync(join('example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8');
-  plant(join(home, '.agent-terminal', 'flow.yaml'), shipped.replace(/^name: .*$/m, 'name: feature-dev-v2'));
+  plant(join(home, '.agent-terminal', 'flow.yaml'), 'name: feature-dev-v2\nsteps:\n  - id: preparation\n    kind: manual\n');
 }
 
 test('ticking the removal deletes what the retired flows left, reports it, and keeps the operator’s own files', { tag: '@ownapp' }, async () => {
