@@ -22,7 +22,7 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 pnpm run test:proof # full vitest + Podman e2e on the clean, pushed PR head, then publishes the test-proof/* statuses a merge into main requires
 ```
 
-**Run `pnpm run test:proof` on the PR's final head commit, before the PR is marked ready for review — or, for a PR that is already ready (an agent loop flips its PR at plan approval, §27.13), before it merges.** GitHub Actions runs no tests automatically on an open PR; the suites run there only after a merge into `main`, or when dispatched by hand (`gh workflow run test.yml --ref <branch>`). → [docs/test-proof.md](docs/test-proof.md)
+**Run `pnpm run test:proof` on the PR's final head commit, before the PR is marked ready for review — or, for a PR that is already ready (an agent loop flips its PR at plan approval, §27.13), before it merges.** GitHub Actions runs lint, test and e2e on a non-draft PR into `main` and after a merge into `main`; on a draft PR they run only when dispatched by hand (`gh workflow run test.yml --ref <branch>`). A CI run never stands in for the proof. → [docs/test-proof.md](docs/test-proof.md)
 
 **Always run the e2e locally via the Podman harness (`docs/e2e-podman.md`) before claiming a change done — do not defer e2e to CI.** Inside an agent-loop flow, *done* is the ticket's end (§28.8 item 4): a build step runs targeted e2e, and the full suite runs at the integration-slice gate and finalization.
 
