@@ -15,7 +15,7 @@ export interface FlowInputModal {
   dispose(): void;
 }
 
-function inputField(doc: Document, spec: { name: string; type: string }): { field: HTMLElement; read: () => string } {
+function inputField(doc: Document, spec: { name: string; type: string }): { field: HTMLElement; input: HTMLInputElement; read: () => string } {
   const field = doc.createElement('div');
   field.className = 'field';
   const lab = doc.createElement('div');
@@ -30,7 +30,7 @@ function inputField(doc: Document, spec: { name: string; type: string }): { fiel
   const input = doc.createElement('input');
   input.setAttribute('aria-label', spec.name);
   field.append(lab, input);
-  return { field, read: () => input.value.trim() };
+  return { field, input, read: () => input.value.trim() };
 }
 
 export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: () => void }): FlowInputModal {
@@ -54,7 +54,9 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
 
         const reads: Array<{ name: string; read: () => string }> = [];
         prompt.inputs.forEach((spec) => {
-          const { field, read } = inputField(doc, spec);
+          const { field, input, read } = inputField(doc, spec);
+          const refusal = prompt.refusal;
+          if (refusal && Object.prototype.hasOwnProperty.call(refusal.values, spec.name)) input.value = refusal.values[spec.name];
           if (reads.length === 0) {
             const help = doc.createElement('div');
             help.className = 'help';
@@ -62,7 +64,16 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
             help.id = helpId;
             help.textContent = `Runs ${prompt.bootstrap} on entry: the bound loop definition's own branch-and-draft-PR setup. Threaded to later steps' inputs.`;
             field.append(help);
-            field.querySelector('input')?.setAttribute('aria-describedby', helpId);
+            input.setAttribute('aria-describedby', helpId);
+          }
+          if (refusal && refusal.input === spec.name) {
+            const err = doc.createElement('div');
+            err.className = 'ferr';
+            err.id = `${titleId}-err-${reads.length}`;
+            err.textContent = refusal.notice;
+            field.insertBefore(err, input.nextSibling);
+            input.setAttribute('aria-invalid', 'true');
+            input.setAttribute('aria-describedby', [err.id, input.getAttribute('aria-describedby')].filter(Boolean).join(' '));
           }
           reads.push({ name: spec.name, read });
           card.append(field);

@@ -267,9 +267,17 @@ export interface FlowInputSpec {
  *  view when entering a step whose `bootstrap` needs an input that isn't resolved yet. `inputs` are
  *  the fields to collect; `bootstrap` names the command they feed (e.g. `agent-loop pickup`) for the
  *  modal's helper text. The renderer opens its modal, collects values, and calls `flow:provideInput`. */
+export interface FlowInputRefusal {
+  input: string;
+  notice: string;
+  values: Record<string, string>;
+}
+
 export interface FlowPrompt {
   inputs: FlowInputSpec[];
   bootstrap: string;
+  /** Present when main refused the last submission: `notice` explains why `input` was refused, and `values` are what was typed. */
+  refusal?: FlowInputRefusal;
 }
 
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based

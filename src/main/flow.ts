@@ -3,6 +3,7 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
+import { isIssueNumber } from '../shared/issueNumber';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -693,7 +694,8 @@ export function createFlowMachine(
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
     // linkedIssues/pr went with the bridge.
-    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
+    const ticketRaw = ticketInput && gates.ticketStepEntered && Object.prototype.hasOwnProperty.call(inputs, ticketInput.name) ? inputs[ticketInput.name] : undefined;
+    const ticket = typeof ticketRaw === 'string' && isIssueNumber(ticketRaw.trim()) ? Number(ticketRaw.trim()) : undefined;
     const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;

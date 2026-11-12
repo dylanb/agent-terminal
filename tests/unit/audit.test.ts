@@ -240,6 +240,10 @@ describe('inputEvents — resolved flow inputs and ticket association (§25.5)',
     ]);
   });
 
+  it.each(['1e2', '0x10', '042', '4.0'])('does not associate %j, which is not an issue number', (value) => {
+    expect(inputEvents({ ticket: value }, { ticket: 'github-ticket' }, T).map((e) => e.type)).toEqual(['input.resolved']);
+  });
+
   it('also associates the ticket when a github-ticket input resolves to a number', () => {
     expect(inputEvents({ ticket: '176' }, { ticket: 'github-ticket' }, T)).toEqual([
       { ts: T, type: 'input.resolved', name: 'ticket', value: '176' },

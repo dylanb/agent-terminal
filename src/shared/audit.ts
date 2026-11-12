@@ -8,6 +8,7 @@ import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltRe
 import { stripStatusControlChars } from './loopStatus';
 import { isStepTokens, runTokens, type RunTokens, type StepTokens } from './tokenCounts';
 import { isAgentKind, type AgentKind } from './agentKind';
+import { isIssueNumber } from './issueNumber';
 
 export interface AuditHeader {
   flow: string;
@@ -714,8 +715,7 @@ export function inputEvents(
     const value = values[name];
     events.push({ ts, type: 'input.resolved', name, value });
     if (typeByName[name] === 'github-ticket') {
-      const ticket = Number(value);
-      if (Number.isInteger(ticket) && ticket > 0) events.push({ ts, type: 'ticket.assoc', ticket });
+      if (isIssueNumber(value)) events.push({ ts, type: 'ticket.assoc', ticket: Number(value) });
     }
   }
   return events;

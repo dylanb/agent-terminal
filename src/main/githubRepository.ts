@@ -111,9 +111,21 @@ export function validGitHubRepositorySelector(value: string): boolean {
   );
 }
 
+export function inGitHubRepository(
+  parsed: URL,
+  repository: Pick<GitHubRepositoryIdentity, 'selector' | 'owner' | 'name'>,
+): boolean {
+  const parts = parsed.pathname.split('/').filter(Boolean);
+  return (
+    parsed.hostname.toLowerCase() === repositoryHost(repository) &&
+    (parts[0] ?? '').toLowerCase() === repository.owner &&
+    (parts[1] ?? '').toLowerCase() === repository.name
+  );
+}
+
 export function matchesGitHubRepositoryUrl(
   value: string,
-  repository: GitHubRepositoryIdentity,
+  repository: Pick<GitHubRepositoryIdentity, 'selector' | 'owner' | 'name'>,
   resource: 'issues' | 'pull',
   number: number,
 ): boolean {
@@ -127,10 +139,8 @@ export function matchesGitHubRepositoryUrl(
       parsed.port === '' &&
       parsed.search === '' &&
       parsed.hash === '' &&
-      parsed.hostname.toLowerCase() === repositoryHost(repository) &&
+      inGitHubRepository(parsed, repository) &&
       parts.length === 4 &&
-      (parts[0] ?? '').toLowerCase() === repository.owner &&
-      (parts[1] ?? '').toLowerCase() === repository.name &&
       parts[2] === resource &&
       parts[3] === String(number)
     );

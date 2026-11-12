@@ -1,3 +1,5 @@
+import { stepInputTypes, submitTicketInputs } from './ticketInput';
+import { originGitHubRepository } from './githubRepository';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
@@ -1107,18 +1109,6 @@ async function createWindow(): Promise<void> {
   const todoSnapshot = (repoKey: string): { id: string; text: string; status: TodoStatus }[] =>
     todoStore.list(repoKey).map((t) => ({ id: t.id, text: t.text, status: t.status }));
 
-  // The current step's declared input types (§18.4), keyed by name — the audit classifier reads this
-  // to tag a `github-ticket` value as a ticket association (§25.5). Empty when the definition or step
-  // can't be resolved, so audit degrades to recording bare `input.resolved` events.
-  const inputTypeMap = (repoKey: string): Record<string, string> => {
-    const load = resolveActiveDefinition(repoKey);
-    if (!load.ok) return {};
-    const step = load.definition.steps[flow.state(repoKey).position - 1];
-    const map: Record<string, string> = {};
-    for (const input of step?.inputs ?? []) map[input.name] = input.type;
-    return map;
-  };
-
   // §27.9/§27.13 — advance the flow one step when a loop step's loop reaches a success terminal. Guarded on
   // in_progress (advance throws otherwise, e.g. a flow the operator terminated while the gate resolved) and
   // run inside inTransition so the next step's entry actions fire in transition context, matching the manual
@@ -1548,16 +1538,30 @@ async function createWindow(): Promise<void> {
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
-      [CH.flowProvideInput]: (_e, m) => {
+      [CH.flowProvideInput]: async (_e, m) => {
         if (!isValidFlowProvideInput(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        const load = resolveActiveDefinition(m.repoKey);
+        const step = load.ok ? load.definition.steps[flow.state(m.repoKey).position - 1] : undefined;
+        const types = stepInputTypes(step);
+        const ticket = await submitTicketInputs(m.values, step, {
+          currentRepository: () => originGitHubRepository(m.repoKey),
+          entryToken: () => currentFlowEntryTokens.get(m.repoKey),
+        });
+        if (ticket.kind === 'stale') return trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
+        if (ticket.kind === 'refused') {
+          const now = flow.state(m.repoKey);
+          const reprompt = now.status === 'in_progress' && now.stepName === m.step ? { prompt: ticket.prompt } : {};
+          return trackLoop(m.repoKey, { ...withDerived(m.repoKey, now), notice: ticket.notice, ...reprompt });
+        }
+        const values = ticket.values;
         const current = flow.state(m.repoKey);
         const held = pickupHoldRefusal(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, current), notice: held });
         if (current.status !== 'in_progress' || current.stepName !== m.step) {
           return trackLoop(m.repoKey, withDerived(m.repoKey, current));
         }
-        audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
-        const view = inTransition(m.repoKey, 're-entry', () => flow.provideInput(m.repoKey, m.values));
+        audit.recordInputs(m.repoKey, values, types);
+        const view = inTransition(m.repoKey, 're-entry', () => flow.provideInput(m.repoKey, values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
       [CH.flowSetTitle]: (_e, m) => {

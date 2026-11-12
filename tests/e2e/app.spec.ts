@@ -2310,6 +2310,38 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   rmSync(home, { recursive: true, force: true });
 });
 
+test('a refused github-ticket keeps the input dialog open, and a corrected number is saved', { tag: '@ownapp' }, async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-ticket-refuse-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-refuse-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('#43');
+  await inputModal().locator('.confirm').click();
+
+  const ticketField = inputModal().getByRole('textbox', { name: 'ticket' });
+  await expect(ticketField).toHaveAccessibleDescription(/"#43" is not an issue number/, { timeout: 10_000 });
+  await expect(inputModal().getByText('"#43" is not an issue number', { exact: false })).toBeVisible();
+  await expect(ticketField).toHaveValue('#43');
+  const stateFile = join(repo, '.agent-terminal', 'flow-state.yaml');
+  expect(existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : '').not.toContain('#43');
+
+  await inputModal().locator('.field input').fill('43');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toBeHidden({ timeout: 10_000 });
+  await expect.poll(() => readFileSync(stateFile, 'utf8')).toMatch(/ticket: ['"]?43['"]?/);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', { tag: '@ownapp' }, async () => {
   // A 3-step flow's rail brackets the real steps with Not-started / Completed bookends → FIVE stations.
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);

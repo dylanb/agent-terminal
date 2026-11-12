@@ -451,6 +451,13 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     expect(flow.state().refs).toBeUndefined();
   });
 
+  it.each(['0', '042', '1e2'])('omits the ticket ref when the github-ticket input is %j, which is not an issue number', (value) => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: value } });
+    const flow = createFlowMachine(TICKET_FLOW, store);
+    expect(flow.state().refs).toBeUndefined();
+  });
+
   it('omits refs entirely when no typed input resolves, even on the loop step', () => {
     const flow = createFlowMachine(TICKET_FLOW);
     flow.start();

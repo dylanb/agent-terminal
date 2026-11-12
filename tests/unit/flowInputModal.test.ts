@@ -61,6 +61,24 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(submit).toHaveBeenCalledWith({ ticket: '176' });
   });
 
+  it('shows a refusal inside the dialog as the refused field\'s error and keeps the typed values', () => {
+    createFlowInputModal(host).render(
+      prompt({
+        inputs: [{ name: 'ticket', type: 'github-ticket' }, { name: 'notes', type: 'free-text' }],
+        refusal: { input: 'ticket', notice: '"#43" is not an issue number.', values: { ticket: '#43', notes: 'keep me' } },
+      }),
+      'plan',
+      vi.fn(),
+    );
+    const ticket = field('ticket')!.querySelector('input') as HTMLInputElement;
+    expect(ticket.value).toBe('#43');
+    expect((field('notes')!.querySelector('input') as HTMLInputElement).value).toBe('keep me');
+    expect(ticket.getAttribute('aria-invalid')).toBe('true');
+    const described = (ticket.getAttribute('aria-describedby') ?? '').split(' ').map((id) => host.querySelector(`#${id}`)?.textContent ?? '');
+    expect(described).toContain('"#43" is not an issue number.');
+    expect(field('notes')!.querySelector('input')!.getAttribute('aria-invalid')).toBeNull();
+  });
+
   it('collects an input named __proto__ as own data without prototype pollution', () => {
     let submitted: Record<string, string> | undefined;
     createFlowInputModal(host).render(

@@ -546,6 +546,8 @@ button:hover { border-color:var(--dim); }
 .flow-modal .field input { width:100%; box-sizing:border-box; font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:7px; padding:9px 11px; }
 .flow-modal .field input:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
 .flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
+.flow-modal .field .ferr { font-size:12.5px; color:var(--status-error-text); margin-top:7px; line-height:1.4; }
+.flow-modal .field input[aria-invalid="true"] { border-color:var(--status-error-text); }
 .flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
 
 /* §27.9/AC4 — the request-changes feedback composer body: a free-text area, a curatable review-todo
