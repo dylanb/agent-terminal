@@ -127,5 +127,6 @@ before you run it, the scripts, tests and dependency changes especially. Proving
 
 ## When the post-merge run fails
 
-A red `test` or `e2e` run on `main` means a proof did not describe what merged, or the environment drifted. GitHub's
-normal failed-run notification is the alert. Investigating it is a human job.
+A red `test` or `e2e` run on `main` means a proof did not describe what merged, the environment drifted, or an `e2e`
+shard ran out of time (its log says "Timed out waiting"). GitHub's normal failed-run notification is the alert.
+Investigating it is a human job.
