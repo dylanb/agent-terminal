@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createInstallExamples, MOVED_LOOPS_TEXT, MOVED_LOOPS_REMOVAL_TEXT, RETIRED_FLOW_STOPS_TEXT, OLD_ITEM_WORD, RETIRED_ITEM_WORD, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
+import { createInstallExamples, MOVED_LOOPS_TEXT, MOVED_LOOPS_REMOVAL_TEXT, MOVED_REVIEWERS_TEXT, RETIRED_FLOW_STOPS_TEXT, OLD_ITEM_WORD, RETIRED_ITEM_WORD, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
 import { assertRendersFromHostDocument } from './relocatable';
 import type {
   DestRelativePath,
@@ -314,6 +314,23 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         button().click();
         await vi.waitFor(() => expect(prompt()).not.toBeNull());
         expect(described()).toContain('Your fallback flow is still the retired feature-dev-v2');
+      });
+
+      it('explains reviewer copies that each run now installs only when there are some, and names them old items', async () => {
+        const REVIEWERS: RetiredExample[] = [{ destination: 'agents', rel: 'green-loop--impl-review-principal.md' as DestRelativePath, kind: 'moved-reviewer' }];
+        await openWith(REVIEWERS);
+        expect(prompt()?.textContent).toContain(MOVED_REVIEWERS_TEXT);
+        expect((retiredBox() as HTMLInputElement).closest('label')?.textContent).toContain(`${OLD_ITEM_WORD} item`);
+        host.replaceChildren();
+        await openWith(MOVED);
+        expect(prompt()?.textContent).not.toContain(MOVED_REVIEWERS_TEXT);
+      });
+
+      it('counts reviewer copies in the checkbox description instead of naming each one', async () => {
+        const many: RetiredExample[] = Array.from({ length: 50 }, (_, i) => ({ destination: 'agents', rel: `loop-${i}--review.md` as DestRelativePath, kind: 'moved-reviewer' }));
+        await openWith(many);
+        expect(described()).toContain('50 old reviewer agents');
+        expect(described()).not.toContain('loop-7--review.md');
       });
 
       it('says both when old copies and retired flows are found together', async () => {

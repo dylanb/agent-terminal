@@ -17,6 +17,7 @@
 // signal, the stall timer, the §27 loop-state writer, and the flow — never the primitives behind them.
 
 import path from 'node:path';
+import { reviewerFix } from './reviewerPlacement';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import { decisionOutput, type ArtifactBinding, type LoopDefV2, type LoopDefV2Result, type PolishPolicy } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
@@ -177,8 +178,9 @@ export interface AppLoopEngineDeps {
   currentBranch(repoDir: string): GitBranchRead;
   /** §27.10 */
   pickupBranch(repoDir: string): PickupBranch;
-  /** §27.4 — why this reviewer cannot run as the agent `kind` installed for it carrying its charter, or null when it can. */
-  reviewerAgentProblem(reviewer: RosterEntry, kind: AgentKind): string | null;
+  /** §27.4 — installs what the agent `kind` loads from this run folder, then names every reviewer that still
+   *  cannot run as the agent installed for it carrying its charter; empty when every one can. */
+  ensureReviewersRunnable(repoDir: string, reviewers: readonly RosterEntry[], kind: AgentKind): string[];
   /** §27.4 */
   hostedAgentKind(): AgentKind;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
@@ -1113,13 +1115,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return kindRead.kind;
   };
 
-  const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
+  const ensureReviewersOrRefusal = (repoDir: string, reviewers: RosterEntry[]): string | null => {
     if (reviewers.length === 0) return null;
     const kind = hostedKind();
-    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind)).filter((p): p is string => p !== null);
+    const problems = deps.ensureReviewersRunnable(repoDir, reviewers, kind);
     if (problems.length === 0) return null;
-    const installed = kind === 'codex' ? 'the Codex agents' : 'the Claude Code sub-agents';
-    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. ${reviewerFix(kind)}. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
   /** §27.10 */
@@ -1313,8 +1314,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     injectionRefusal: () => {
       if (!active) return null;
       const reviewers = active.phase === 'review' ? active.reviewers : active.phase === 'work' && active.run.kind === 'goal' ? active.run.reviewers : [];
-      // §27.2 — with no agent at the prompt the runner says so; which agent's reviewers to check is unknowable.
-      return offPickupBranch(active.repoDir) ?? (deps.hostedAgent() === 'absent' ? null : reviewerAgentsRefusal(reviewers));
+      const offBranch = offPickupBranch(active.repoDir);
+      if (offBranch !== null) return offBranch;
+      // §27.4 — installed even with no agent at the prompt, so the session the operator starts next loads them; the
+      // refusal itself waits for an agent (§27.2: with none at the prompt the runner says so).
+      const reviewersRefusal = ensureReviewersOrRefusal(active.repoDir, reviewers);
+      return deps.hostedAgent() === 'absent' ? null : reviewersRefusal;
     },
     completionShortfall,
     unretryableShortfall: () => {

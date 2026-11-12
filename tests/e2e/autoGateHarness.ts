@@ -12,6 +12,7 @@ import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/s
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { exampleConfigDir, seedBundledStepLibrary, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 
 export type AutoGateLoop = 'groom-loop' | 'groom-goal-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
@@ -66,6 +67,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   git('init', '-q');
+  installBundledRunReviewers(dir);
   git('symbolic-ref', 'HEAD', 'refs/heads/plan-loop/issue-176');
   git('config', 'user.email', 't@t');
   git('config', 'user.name', 'T');

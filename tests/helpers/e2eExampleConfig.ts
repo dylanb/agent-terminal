@@ -1,11 +1,12 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dump, load } from 'js-yaml';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { listLoopFolders } from '../../src/main/loopFolders';
-import { CLAUDE_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
-import { userConfigAgentsDir } from '../../src/main/userConfig';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { reviewRoster } from '../../src/main/reviewTurn';
+import { ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
 
 /** The phase loops a fixture flow binds by name and drives with a round-answering fake agent (§27.5). */
 export const ROUND_PHASE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'] as const;
@@ -52,9 +53,22 @@ export function seedSharedExampleConfig(): string {
   for (const loop of ROUND_PHASE_LOOPS) asReviewRounds(join(root, 'loops-v2', loop), loop);
   ownPlanLoopGate(join(root, 'loops-v2', 'plan-loop'));
   cpSync(join(process.cwd(), 'example', 'commands'), join(root, 'commands'), { recursive: true });
-  const agents = userConfigAgentsDir(root);
-  if (agents === null) throw new Error(`no agents directory under ${root}`);
-  mkdirSync(agents, { recursive: true });
-  for (const agent of planReviewerAgents(bundle, CLAUDE_REVIEWER_AGENT)) writeFileSync(join(agents, agent.rel), agent.bytes());
   return root;
+}
+
+/** Installs every bundled reviewer into a seeded run folder before any agent starts in it, as an earlier run
+ *  in that folder would have, so a fake agent launched next counts as having loaded them (§27.4). */
+export function installBundledRunReviewers(runFolder: string): void {
+  const bundle = join(process.cwd(), 'example', 'loops-v2');
+  const reviewers = listLoopFolders(bundle).flatMap((folder) => {
+    const r = resolveLoopDefV2(folder.name, { tiers: { operator: null, appBundled: bundle, retired: null }, repoDir: bundle, flow: folder.flow ?? undefined });
+    if (!r.ok) throw new Error(r.reason);
+    return reviewRoster(r.def);
+  });
+  const { problems } = ensureRunReviewers(runFolder, reviewers, bundle);
+  if (problems.length > 0) throw new Error(problems.join('; '));
+  // An earlier run wrote them, well before any agent session the test starts.
+  const earlier = new Date(Date.now() - 3_600_000);
+  const agents = runAgentsDir(runFolder).dir;
+  for (const file of readdirSync(agents)) utimesSync(join(agents, file), earlier, earlier);
 }

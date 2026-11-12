@@ -1,11 +1,11 @@
 // §18.1.
 
-import { lstatSync, rmSync } from 'node:fs';
+import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { readDirEntries } from './dirEntries';
 import { isErrno } from './errno';
 import { listLoopFolders } from './loopFolders';
-import type { ReviewerAgentFormat } from './reviewerAgents';
+import { isAppWrittenAgent, isClaudeReviewerFile, type ReviewerAgentFormat } from './reviewerAgents';
 import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import type { RetiredKind } from '../shared/ipc';
 
@@ -103,3 +103,18 @@ export const retiredReviewerAgents = (format: ReviewerAgentFormat): RetiredListe
   entriesNamed(
     Object.entries(RETIRED_LOOP_REVIEWERS).flatMap(([loop, personas]) => personas.map((persona) => `${format.name(loop, persona)}${format.extension}`)),
   );
+
+/** §27.4 — Claude Code reviewer sub-agents any older build wrote to the user's folder, which each run now installs
+ *  in its own folder instead, whether or not this build still ships their loop. */
+export const movedClaudeReviewerAgents: RetiredLister = (root) =>
+  readDirEntries(root)
+    .filter((e) => e.isFile && isClaudeReviewerFile(e.name) && appWritten(path.join(root, e.name)))
+    .map((e) => ({ rel: e.name, kind: 'moved-reviewer' }));
+
+function appWritten(file: string): boolean {
+  try {
+    return isAppWrittenAgent(readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+}

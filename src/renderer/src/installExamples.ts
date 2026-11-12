@@ -57,8 +57,11 @@ function counts(report: Report): string {
 
 function retiredList(retired: RetiredExample[]): string {
   return INSTALL_DESTINATION_IDS.flatMap((id) => {
-    const rels = retired.filter((r) => r.destination === id).map((r) => r.rel);
-    return rels.length > 0 ? [`${DESTINATION_LABEL[id]}: ${rels.join(', ')}`] : [];
+    const here = retired.filter((r) => r.destination === id);
+    const named = here.filter((r) => r.kind !== 'moved-reviewer').map((r) => r.rel);
+    const reviewers = here.length - named.length;
+    const items = [...named, ...(reviewers > 0 ? [`${reviewers} old reviewer agent${reviewers === 1 ? '' : 's'}`] : [])];
+    return items.length > 0 ? [`${DESTINATION_LABEL[id]}: ${items.join(', ')}`] : [];
   }).join('; ');
 }
 
@@ -69,6 +72,9 @@ function summarize(report: Report): string {
 export const MOVED_LOOPS_TEXT =
   "Some loop definitions now ship once, in the shared folder. Older copies of them are still in a flow's own folder, where they are used instead of the shared copy.";
 export const MOVED_LOOPS_REMOVAL_TEXT = 'Removing an older copy makes its flow use the shared copy.';
+
+export const MOVED_REVIEWERS_TEXT =
+  'Reviewer agents are no longer installed in your Claude config directory (each run installs the ones it needs in its run folder), so these are unused and every Claude Code session loads them for nothing.';
 
 export const RETIRED_FLOW_STOPS_TEXT = 'A run using one of these flows stops until you choose another flow.';
 export const OLD_ITEM_WORD = 'old';
@@ -102,7 +108,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'kp-help',
-      'Copies the flow to ~/.agent-terminal, the app loop definitions and commands to your Claude config directory, and the loop definitions, reviewer agents and a skill for running them to your Codex home if Codex is installed. Files you already have are left untouched unless you choose to replace them.',
+      'Copies the flow to ~/.agent-terminal, the app loop definitions and commands to your Claude config directory, and the loop definitions, reviewer agents and a skill for running them to your Codex home if Codex is installed. Each run installs its own Claude Code reviewer agents in its run folder. Files you already have are left untouched unless you choose to replace them.',
     ),
   );
   const btn = el('button', 'pill signal', 'Install examples');
@@ -208,6 +214,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const describedById = `${titleId}-msg`;
       const hasRetiredFlow = retired.some((r) => r.kind === 'retired-flow');
       const hasMovedLoop = retired.some((r) => r.kind === 'moved-loop');
+      const hasMovedReviewer = retired.some((r) => r.kind === 'moved-reviewer');
+      const hasOld = hasMovedLoop || hasMovedReviewer;
       const cardEl = d.createElement('div');
       cardEl.className = 'card';
       const h3 = d.createElement('h3');
@@ -225,6 +233,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           ? [
               ...(hasRetiredFlow ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind.`] : []),
               ...(hasMovedLoop ? [MOVED_LOOPS_TEXT] : []),
+              ...(hasMovedReviewer ? [MOVED_REVIEWERS_TEXT] : []),
               'They are kept unless you choose to remove them.',
             ]
           : []),
@@ -294,9 +303,9 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       let retiredBox: HTMLInputElement | null = null;
       if (retired.length > 0) {
         retiredBox = option(
-          consentGroup('retired', hasMovedLoop ? 'Old example files' : 'Retired examples'),
+          consentGroup('retired', hasOld ? 'Old example files' : 'Retired examples'),
           'retired',
-          `Remove ${retired.length} ${hasMovedLoop ? OLD_ITEM_WORD : RETIRED_ITEM_WORD} item${retired.length === 1 ? '' : 's'}, whatever they hold`,
+          `Remove ${retired.length} ${hasOld ? OLD_ITEM_WORD : RETIRED_ITEM_WORD} item${retired.length === 1 ? '' : 's'}, whatever they hold`,
           [
             `${retiredList(retired)}.`,
             ...(hasRetiredFlow ? [RETIRED_FLOW_STOPS_TEXT] : []),

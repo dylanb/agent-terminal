@@ -233,11 +233,43 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
 
 describe('§27.4 — a review round runs only when every reviewer is installed carrying this run\'s charter', () => {
   const MISSING = 'review-plan-security';
-  const problemFor = (missing: () => boolean) => (reviewer: { loop: string; persona: string }): string | null =>
-    missing() && reviewer.persona === MISSING ? `no sub-agent ${reviewer.loop}--${reviewer.persona} is installed` : null;
+  const problemFor = (missing: () => boolean) => (_repoDir: string, reviewers: readonly { loop: string; persona: string }[]): string[] =>
+    reviewers.filter((r) => missing() && r.persona === MISSING).map((r) => `no sub-agent ${r.loop}--${r.persona} is installed`);
+
+  it('still installs the reviewers when no agent is at the prompt, so the agent started next loads them', () => {
+    const installed = join(h.repo, 'installed-reviewers');
+    let agentAtPrompt = true;
+    const engine = makeEngine(undefined, undefined, undefined, {
+      hostedAgent: () => (agentAtPrompt ? 'idle' : 'absent'),
+      ensureReviewersRunnable: (repoDir: string) => {
+        writeFileSync(join(repoDir, 'installed-reviewers'), '');
+        return [];
+      },
+    });
+    enterAndInjectWork(engine);
+    agentAtPrompt = false;
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(existsSync(installed)).toBe(true);
+    expect(engine.liveErrorFor(h.repo)?.reason).toBe('no hosted agent at the prompt');
+  });
+
+  it('checks the reviewers in the run folder the review round runs in', () => {
+    const engine = makeEngine(undefined, undefined, undefined, {
+      ensureReviewersRunnable: (repoDir: string) => [`no sub-agent is installed in ${repoDir}`],
+    });
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(`no sub-agent is installed in ${h.repo}`);
+  });
 
   it('refuses the review round before injecting it, naming the reviewer, while the work turn ran as usual', () => {
-    const engine = makeEngine(undefined, undefined, undefined, { reviewerAgentProblem: problemFor(() => true) });
+    const engine = makeEngine(undefined, undefined, undefined, { ensureReviewersRunnable: problemFor(() => true) });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
     writeArtifact(true);
@@ -254,7 +286,7 @@ describe('§27.4 — a review round runs only when every reviewer is installed c
 
   it('Retry stays refused while a reviewer is still missing, and runs the round once it is installed', () => {
     let missing = true;
-    const engine = makeEngine(undefined, undefined, undefined, { reviewerAgentProblem: problemFor(() => missing) });
+    const engine = makeEngine(undefined, undefined, undefined, { ensureReviewersRunnable: problemFor(() => missing) });
     enterAndInjectWork(engine);
     writeArtifact(true);
     engine.onDoneSignal();

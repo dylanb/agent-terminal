@@ -18,7 +18,7 @@ Every experiment names 1 control ticket and 1 base commit, and every run starts 
 A run must not be able to read another run's work. Telling it not to look is not enough, since an earlier run told to work blind read the original issue and its branches.
 
 - **A fresh clone** with `--single-branch --branch main --no-tags`, outside any folder that holds another clone or worktree.
-- **Its own `CLAUDE_CONFIG_DIR`.** Session logs and installed reviewer agents live under it. Run **Install examples** from the build under test with it set, and give the baseline and the trial the same user `CLAUDE.md`.
+- **Its own `CLAUDE_CONFIG_DIR`.** Session logs live under it. Run **Install examples** from the build under test with it set, and give the baseline and the trial the same user `CLAUDE.md`. Claude Code reviewer agents are installed by the run itself, in the clone's `.claude/agents` when the flow starts, so start `claude` in the clone after pressing Start.
 - **Its own `APP_HOME_DIR`.** Audit records go to `<app home>/.agent-terminal/audit/<clone folder name>/` (§25.2), so with the default home every run shares 1 audit tree.
 - **A guard hook.** A `PreToolUse` hook in the clone's `.claude/settings.local.json` that denies any tool call naming another run's issue, branch, clone, config directory or audit tree. It fires for sub-agents too.
 - **A check afterward.** The hook cannot see inside a script an agent writes, so search the run's session logs for what the hook guards. A hit means the results do not count.

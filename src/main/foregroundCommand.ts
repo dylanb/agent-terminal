@@ -20,3 +20,34 @@ export function foregroundCommand(shellPid: number): string | null {
     return null;
   }
 }
+
+const ELAPSED = /^(?:(?:(\d+)-)?(\d{1,2}):)?(\d{1,2}):(\d{2})$/;
+
+/** `ps -o etime` prints `[[dd-]hh:]mm:ss`. */
+export function parseElapsed(text: string): number | null {
+  const m = ELAPSED.exec(text.trim());
+  if (m === null) return null;
+  const [days, hours, minutes, seconds] = [m[1], m[2], m[3], m[4]].map((v) => Number(v ?? 0));
+  return ((days * 24 + hours) * 60 + minutes) * 60 + seconds;
+}
+
+/** `etime` drops the fraction of a second, so a second more is taken off: the start is never placed after the
+ *  process really began, which makes a reviewer file written in the same second count as newer. */
+export function processStartedAt(pid: number, now: () => number = Date.now): number | null {
+  const asked = now();
+  try {
+    const elapsed = parseElapsed(ps('etime', pid));
+    return elapsed === null ? null : asked - (elapsed + 1) * 1000;
+  } catch {
+    return null;
+  }
+}
+
+export function foregroundStartedAt(shellPid: number): number | null {
+  try {
+    const group = Number(ps('tpgid', shellPid));
+    return Number.isInteger(group) && group > 0 ? processStartedAt(group) : null;
+  } catch {
+    return null;
+  }
+}

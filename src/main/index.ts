@@ -128,12 +128,14 @@ import { createLoopMessages } from './loopMessages';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
-import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
-import { hostedAgentKind, sessionAgent } from './agentKind';
+import { ensureReviewersRunnable, ensureRunReviewers, flowReviewers, reviewerInstallNotice } from './runReviewers';
+import { installsPerRun } from './reviewerPlacement';
+import { resolveExampleLoopsV2Dir } from './exampleAssets';
+import { hostedAgentKind, identifiedAgent, sessionAgent } from './agentKind';
 import { createAgentHosting } from './agentHosting';
 import { readCurrentAuditRun } from './auditRun';
-import { foregroundCommand } from './foregroundCommand';
-import { userConfigAgentsDir, userConfigRoot } from './userConfig';
+import { foregroundCommand, foregroundStartedAt } from './foregroundCommand';
+import { userConfigRoot } from './userConfig';
 import { createTokenMeter, TOKEN_REFRESH_MS } from './tokenMeter';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
@@ -514,10 +516,13 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    reviewerAgentProblem: (reviewer, kind) => {
-      if (kind !== 'codex') return installedReviewerProblem(userConfigAgentsDir(), reviewer);
+    ensureReviewersRunnable: (repoDir, reviewers, kind) => {
       const home = codexHome();
-      return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
+      return ensureReviewersRunnable(kind, repoDir, reviewers, {
+        bundleDir: resolveExampleLoopsV2Dir(iconLoc),
+        codexAgentsDir: home === null ? null : codexAgentsDir(home),
+        sessionStartedAt: () => foregroundStartedAt(ptyProcess.pid),
+      });
     },
     hostedAgentKind: () => hostedAgentKind(tracker.summaries(), foregroundProgram()),
     pickupBranch: (repoDir) =>
@@ -1274,6 +1279,18 @@ async function createWindow(): Promise<void> {
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
   });
+  // §27.4 — a session loads sub-agents only when it starts, so every reviewer the run's flow can reach is
+  // installed before its first step is entered.
+  const installRunReviewers = (repoKey: string): string | null => {
+    const load = resolveActiveDefinition(repoKey);
+    if (!load.ok) return null;
+    const running = identifiedAgent(tracker.summaries(), foregroundProgram());
+    if (!installsPerRun(running)) return null;
+    const reviewers = flowReviewers(load.definition.steps, (loop) => observedResolveDef(repoKey, loop));
+    return reviewerInstallNotice(ensureRunReviewers(repoKey, reviewers, resolveExampleLoopsV2Dir(iconLoc)), running);
+  };
+  const withNotice = (view: FlowStateView, notice: string | null): FlowStateView =>
+    notice === null ? view : { ...view, notice: view.notice === undefined ? notice : `${view.notice} ${notice}` };
   const flowStartTransition = composeStartTransition({
     autoGate,
     resolveForStart: (repoKey) => {
@@ -1485,9 +1502,10 @@ async function createWindow(): Promise<void> {
         // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
         const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
           beginRunHere(m.repoKey, () => {
+            const installNotice = installRunReviewers(m.repoKey);
             const started = flowStartTransition(m.repoKey);
             trustedAppBootstraps.delete(m.repoKey);
-            return trackLoop(m.repoKey, withDerived(m.repoKey, started));
+            return trackLoop(m.repoKey, withNotice(withDerived(m.repoKey, started), installNotice));
           }),
         );
         if (started.ok) return started.value;
@@ -1521,7 +1539,14 @@ async function createWindow(): Promise<void> {
         if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.forgetIfRemovable(m.repoKey)) {
           return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP });
         }
-        return beginRunHere(m.repoKey, () => recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)));
+        const restarted = worktreeLock.withWorktreeLock(m.repoKey, () =>
+          beginRunHere(m.repoKey, () => {
+            const installNotice = installRunReviewers(m.repoKey);
+            return withNotice(recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)), installNotice);
+          }),
+        );
+        if (restarted.ok) return restarted.value;
+        return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: restarted.reason });
       },
       [CH.flowUndo]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();

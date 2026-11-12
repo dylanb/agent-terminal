@@ -251,7 +251,7 @@ export class AppLoopEngineHarness {
       },
       currentBranch: () => ({ ok: true, branch: currentBranchOverride }),
       pickupBranch: () => ({ kind: 'none' }),
-      reviewerAgentProblem: () => null,
+      ensureReviewersRunnable: () => [],
       hostedAgentKind: () => 'claude-code',
       workRefs: () => this.workRefsResult,
       stepDecides: () => this.stepDecidesResult,

@@ -1,3 +1,7 @@
+## A run's Claude Code reviewers live in its run folder
+
+§27.4 and §18.1 (#94): Install examples no longer writes Claude Code reviewer sub-agents to the user's agents folder, which every Claude Code session loaded at about 13.5k tokens. Start and Restart install the run flow's reviewers in `<run folder>/.claude/agents`, and the check before each reviewed turn reinstalls anything missing or stale and asks for a session restart when the files are newer than the session. One app-owned line in the repository's `info/exclude` keeps them out of git. Install examples offers to remove the copies older builds installed. Codex reviewers are unchanged.
+
 ## feature-dev-v3 and simple-dev-v1 share four step definitions
 
 §18.1/§18.2: the bundle's step library gains `dev-preparation`, `dev-plan-approve`, `dev-impl-approve` and `dev-finalize`. `feature-dev-v3` and `simple-dev-v1` now reference them instead of writing those steps inline, under their old step ids, gates and `repeat`. The `dev-` prefix keeps an operator's own `finalize.yaml` or `preparation.yaml` in `~/.agent-terminal/steps/` from replacing a shipped flow's step.

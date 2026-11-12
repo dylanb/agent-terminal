@@ -52,9 +52,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
   const logFile = join(binDir, 'calls.log');
   // Resolve REAL git once from the test process (whose PATH lacks binDir, so this is never the shim) rather
   // than hard-coding a path — keeps the shim-escape without coupling to the container base image's git location.
-  const realGit = opts.realCommitOps
-    ? execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
-    : '';
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const fakeGit =
     '#!/usr/bin/env bash\n' +
     HOLD_WAIT_FN +
@@ -78,6 +76,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // against AND the baseline `<sha>^{commit}` resolve baselineCapabilities does — the canned bootstrap/flow
     // rev-parse arms below (and the plain `rev-parse HEAD` the drive uses) never take that form, so they keep
     // their scripted answer; a blanket rev-parse delegation breaks the drive (the loop never starts).
+    // §27.4 — whether git would hide the reviewers the app is about to write is asked of real git, by its exact form.
+    `if [ "$1" = "-C" ] && [ "$3" = "check-ignore" ]; then exec ${realGit} "$@"; fi\n` +
     (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files|ls-tree|cat-file) exec ${realGit} "$@";; esac\n` : '') +
     (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
     // §28.5.1 — the frozen baseline's branch key: `rev-parse --abbrev-ref HEAD` (commit adapter's capture +

@@ -76,8 +76,11 @@ function managesAgent(command: string): boolean {
   return call !== null && NOT_A_SESSION[call.agent].has(call.args[0] ?? '');
 }
 
+/** The agent assumed when none is identified. */
+export const DEFAULT_AGENT_KIND: AgentKind = 'claude-code';
+
 export function agentKindOfCommand(command: string): AgentKind {
-  return commandAgent(command) ?? 'claude-code';
+  return commandAgent(command) ?? DEFAULT_AGENT_KIND;
 }
 
 export function identifiedAgent(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind | null {
@@ -94,5 +97,5 @@ export function sessionAgent(spans: readonly { command: string; running: boolean
 }
 
 export function hostedAgentKind(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind {
-  return identifiedAgent(spans, foregroundProgram) ?? 'claude-code';
+  return identifiedAgent(spans, foregroundProgram) ?? DEFAULT_AGENT_KIND;
 }

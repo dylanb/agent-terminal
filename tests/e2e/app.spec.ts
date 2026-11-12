@@ -50,7 +50,7 @@ import {
   writePromptedArtifact,
   writeV3,
 } from './fakeTools';
-import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
+import { installBundledRunReviewers, ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 
@@ -2472,7 +2472,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'appLoops', 'commands', 'agents']) {
+  for (const dest of ['flow', 'appLoops', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
   await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
@@ -2488,10 +2488,8 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
-  // §27.4 — each bundled reviewer landed where Claude Code discovers a sub-agent, its charter as its instructions.
-  const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
-  expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
-  expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
+  // §27.4 — each run installs its own Claude reviewers, so none land in the config folder every session loads.
+  expect(existsSync(join(configDir, 'agents', 'green-loop--impl-review-principal.md'))).toBe(false);
   // §18.1 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
   const codexLoopRel = join('loops-v2', 'feature-dev-v3', 'integration-slice-loop', 'integration-slice-loop.yaml');
   expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
@@ -2808,6 +2806,7 @@ function seedCompletedAppBootstrap(dir: string, issue = 176): void {
 function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2827,6 +2826,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
 function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2951,13 +2951,14 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 // §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
 // record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
 // app binary) and sees pass before signalling; the round then completes and the loop moves on.
-test('§27.4 — a review round whose reviewer is not installed as a sub-agent stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
+test('§27.4 — a review round whose reviewers cannot be installed in the run folder stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-noagent-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
   cpSync(exampleConfigDir, cfg, { recursive: true });
-  const missingAgent = `plan-loop--${PLAN_V2_ROSTER[1]}`;
-  rmSync(join(cfg, 'agents', `${missingAgent}.md`), { force: true });
+  const blocked = join(repo, '.claude', 'agents');
+  rmSync(blocked, { recursive: true, force: true });
+  writeFileSync(blocked, 'not a folder\n');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noagent-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
   app = await electron.launch({
@@ -2973,7 +2974,7 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  await expectLoopMessage('error', missingAgent, /restart your agent session/i);
+  await expectLoopMessage('error', blocked, /restart your agent session/i);
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
 
   await app.close();
@@ -2981,6 +2982,61 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
   rmSync(cfg, { recursive: true, force: true });
+});
+
+async function restartsAfterLateReviewerInstall(prefix: string, shellIntegration: boolean): Promise<void> {
+  const repo = seedPrebootstrappedAppLoopFlowRepo(`${prefix}-`);
+  rmSync(join(repo, '.claude'), { recursive: true, force: true });
+  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
+  const { binDir, logFile } = seedFakeGhGit(`${prefix}-bin-`);
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  // Launched as `claude`, so with shell integration the app identifies it as Claude Code, as it would the real one.
+  cpSync(join(binDir, 'fake-agent'), join(binDir, 'claude'));
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', ...(shellIntegration ? {} : { APP_SHELL_INTEGRATION: '0', APP_LAUNCH_DIR: repo }), HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await flowControl().click();
+  // Without shell integration the app cannot tell this script is Claude Code, so Start asks for no restart; the
+  // check before the review still does.
+  if (shellIntegration) await expect(page.locator('#flow-strip .flow-notice')).toContainText(/restart/i, { timeout: 10_000 });
+  else await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  await expectLoopMessage('error', 'after your agent session started', /restart/i);
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  expect(log()).not.toContain('Spawn each reviewer');
+  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+
+  await focusTerminal();
+  await page.keyboard.press('Control+C');
+  await typeCommand('claude');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
+
+  await expect.poll(() => log().includes('Spawn each reviewer'), { timeout: 40_000 }).toBe(true);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+}
+
+test('§27.4 — a run whose reviewers were installed after its agent session started stops before the review, and runs it once the session is restarted', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
+  await restartsAfterLateReviewerInstall('agent-term-e2e-v2-restart', true);
+});
+
+test('§27.4 — without shell integration (as under zsh), restarting the agent session still lets the review run', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
+  await restartsAfterLateReviewerInstall('agent-term-e2e-v2-restart-noint', false);
 });
 
 test('§27.3 — the bundled loop brief reaches both the work prompt and the review-and-fix prompt', { tag: '@ownapp' }, async () => {
@@ -3003,6 +3059,11 @@ test('§27.3 — the bundled loop brief reaches both the work prompt and the rev
   const rule = 'No acceptance criterion may be deferred';
   const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
   await expect.poll(() => log().includes('Spawn each reviewer'), { timeout: 40_000 }).toBe(true);
+  // §27.4 — the reviewers were already in place before the agent started, so Start asked for no restart.
+  await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
+  // §27.4 — the reviewers ran from the run folder; the operator's agents folder holds none.
+  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+  expect(existsSync(join(exampleConfigDir, 'agents'))).toBe(false);
   await expect.poll(() => log().lastIndexOf(rule) > log().indexOf('Spawn each reviewer'), { timeout: 15_000 }).toBe(true);
   const workPart = log().slice(0, log().indexOf('Spawn each reviewer'));
   expect(workPart).toContain(rule);
@@ -3113,6 +3174,7 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
 function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3393,9 +3455,22 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     await expect(page.getByRole('alertdialog').filter({ hasText: 'could not be removed' })).toHaveCount(0);
 
     rmSync(saved, { recursive: true, force: true });
+    // §27.4 — Restart installs the flow's reviewers again, so one the operator deleted is back.
+    const reviewer = join(repo, '.claude', 'agents', `plan-loop--${PLAN_V2_ROSTER[0]}.md`);
+    rmSync(reviewer);
+    // §18.7.4 AC11 — while a live peer holds the worktree lock, Restart is refused with the reason and installs nothing.
+    const lockFile = worktreeLockFile(worktreeLockRoot(home), repo);
+    mkdirSync(dirname(lockFile), { recursive: true });
+    writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
+    const locked = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
+    expect(locked.notice).toContain('Another Agent Terminal window');
+    expect(locked.status).toBe('done');
+    expect(existsSync(reviewer)).toBe(false);
+    rmSync(lockFile);
     const restarted = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
     expect(restarted.notice ?? '').not.toContain('Not restarted');
     expect(restarted.status).toBe('in_progress');
+    expect(existsSync(reviewer)).toBe(true);
   } finally {
     rmSync(repo, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -3437,6 +3512,7 @@ test('Terminate still ends a run held for its ticket and PR (§27.13)', { tag: '
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3455,6 +3531,7 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
 function seedAppChainStepRefRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(stepLibraryDir(dir), { recursive: true });
   writeFileSync(
     join(stepLibraryDir(dir), 'plan-step.yaml'),
@@ -3476,6 +3553,7 @@ function seedAppChainStepRefRepo(prefix: string, pr: string): string {
 function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3585,6 +3663,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
   mkdirSync(join(repo, '.git'));
+  installBundledRunReviewers(repo);
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'pickup');
 
   await typeCommand(`cd "${repo}"`);
@@ -3667,7 +3746,6 @@ function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) =>
   const after = transform(before);
   expect(after).not.toBe(before);
   writeFileSync(defFile, after);
-  cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
   return root;
 }
 
@@ -3805,6 +3883,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-resume-refs-');
   const other = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-refs-other-'));
   mkdirSync(join(other, '.git'), { recursive: true });
+  installBundledRunReviewers(other);
   mkdirSync(join(other, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(other, '.agent-terminal', 'flow.yaml'),
@@ -4018,6 +4097,7 @@ test('a def resolved from the REPOSITORY tier declaring a pickup contract bootst
 test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (AC 10)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -4142,7 +4222,6 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   const retiredDef = join(retiredDir, 'plan-loop.yaml');
   const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
   writeFileSync(retiredDef, retiredContent);
-  cpSync(join(exampleConfigDir, 'agents'), join(config, 'agents'), { recursive: true });
   const migratedDef = join(config, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml');
   expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');
@@ -4775,6 +4854,33 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   const chained = run.events.filter((e) => e.type === 'command' && /chained transition/i.test(e.cmd));
   expect(chained.length).toBe(1);
   expect((chained[0] as Extract<AuditEvent, { type: 'command' }>).cmd).toContain('implement');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§27.4 — Start installs the reviewers of every loop the flow reaches into an empty run folder, and asks no restart at a bare prompt', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainStepRefRepo('agent-term-e2e-v2-start-install-', '77');
+  rmSync(join(repo, '.claude'), { recursive: true, force: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-start-install-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-start-install-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+
+  const agents = join(repo, '.claude', 'agents');
+  await expect.poll(() => (existsSync(agents) ? readdirSync(agents) : []), { timeout: 15_000 }).toEqual(expect.arrayContaining(PLAN_V2_ROSTER.map((p) => `plan-loop--${p}.md`)));
+  expect(readdirSync(agents).some((f) => f.startsWith('infra-loop--'))).toBe(true);
+  await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -5730,6 +5836,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // rather than erroring for want of a hosted agent; that is incidental to the Restart-clears-input behavior.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -6839,6 +6946,7 @@ function seedFlowRepoBase(
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
+  installBundledRunReviewers(dir);
   g('config', 'user.email', 't@t');
   g('config', 'user.name', 'T');
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
@@ -7787,6 +7895,7 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
 function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
   writeFileSync(

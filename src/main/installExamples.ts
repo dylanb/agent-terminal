@@ -22,8 +22,8 @@ import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './t
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
-import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
-import { retiredCatalogEntries, removeRetiredEntry, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
+import { movedClaudeReviewerAgents, retiredCatalogEntries, removeRetiredEntry, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
 import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import {
   INSTALL_DESTINATION_IDS,
@@ -292,13 +292,14 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
+  // §27.4 — each run installs its own Claude reviewers; this destination only offers to remove older copies.
   agents: {
     bundle: resolveExampleLoopsV2Dir,
     target: ({ configDir }) => userConfigAgentsDir(configDir),
     rootFix: CONFIG_ROOT_FIX,
-    plan: reviewerAgentFiles(CLAUDE_REVIEWER_AGENT),
+    plan: (loopsBundleDir) => (absent(loopsBundleDir) ? null : []),
     overwrite: { mode: 'confirm-overwrite' },
-    retired: retiredReviewerAgents(CLAUDE_REVIEWER_AGENT),
+    retired: movedClaudeReviewerAgents,
   },
   codexLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -794,7 +795,7 @@ function applyInstallExamplesWithAuthorization(
         try {
           removeLeftover(dest.jail, rel, kind);
         } catch (e) {
-          return fail(`Could not remove the ${kind === 'moved-loop' ? 'old' : 'retired'} ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
+          return fail(`Could not remove the ${kind === 'retired-flow' ? 'retired' : 'old'} ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
         }
         removed.push({ destination: dest.id, rel, kind });
       }

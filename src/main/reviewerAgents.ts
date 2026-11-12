@@ -66,13 +66,45 @@ export interface ReviewerAgentFormat {
 export const CLAUDE_REVIEWER_AGENT: ReviewerAgentFormat = { name: reviewerAgentName, extension: '.md', render: renderReviewerAgent };
 export const CODEX_REVIEWER_AGENT: ReviewerAgentFormat = { name: codexReviewerAgentName, extension: '.toml', render: renderCodexReviewerAgent };
 
+export function reviewerAgentFile(format: ReviewerAgentFormat, loop: string, persona: string): string {
+  return `${format.name(loop, persona)}${format.extension}`;
+}
+
+/** Whether `name` is one `reviewerAgentFile(CLAUDE_REVIEWER_AGENT, loop, persona)` can produce. */
+export function isClaudeReviewerFile(name: string): boolean {
+  if (!name.endsWith(CLAUDE_REVIEWER_AGENT.extension)) return false;
+  const parts = name.slice(0, -CLAUDE_REVIEWER_AGENT.extension.length).split(reviewerAgentName('', ''));
+  return parts.length === 2 && parts.every((part) => NAME_SEGMENT.test(part));
+}
+
+/** The front-matter field that marks a sub-agent file as one the app wrote, so it may be rewritten. */
+export const GENERATED_BY_KEY = 'generated-by';
+export const GENERATED_BY = 'agent-terminal';
+
+/** Every build before the marker wrote this description, so it identifies their files too. */
+const LEGACY_GENERATED_DESCRIPTION = /^The \S+ reviewer of the \S+ loop\. Spawned by the agent-terminal loop engine's review-and-fix turn/;
+
+export function isAppWrittenAgent(text: string): boolean {
+  const m = AGENT_FILE.exec(text);
+  if (m === null) return false;
+  try {
+    const front: unknown = yaml.load(m[1]);
+    if (typeof front !== 'object' || front === null) return false;
+    const fields = front as Record<string, unknown>;
+    return fields[GENERATED_BY_KEY] === GENERATED_BY || (typeof fields.description === 'string' && LEGACY_GENERATED_DESCRIPTION.test(fields.description));
+  } catch {
+    return false;
+  }
+}
+
 export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
   checkReviewerSpec(spec);
   const name = reviewerAgentName(spec.loop, spec.persona);
   return [
     '---',
     `name: ${name}`,
-    `description: The ${spec.persona} reviewer of the ${spec.loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed with the example loops.`,
+    `description: The ${spec.persona} reviewer of the ${spec.loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed in the run folder by agent-terminal.`,
+    `${GENERATED_BY_KEY}: ${GENERATED_BY}`,
     ...(spec.tools === 'all' ? [] : [`tools: ${spec.tools.join(', ')}`]),
     '---',
     spec.charter,
@@ -119,16 +151,22 @@ export interface InstalledReviewer {
   tools: ReviewerTools;
 }
 
+/** A folder agent files are read from or written to, with the jail every file in it is confined to. The jail
+ *  is null when the folder cannot be confined at all. */
+export interface AgentsDir {
+  dir: string;
+  jail: string | null;
+}
+
 /** Why this reviewer cannot run as the sub-agent installed for it carrying the charter and tools the run
  *  resolved, or null when it can. */
-export function installedReviewerProblem(agentsDir: string | null, reviewer: InstalledReviewer): string | null {
+export function installedReviewerProblem(agents: AgentsDir, reviewer: InstalledReviewer): string | null {
   const agent = reviewerAgentName(reviewer.loop, reviewer.persona);
-  if (agentsDir === null) return `there is no Claude Code agents directory to find ${agent} in: set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude`;
-  const file = path.join(agentsDir, `${agent}${CLAUDE_REVIEWER_AGENT.extension}`);
+  const agentsDir = agents.dir;
+  const file = path.join(agentsDir, reviewerAgentFile(CLAUDE_REVIEWER_AGENT, reviewer.loop, reviewer.persona));
   const missing = `no sub-agent ${agent} is installed (${file})`;
-  const jail = resolveOwnedDirJail(agentsDir);
-  if (jail === null) return missing;
-  const real = confinedRealPathResult(jail, file);
+  if (agents.jail === null) return missing;
+  const real = confinedRealPathResult(agents.jail, file);
   if (!real.ok) return `the sub-agent file ${file} is not inside ${agentsDir}`;
   let text: string;
   try {

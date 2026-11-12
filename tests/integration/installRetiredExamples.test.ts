@@ -30,6 +30,10 @@ let dirs: InstallDestination[];
 const seam = (): InstallDestination[] =>
   exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome });
 
+/** A Claude reviewer sub-agent as builds before the generated-by marker wrote it. */
+const olderBuildAgent = (loop: string, persona: string): string =>
+  `---\nname: ${loop}--${persona}\ndescription: The ${persona} reviewer of the ${loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed with the example loops.\n---\nold\n`;
+
 function plant(file: string, body = 'old\n'): string {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, body);
@@ -47,16 +51,16 @@ function plantRemnants(): RetiredExample[] {
   plant(path.join(catalog(), 'feature-dev', 'flow.yaml'));
   plant(path.join(catalog(), 'feature-dev-v2', 'todo-templates', 'polish.md'));
   plant(path.join(claudeLoops(), 'feature-dev-v2', 'plan-bundle-loop', 'plan-bundle-loop.yaml'));
-  plant(path.join(claudeAgents(), 'plan-bundle-loop--review-plan-intent.md'));
-  plant(path.join(claudeAgents(), 'plan-polish-loop--review-plan-security.md'));
+  plant(path.join(claudeAgents(), 'plan-bundle-loop--review-plan-intent.md'), olderBuildAgent('plan-bundle-loop', 'review-plan-intent'));
+  plant(path.join(claudeAgents(), 'plan-polish-loop--review-plan-security.md'), olderBuildAgent('plan-polish-loop', 'review-plan-security'));
   plant(path.join(codexLoops(), 'feature-dev-v2', 'red-loop', 'red-loop.yaml'));
   plant(path.join(codexAgents(), 'plan_polish_loop__review_plan_intent.toml'));
   return [
     { destination: 'flowCatalog', rel: 'feature-dev', kind: 'retired-flow' },
     { destination: 'flowCatalog', rel: 'feature-dev-v2', kind: 'retired-flow' },
     { destination: 'appLoops', rel: 'feature-dev-v2', kind: 'retired-flow' },
-    { destination: 'agents', rel: 'plan-bundle-loop--review-plan-intent.md', kind: 'retired-flow' },
-    { destination: 'agents', rel: 'plan-polish-loop--review-plan-security.md', kind: 'retired-flow' },
+    { destination: 'agents', rel: 'plan-bundle-loop--review-plan-intent.md', kind: 'moved-reviewer' },
+    { destination: 'agents', rel: 'plan-polish-loop--review-plan-security.md', kind: 'moved-reviewer' },
     { destination: 'codexLoops', rel: 'feature-dev-v2', kind: 'retired-flow' },
     { destination: 'codexAgents', rel: 'plan_polish_loop__review_plan_intent.toml', kind: 'retired-flow' },
   ] as RetiredExample[];
@@ -611,7 +615,7 @@ describe('the coordinator removes only what its preview offered', () => {
     const c = coordinator();
     const preview = c.preview({ sessionId: SESSION_ID });
     if (!preview.ok) throw new Error(preview.error);
-    const late = plant(path.join(claudeAgents(), 'plan-polish-loop--review-plan-intent.md'));
+    const late = plant(path.join(claudeAgents(), 'plan-polish-loop--review-plan-intent.md'), olderBuildAgent('plan-polish-loop', 'review-plan-intent'));
 
     const res = c.apply({ sessionId: SESSION_ID, previewId: preview.previewId, replace: [], removeRetired: true });
 
