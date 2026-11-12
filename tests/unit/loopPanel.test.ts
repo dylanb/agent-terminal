@@ -4,6 +4,8 @@ import { createLoopPanel } from '../../src/renderer/src/loopPanel';
 import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowAutoGateView, FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ipc';
 import { autoHaltReasonLabel } from '../../src/shared/gateAuthority';
+import type { FlowTokensView } from '../../src/shared/ipc';
+import { KIND_HEADERS, RUN_TOTAL_ROW, panelTokenRegionIn, panelTokenTablesIn, tokenCellIn } from '../helpers/tokenCountsUi';
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
@@ -30,6 +32,33 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = '';
 });
+
+type StepCounts = Extract<NonNullable<FlowTokensView['steps'][number]>, { state: 'counted' }>;
+const tokenKinds = (cacheRead: number, cacheWrite: number, input: number, output: number): StepCounts['kinds'] => ({
+  cacheRead: { reported: 'all', n: cacheRead },
+  cacheWrite: { reported: 'all', n: cacheWrite },
+  input: { reported: 'all', n: input },
+  output: { reported: 'all', n: output },
+});
+const counted = (cacheRead: number, cacheWrite: number, input: number, output: number): StepCounts => ({
+  state: 'counted',
+  billed: true,
+  kinds: tokenKinds(cacheRead, cacheWrite, input, output),
+});
+const PLAN_COUNTS = counted(512_340, 30_118, 2_006, 905);
+const BUILD_COUNTS = counted(2_010_003, 96_021, 8_004, 1_207);
+const runCounts = (cacheRead: number, cacheWrite: number, input: number, output: number): FlowTokensView['run'] => ({
+  state: 'counted',
+  someStepsUnavailable: false,
+  kinds: tokenKinds(cacheRead, cacheWrite, input, output),
+});
+/** Steps plan → build → ship at build: what the strip hands the panel while the counts are shown. */
+const PANEL_TOKENS = {
+  steps: ['plan', 'build', 'ship'],
+  tokens: { steps: [PLAN_COUNTS, BUILD_COUNTS, null], counting: 1, run: runCounts(2_522_343, 126_139, 10_010, 2_112) },
+};
+const tokenRow = (root: ParentNode, name: string): string[] =>
+  (Object.keys(KIND_HEADERS) as (keyof typeof KIND_HEADERS)[]).map((kind) => (tokenCellIn(root, name, kind).textContent ?? '').replace(/\s+/g, ' ').trim());
 
 const row = (key: string): HTMLElement | undefined =>
   [...host.querySelectorAll<HTMLElement>('.ldl .lrow')].find((r) => r.querySelector('.lk')?.textContent === key);
@@ -642,16 +671,23 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.childElementCount).toBe(0);
   });
 
-  it('relocates unchanged: identical render in two different hosts (UI-STANDARDS organism rule)', () => {
+  it('relocates unchanged: identical render in two different hosts, its token table included (UI-STANDARDS organism rule)', () => {
     const a = document.createElement('aside');
     const b = document.createElement('aside');
-    createLoopPanel(a).render(loop(), 'build');
-    createLoopPanel(b).render(loop(), 'build');
-    expect(a.innerHTML).toBe(b.innerHTML);
+    createLoopPanel(a).render(loop(), 'build', undefined, PANEL_TOKENS);
+    createLoopPanel(b).render(loop(), 'build', undefined, PANEL_TOKENS);
+    expect({ same: a.innerHTML === b.innerHTML, a: tokenRow(a, 'build'), b: tokenRow(b, 'build') }).toEqual({
+      same: true,
+      a: ['2,010,003 counting', '96,021 counting', '8,004 counting', '1,207 counting'],
+      b: ['2,010,003 counting', '96,021 counting', '8,004 counting', '1,207 counting'],
+    });
   });
 
-  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
-    await assertRendersFromHostDocument((h) => createLoopPanel(h).render(loop(), 'build'));
+  it('builds from host.ownerDocument, not the global document, its token table included (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument((h) => {
+      createLoopPanel(h).render(loop(), 'build', undefined, PANEL_TOKENS);
+      expect(tokenRow(h, 'build')).toEqual(['2,010,003 counting', '96,021 counting', '8,004 counting', '1,207 counting']);
+    });
   });
 });
 
@@ -1337,5 +1373,88 @@ describe('docked loop panel — getting a stalled agent going again (§27.12)', 
     panel.render(stalled(), 'green');
     panel.render(loop({ status: 'working', iteration: undefined, appTurn: { step: 'green', turnKey: 'work-green' } }), 'green');
     expect(host.querySelector('[data-stall-help]')).toBeNull();
+  });
+});
+
+// #29 — the "Tokens by step" table, shown while the strip hands the panel counts.
+describe('docked loop panel — the token table', () => {
+  const gateLoop = (): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'impasse'], appTurn: { step: 'build', turnKey: 'consolidate-build' }, iteration: 2 });
+  const gatePanel = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {} });
+  const approveButton = (): HTMLElement => [...host.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === 'approve')!;
+  const LATER = {
+    steps: PANEL_TOKENS.steps,
+    tokens: { steps: [PLAN_COUNTS, counted(2_400_017, 99_013, 8_311, 1_502), null], counting: 1, run: runCounts(2_912_357, 129_131, 10_317, 2_407) },
+  };
+
+  it('shows each step\'s counts, the open step marked counting, a dash row for a step not entered, and the run total', () => {
+    gatePanel().render(gateLoop(), 'build', undefined, PANEL_TOKENS);
+    expect({
+      plan: tokenRow(host, 'plan'),
+      build: tokenRow(host, 'build'),
+      ship: tokenRow(host, 'ship'),
+      run: tokenRow(host, RUN_TOTAL_ROW),
+    }).toEqual({
+      plan: ['512,340', '30,118', '2,006', '905'],
+      build: ['2,010,003 counting', '96,021 counting', '8,004 counting', '1,207 counting'],
+      ship: ['—', '—', '—', '—'],
+      run: ['2,522,343', '126,139', '10,010', '2,112'],
+    });
+  });
+
+  it('puts the table in a named scroll region a keyboard user can reach, since it is wider than the panel', () => {
+    gatePanel().render(gateLoop(), 'build', undefined, PANEL_TOKENS);
+    const region = panelTokenRegionIn(host);
+    expect({ focusable: region.tabIndex, holdsTable: panelTokenTablesIn(host).every((t) => region.contains(t)) }).toEqual({ focusable: 0, holdsTable: true });
+  });
+
+  it('shows no table when the panel is handed no counts', () => {
+    gatePanel().render(gateLoop(), 'build');
+    expect(panelTokenTablesIn(host)).toHaveLength(0);
+  });
+
+  it('shows the table on a step with only a ticket to show, and none once the counts are turned off', () => {
+    const panel = createLoopPanel(host);
+    panel.render(null, 'verify', { ticket: 25 }, PANEL_TOKENS);
+    const shown = tokenRow(host, 'plan');
+    panel.render(null, 'verify', { ticket: 25 });
+    expect({ shown, after: panelTokenTablesIn(host).length }).toEqual({ shown: ['512,340', '30,118', '2,006', '905'], after: 0 });
+  });
+
+  it('shows nothing at all when there is no loop and no ticket or PR, counts or not (the panel\'s open rules are unchanged)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build', undefined, PANEL_TOKENS);
+    panel.render(null, '', undefined, PANEL_TOKENS);
+    expect(host.childElementCount).toBe(0);
+  });
+
+  it('a render that changes only the counts updates the cells in place, keeping focus on the gate control', () => {
+    const panel = gatePanel();
+    panel.render(gateLoop(), 'build', undefined, PANEL_TOKENS);
+    const approve = approveButton();
+    approve.focus();
+    const cell = tokenCellIn(host, 'build', 'cacheRead');
+
+    panel.render(gateLoop(), 'build', undefined, LATER);
+
+    expect({
+      build: tokenRow(host, 'build'),
+      run: tokenRow(host, RUN_TOTAL_ROW),
+      sameCell: tokenCellIn(host, 'build', 'cacheRead') === cell,
+      focusKept: document.activeElement === approve && approve.isConnected,
+    }).toEqual({
+      build: ['2,400,017 counting', '99,013 counting', '8,311 counting', '1,502 counting'],
+      run: ['2,912,357', '129,131', '10,317', '2,407'],
+      sameCell: true,
+      focusKept: true,
+    });
+  });
+
+  it('keeps every count out of the panel\'s announcing live regions', () => {
+    createLoopPanel(host).render(gateLoop(), 'build', { ticket: 25 }, PANEL_TOKENS);
+    const kinds = Object.keys(KIND_HEADERS) as (keyof typeof KIND_HEADERS)[];
+    const cells = ['plan', 'build', 'ship', RUN_TOTAL_ROW].flatMap((name) => kinds.map((kind) => tokenCellIn(host, name, kind)));
+    const announcing = '[aria-live="polite"], [aria-live="assertive"], [role="status"], [role="alert"], [role="log"]';
+    expect(cells.filter((c) => c.closest(announcing) !== null)).toHaveLength(0);
   });
 });

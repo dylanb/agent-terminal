@@ -5,6 +5,8 @@ import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { AgentState, FlowAutoGateView, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
+import type { FlowTokensView } from '../../src/shared/ipc';
+import { accessibleTextOf, railCountsIn, railRunTotalIn, railStationIn, railTotalIn } from '../helpers/tokenCountsUi';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
 // must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
@@ -2056,5 +2058,193 @@ describe('flow status strip — the loop tone under per-step gate authority (§2
       { ...base, status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } },
     );
     expect(pill.tone).not.toBe('await');
+  });
+});
+
+// #29 — each flow step's station carries its token total, and the run total sits under the step list.
+describe('flow strip token counts', () => {
+  type StepCounts = Extract<NonNullable<FlowTokensView['steps'][number]>, { state: 'counted' }>;
+  // Each step's 4 kinds add up to a total chosen so no two totals share their rail abbreviation.
+  const step = (cacheRead: number, cacheWrite: number, input: number, output: number, billed = true): StepCounts => ({
+    state: 'counted',
+    billed,
+    kinds: {
+      cacheRead: { reported: 'all', n: cacheRead },
+      cacheWrite: { reported: 'all', n: cacheWrite },
+      input: { reported: 'all', n: input },
+      output: { reported: 'all', n: output },
+    },
+  });
+  const PLAN_812K = step(800_000, 12_000, 300, 45);
+  const BUILD_4M5 = step(4_000_000, 450_000, 40_000, 10_000);
+  const IDLE = step(0, 0, 0, 0, false);
+  const run = (cacheRead: number, cacheWrite: number, input: number, output: number): FlowTokensView['run'] => ({
+    state: 'counted',
+    someStepsUnavailable: false,
+    kinds: step(cacheRead, cacheWrite, input, output).kinds,
+  });
+  const text = (el: Element): string => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+  const view = (status: FlowStatus, position: number, tokens?: FlowTokensView): FlowStateView => ({
+    stepName: ['plan', 'build', 'ship'][position - 1],
+    runStarted: 'started',
+    steps: ['plan', 'build', 'ship'],
+    position,
+    total: 3,
+    status,
+    ...(tokens === undefined ? {} : { tokens }),
+  });
+
+  function mount(first: FlowStateView) {
+    let current = first;
+    let fire: () => void = () => {};
+    const state = vi.fn(async () => current);
+    createFlowStrip(host, {
+      ...fakeFlow(),
+      state,
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    }).onRepoChanged('/repo');
+    return {
+      push: async (next: FlowStateView) => {
+        const pulls = state.mock.calls.length;
+        current = next;
+        fire();
+        await vi.waitFor(() => expect(state.mock.calls.length).toBeGreaterThan(pulls));
+      },
+    };
+  }
+
+  it('shows each entered step\'s abbreviated total, a dash for a step not entered, the run total, and marks the open step counting', async () => {
+    mount(view('in_progress', 2, { steps: [PLAN_812K, BUILD_4M5, null], counting: 1, run: run(4_800_000, 462_000, 40_300, 10_045) }));
+    await vi.waitFor(() => railRunTotalIn(host));
+
+    expect({
+      plan: text(railTotalIn(host, 'plan')),
+      build: text(railTotalIn(host, 'build')),
+      ship: text(railTotalIn(host, 'ship')),
+      run: text(railRunTotalIn(host)),
+    }).toEqual({ plan: '812.3k', build: '4.5M counting', ship: '—', run: '5.3M' });
+  });
+
+  it('marks a total partly reported, after its figure, when a kind behind it was not or only partly reported, in its accessible text', async () => {
+    const notReported: StepCounts = { ...step(9_000, 0, 140, 260), kinds: { ...step(9_000, 0, 140, 260).kinds, cacheWrite: { reported: 'none' } } };
+    const partly: StepCounts = { ...step(8_000, 0, 85, 150), kinds: { ...step(8_000, 0, 85, 150).kinds, cacheWrite: { reported: 'some', n: 400 } } };
+    const total: FlowTokensView['run'] = { state: 'counted', someStepsUnavailable: false, kinds: { ...step(17_000, 0, 225, 410).kinds, cacheWrite: { reported: 'some', n: 400 } } };
+    mount(view('in_progress', 2, { steps: [notReported, partly, null], counting: 1, run: total }));
+    await vi.waitFor(() => railRunTotalIn(host));
+
+    expect({
+      plan: accessibleTextOf(railTotalIn(host, 'plan')),
+      build: accessibleTextOf(railTotalIn(host, 'build')),
+      run: accessibleTextOf(railRunTotalIn(host)),
+      visibleBuild: text(railTotalIn(host, 'build')),
+    }).toEqual({ plan: '9.4k partly reported', build: '8.6k partly reported counting', run: '18.0k partly reported', visibleBuild: '8.6k partly reported counting' });
+  });
+
+  it('shows unavailable on an unavailable step\'s station, and the run total of the counted steps marked incomplete, in their accessible text', async () => {
+    const total: FlowTokensView['run'] = { state: 'counted', someStepsUnavailable: true, kinds: PLAN_812K.kinds };
+    mount(view('in_progress', 2, { steps: [PLAN_812K, { state: 'unavailable' }, null], counting: 1, run: total }));
+    await vi.waitFor(() => railRunTotalIn(host));
+
+    expect({
+      build: accessibleTextOf(railTotalIn(host, 'build')),
+      ship: text(railTotalIn(host, 'ship')),
+      run: accessibleTextOf(railRunTotalIn(host)),
+      visibleRun: text(railRunTotalIn(host)),
+    }).toEqual({ build: 'unavailable counting', ship: '—', run: '812.3k incomplete', visibleRun: '812.3k incomplete' });
+  });
+
+  it('marks a run total both partly reported and incomplete, and shows it unavailable when no entered step can be counted', async () => {
+    const both: FlowTokensView['run'] = { state: 'counted', someStepsUnavailable: true, kinds: { ...step(9_000, 0, 140, 260).kinds, cacheWrite: { reported: 'none' } } };
+    const r = mount(view('in_progress', 2, { steps: [step(9_000, 0, 140, 260), { state: 'unavailable' }, null], counting: 1, run: both }));
+    await vi.waitFor(() => railRunTotalIn(host));
+    const partlyAndIncomplete = accessibleTextOf(railRunTotalIn(host));
+
+    await r.push(view('in_progress', 2, { steps: [{ state: 'unavailable' }, { state: 'unavailable' }, null], counting: 1, run: { state: 'unavailable' } }));
+    await vi.waitFor(() => expect(text(railRunTotalIn(host))).toBe('unavailable'));
+
+    expect({ partlyAndIncomplete, plan: text(railTotalIn(host, 'plan')) }).toEqual({ partlyAndIncomplete: '9.4k partly reported incomplete', plan: 'unavailable' });
+  });
+
+  it('shows 0 for an entered step that billed nothing', async () => {
+    mount(view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) }));
+    await vi.waitFor(() => railRunTotalIn(host));
+    expect(text(railTotalIn(host, 'build'))).toBe('0 counting');
+  });
+
+  it('marks no step counting once the flow is complete, and keeps every count', async () => {
+    mount(view('done', 3, { steps: [PLAN_812K, BUILD_4M5, IDLE], counting: null, run: run(4_800_000, 462_000, 40_300, 10_045) }));
+    await vi.waitFor(() => railRunTotalIn(host));
+    expect([...['plan', 'build', 'ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['812.3k', '4.5M', '0', '5.3M']);
+  });
+
+  it('shows dashes on every station and the run total while the flow has not started', async () => {
+    mount(view('not_started', 1, { steps: [null, null, null], counting: null, run: null }));
+    await vi.waitFor(() => railRunTotalIn(host));
+    expect([...['plan', 'build', 'ship'].map((s) => text(railTotalIn(host, s))), text(railRunTotalIn(host))]).toEqual(['—', '—', '—', '—']);
+  });
+
+  it('shows no count on any station and no run total when the view carries no counts', async () => {
+    mount(view('in_progress', 2));
+    await vi.waitFor(() => railStationIn(host, 'ship'));
+    expect(railCountsIn(host, ['plan', 'build', 'ship'])).toHaveLength(0);
+  });
+
+  it('a push that changes only the counts updates them in place, keeping focus on the control the user is on', async () => {
+    const { push } = mount(view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) }));
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    const advance = control()!;
+    advance.focus();
+
+    await push(view('in_progress', 2, { steps: [PLAN_812K, BUILD_4M5, null], counting: 1, run: run(4_800_000, 462_000, 40_300, 10_045) }));
+
+    await vi.waitFor(() => expect(text(railTotalIn(host, 'build'))).toBe('4.5M counting'));
+    expect({ run: text(railRunTotalIn(host)), focusKept: document.activeElement === advance && advance.isConnected }).toEqual({ run: '5.3M', focusKept: true });
+  });
+
+  it('hands the step names and counts to the docked panel, on a render and on a push that changes only the counts', async () => {
+    const onPanelState = vi.fn();
+    let current = view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) });
+    let fire: () => void = () => {};
+    createFlowStrip(host, {
+      ...fakeFlow(),
+      state: vi.fn(async () => current),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+      onPanelState,
+    }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onPanelState).toHaveBeenCalled());
+    const rendered = onPanelState.mock.calls.at(-1)![3];
+
+    const later = { steps: [PLAN_812K, BUILD_4M5, null], counting: 1, run: run(4_800_000, 462_000, 40_300, 10_045) };
+    const calls = onPanelState.mock.calls.length;
+    current = view('in_progress', 2, later);
+    fire();
+    await vi.waitFor(() => expect(onPanelState.mock.calls.length).toBeGreaterThan(calls));
+
+    expect({ rendered, pushed: onPanelState.mock.calls.at(-1)![3] }).toEqual({
+      rendered: { steps: ['plan', 'build', 'ship'], tokens: { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) } },
+      pushed: { steps: ['plan', 'build', 'ship'], tokens: later },
+    });
+  });
+
+  it('hands the docked panel no counts when the view carries none', async () => {
+    const onPanelState = vi.fn();
+    createFlowStrip(host, { ...fakeFlow(), state: vi.fn(async () => view('in_progress', 2)), onPanelState }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onPanelState).toHaveBeenCalled());
+    expect(onPanelState.mock.calls.at(-1)![3]).toBeUndefined();
+  });
+
+  it('keeps every count out of the strip\'s announcing live region', async () => {
+    mount(view('in_progress', 2, { steps: [PLAN_812K, IDLE, null], counting: 1, run: run(800_000, 12_000, 300, 45) }));
+    await vi.waitFor(() => railRunTotalIn(host));
+    host.setAttribute('aria-live', 'polite');
+    const counts = railCountsIn(host, ['plan', 'build', 'ship']);
+    expect(counts.map((c) => c.closest('[aria-live]')?.getAttribute('aria-live'))).toEqual(['off', 'off', 'off', 'off']);
   });
 });

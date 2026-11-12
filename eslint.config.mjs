@@ -77,7 +77,21 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'];
+const EXPECTED_RESULTS_FIXTURES = [
+  'tests/helpers/controllerStatusFixture.ts',
+  'tests/helpers/controllerCards.ts',
+  'tests/helpers/tokenCountsUi.ts',
+  'tests/helpers/tokenFormatFixture.ts',
+];
+
+const INJECTED_TIME_MESSAGE =
+  'Token counting reads time only through its injected now() and refresh scheduler; src/main/index.ts supplies the real ones (CLAUDE.md § Test-driven development, injection seams).';
+const TOKEN_COUNTING = ['src/main/stepTokens.ts', 'src/main/tokenMeter.ts', 'src/main/agentUsage/**/*.ts'];
+
+const TOKEN_HELPER = 'tests/helpers/tokenCountsUi.ts';
+const TOKEN_HELPER_MESSAGE = `Read token counts through ${TOKEN_HELPER} (UI-STANDARDS §3.4 rule 1).`;
+const TOKEN_NAME = '/\\btoken-(count|run-total)\\b|^(Tokens by step|Flow steps)$/';
+const TOKEN_DOM = [`Literal[value=${TOKEN_NAME}]`, `TemplateElement[value.raw=${TOKEN_NAME}]`].map((selector) => ({ selector, message: TOKEN_HELPER_MESSAGE }));
 
 const TEST_PROOF_CORE_MESSAGE = 'The test-proof core decides from its seam values only: it reaches processes, the filesystem, the network, git and gh through its injected ports (CLAUDE.md § Test-driven development, injection seams).';
 const TEST_PROOF_CORE_IMPORTS = [
@@ -100,6 +114,12 @@ export default [
     languageOptions: { parser: tseslint.parser, ecmaVersion: 'latest', sourceType: 'module' },
     plugins: { local: localPlugin },
     rules: { 'local/no-todo-comments': 'error' },
+  },
+  // Before the controller blocks, whose own no-restricted-syntax replaces this one on the controller tests.
+  {
+    files: ['tests/**/*.ts'],
+    ignores: [TOKEN_HELPER, 'tests/unit/tokenCountsUiLint.test.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...TOKEN_DOM] },
   },
   {
     files: CONTROLLER_TESTS,
@@ -142,6 +162,21 @@ export default [
       'no-restricted-imports': ['error', { paths: TEST_PROOF_CORE_IMPORTS }],
       '@typescript-eslint/no-restricted-imports': ['error', { patterns: TEST_PROOF_CORE_SIBLINGS }],
       'no-restricted-globals': ['error', ...['process', 'fetch', 'WebSocket'].map((name) => ({ name, message: TEST_PROOF_CORE_MESSAGE }))],
+    },
+  },
+  {
+    files: TOKEN_COUNTING,
+    rules: {
+      'no-restricted-properties': ['error', ...[['Date', 'now'], ['performance', 'now']].map(([object, property]) => ({ object, property, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-syntax': ['error', ...["NewExpression[callee.name='Date'][arguments.length=0]", "CallExpression[callee.name='Date']"].map((selector) => ({ selector, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-globals': ['error', ...['setTimeout', 'setInterval'].map((name) => ({ name, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-imports': ['error', {
+        paths: ['timers', 'node:timers', 'timers/promises', 'node:timers/promises'].map((name) => ({
+          name,
+          importNames: ['setTimeout', 'setInterval', 'scheduler'],
+          message: INJECTED_TIME_MESSAGE,
+        })),
+      }],
     },
   },
   {

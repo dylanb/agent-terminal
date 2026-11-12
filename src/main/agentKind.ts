@@ -1,8 +1,7 @@
 // §27.4
 
 import path from 'node:path';
-
-export type AgentKind = 'claude-code' | 'codex';
+import type { AgentKind } from '../shared/agentKind';
 
 const LAUNCHERS: ReadonlySet<string> = new Set(['env', 'exec', 'command', 'npx', 'bunx', 'pnpx', 'nice', 'nohup', 'node', 'bun', 'deno']);
 
@@ -25,11 +24,19 @@ const isCodex = (token: string, name: string): boolean => name === 'codex' || na
 const isClaudeCode = (token: string, name: string): boolean =>
   name === 'claude' || name === '@anthropic-ai/claude-code' || token.includes(CLAUDE_PACKAGE_SEGMENT);
 
-export function agentKindOfCommand(command: string): AgentKind {
+// The first argument of an agent command that only manages the agent: no session, so no session log.
+const NOT_A_SESSION: Record<AgentKind, ReadonlySet<string>> = {
+  codex: new Set(['--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'mcp-server', 'completion', 'apply', 'sandbox', 'debug']),
+  'claude-code': new Set(['--version', '-v', '-V', '--help', '-h', 'auth', 'mcp', 'plugin', 'config', 'doctor', 'install', 'update', 'setup-token']),
+};
+
+/** The agent `command` runs and the arguments after it, or `null` when it runs none recognisably. */
+function agentCall(command: string): { agent: AgentKind; args: string[] } | null {
   let launched = false;
   let afterFlag = false;
   let afterManager = false;
-  for (const token of command.trim().split(/\s+/)) {
+  const tokens = command.trim().split(/\s+/);
+  for (const [i, token] of tokens.entries()) {
     if (token === '' || token.includes('=')) continue;
     if (token.startsWith('-')) {
       afterFlag = true;
@@ -47,8 +54,8 @@ export function agentKindOfCommand(command: string): AgentKind {
       afterFlag = false;
       continue;
     }
-    if (isCodex(token, name)) return 'codex';
-    if (isClaudeCode(token, name)) return 'claude-code';
+    if (isCodex(token, name)) return { agent: 'codex', args: tokens.slice(i + 1) };
+    if (isClaudeCode(token, name)) return { agent: 'claude-code', args: tokens.slice(i + 1) };
     const optionValue = launched && afterFlag;
     afterFlag = false;
     if (optionValue) continue;
@@ -56,13 +63,36 @@ export function agentKindOfCommand(command: string): AgentKind {
       launched = true;
       continue;
     }
-    return 'claude-code';
+    return null;
   }
-  return 'claude-code';
+  return null;
+}
+
+const commandAgent = (command: string): AgentKind | null => agentCall(command)?.agent ?? null;
+
+/** Whether `command` runs an agent only to manage it, such as `codex login` or `claude --version`. */
+function managesAgent(command: string): boolean {
+  const call = agentCall(command);
+  return call !== null && NOT_A_SESSION[call.agent].has(call.args[0] ?? '');
+}
+
+export function agentKindOfCommand(command: string): AgentKind {
+  return commandAgent(command) ?? 'claude-code';
+}
+
+export function identifiedAgent(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind | null {
+  const running = spans.filter((s) => s.running).at(-1);
+  const typed = running === undefined ? null : commandAgent(running.command);
+  return typed === 'codex' ? typed : (commandAgent(foregroundProgram) ?? typed);
+}
+
+/** The agent the terminal runs as a session, the kind that writes a session log; `null` while it only manages one. */
+export function sessionAgent(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind | null {
+  const running = spans.filter((s) => s.running).at(-1);
+  if ((running !== undefined && managesAgent(running.command)) || managesAgent(foregroundProgram)) return null;
+  return identifiedAgent(spans, foregroundProgram);
 }
 
 export function hostedAgentKind(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind {
-  const running = spans.filter((s) => s.running);
-  const typed = running.length > 0 ? agentKindOfCommand(running[running.length - 1].command) : 'claude-code';
-  return typed === 'codex' ? typed : agentKindOfCommand(foregroundProgram);
+  return identifiedAgent(spans, foregroundProgram) ?? 'claude-code';
 }

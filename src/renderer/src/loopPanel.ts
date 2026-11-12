@@ -16,6 +16,7 @@ import { spillTone } from './loopStatus';
 import { autoHaltReasonText, failedEffectNotice } from '../../shared/gateAuthority';
 import { captureSubtreeFocus } from './dom';
 import { createPressGroup, onPress, type PressGroup } from './pressable';
+import { createTokenTable, TOKEN_TABLE_NAME, type TokenTable, type TokenTableView } from './tokenTable';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
  *  (the verbose `request-changes` reads as `changes` in the compact options row). The option is
@@ -79,7 +80,7 @@ export interface LoopPanel {
    *  identifies the step the panel mirrors (the rail step name). A clearing call (both absent) must be
    *  preceded by moving focus out of the host — the close-before-clear contract `syncDockedPanel` holds
    *  (UI §4.5) — so emptying never strands focus on `<body>`. */
-  render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
+  render(loop: FlowLoopView | null, title: string, refs?: FlowRefs, tokens?: TokenTableView): void;
   /** Move focus onto the gate decision, the work-turn route-out, or the stable Close entry, returning
    *  whether one was there to focus. The panel owns this so a sibling never reaches into its markup for the
    *  control (§27.9 / §27.12c; WCAG 2.4.3). */
@@ -111,9 +112,10 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
  *  structuralSig, §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind,
  *  number), so they are excluded too. The error reason is excluded because rebuilding the live region to
  *  show it would announce nothing at all (WCAG SC 4.1.3). */
-function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
+function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs, tokens?: TokenTableView): string {
   return JSON.stringify([
     title,
+    tokens?.steps ?? null,
     refs?.ticket ?? null,
     refs?.pr ?? null,
     // iteration PRESENCE and actionability are structural: the iteration row and the gate-decision
@@ -134,6 +136,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
   let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement | null; ldl: HTMLElement; reasonAnchor: HTMLElement; body: HTMLElement; autoGate: { region: HTMLElement; key: string } | null } | null = null;
   let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
+  let tokenTable: TokenTable | null = null;
   // One group per gate, so a decision still being answered holds its own gate and no other worktree's.
   const gateGroups = new Map<string, PressGroup>();
   const gateGroupFor = (id: string): PressGroup => {
@@ -421,9 +424,20 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     live.region.replaceChildren(...nodes);
   };
 
-  /** Update the live loop values + re-attempt any unresolved ref, with no teardown so focus and the
-   *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
-  function patchInPlace(loop: FlowLoopView | null): void {
+  const tokenSection = (tokens: TokenTableView): HTMLElement => {
+    const section = doc.createElement('div');
+    section.className = 'ltokens';
+    // WCAG 2.1.1, 4.1.2
+    section.setAttribute('role', 'region');
+    section.setAttribute('aria-label', TOKEN_TABLE_NAME);
+    section.tabIndex = 0;
+    tokenTable = createTokenTable(section);
+    tokenTable.update(tokens);
+    return section;
+  };
+
+  /** No teardown, so focus and the resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
+  function patchInPlace(loop: FlowLoopView | null, tokens: TokenTableView | undefined): void {
     if (loop && liveLoop) {
       // WCAG 4.1.3 — only touch the live-region text on a real change; an unchanged passive push (refs
       // only) must not rewrite these nodes, or a screen reader re-announces content that did not change.
@@ -441,15 +455,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       syncCatalog(liveLoop.body, loop);
       syncArmInterrupt(liveLoop.body, loop);
     }
+    if (tokens) tokenTable?.update(tokens);
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
 
   return {
-    render(loop, title, refs) {
+    render(loop, title, refs, tokens) {
       const showRefs = hasFlowRefs(refs);
-      const sig = !loop && !showRefs ? null : structuralSig(loop, title, refs);
+      const sig = !loop && !showRefs ? null : structuralSig(loop, title, refs, tokens);
       if (sig === lastSig && host.childElementCount > 0) {
-        patchInPlace(loop); // §24.2.2 S5
+        patchInPlace(loop, tokens); // §24.2.2 S5
         return;
       }
       if (sig === lastSig) return; // both empty — nothing to do
@@ -458,6 +473,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       lastSig = sig;
       liveLoop = null;
       refRows = [];
+      tokenTable = null;
       if (!loop && !showRefs) return;
 
       const head = doc.createElement('div');
@@ -502,13 +518,21 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         host.append(refsEl);
       }
 
+      const scroller = doc.createElement('div');
+      scroller.className = 'lbody';
+
       if (!loop) {
+        if (tokens) {
+          scroller.append(tokenSection(tokens));
+          host.append(scroller);
+        }
         restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
         return;
       }
 
       const body = doc.createElement('div');
-      body.className = 'lbody';
+      scroller.append(body);
+      if (tokens) scroller.append(tokenSection(tokens));
       const segH = doc.createElement('div');
       segH.className = 'seg-h';
       segH.textContent = 'State';
@@ -672,7 +696,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       syncCatalog(body, loop);
       syncArmInterrupt(body, loop);
 
-      host.append(body);
+      host.append(scroller);
       restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
     },
     focusDecision() {
@@ -687,6 +711,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       lastSig = null;
       liveLoop = null;
       refRows = [];
+      tokenTable = null;
     },
   };
 }

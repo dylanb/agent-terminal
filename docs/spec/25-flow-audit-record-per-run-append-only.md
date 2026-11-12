@@ -16,13 +16,16 @@ Audit root: `~/.agent-terminal/audit/`, one directory per repo **basename**, one
 
 A header document, then one `---`-delimited document per event, so appending an event is **O(1)** — never a rewrite of prior content. "A reader never sees a partial event" rests on each event being one append **plus** the reader discarding a trailing partial document (possible only on a crash mid-append), not on atomic rename.
 
+Event `ts` is ISO 8601 UTC with milliseconds; the header's `started` is ISO 8601 UTC to the second. Readers keep events in file order, place windows by parsing `ts`, and never compare a `ts` with `started` as strings; a run is matched on `started`'s exact second-precision text (§25.6).
+
 ### 25.4 Lifecycle (D-audit-4)
 
-- A fresh `flow:start` opens a new file, closing any current run for that repo; advance/restart/undo append to it.
+- A fresh `flow:start` opens a new file, closing any current run for that repo; advance/restart/undo and a rollback after a failed start append to it.
 - Reaching `done` records `flow.completed` but **keeps the file open**, so going back after completing a flow continues the **same** record.
 - Terminate appends `flow.terminated` and finalizes the run, so the next Start always opens a new file.
 - The current-run pointer **survives an app restart**, so a restart mid-run does not orphan the record.
 - TODO events are recorded **only while a run is open** for the repo.
+- Each time a step's window closes (§27.16), the record gains a `step.tokens` entry with that step's counts so far, whether or not counts are shown, timed at the close it reports. The count is read after the close, so the entry may follow `flow.completed` or `flow.terminated`. Reconstruction (§25.6) takes each step's final counts from the entry for its last closed window, reads a step whose entry is missing as unavailable, and derives the run total from them; a record with no such entry has no counts.
 
 ### 25.5 Event vocabulary (D-audit-5)
 

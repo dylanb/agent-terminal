@@ -20,6 +20,8 @@ export interface AutoGateStep {
   kind: 'loop' | 'manual';
   loop?: AutoGateLoop;
   authority?: 'human' | 'auto';
+  /** Gives a step of any kind the `ticket` input a `groom-loop` step always carries. */
+  ticketInput?: boolean;
 }
 
 /** The review roster a shipped example loop declares, for the fake agent's round reports. */
@@ -30,9 +32,9 @@ export function loopRoster(loop: AutoGateLoop): string[] {
   return personas;
 }
 
-/** The one flow builder for the auto-gate e2e. A `groom-loop` step always carries a required `github-ticket`
- *  input named `ticket` (pre-supplied by `seedAutoGateRepo`'s `ticket` option); an omitted `authority` writes no
- *  `gate_authority` key. */
+/** The one flow builder for the auto-gate e2e. A `groom-loop` step, and a step marked `ticketInput`, carries a
+ *  required `github-ticket` input named `ticket` (pre-supplied by `seedAutoGateRepo`'s `ticket` option); an
+ *  omitted `authority` writes no `gate_authority` key. */
 export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): string {
   const lines = [`name: ${JSON.stringify(name)}`, 'steps:'];
   for (const s of steps) {
@@ -40,9 +42,9 @@ export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): str
     if (s.kind === 'loop') {
       if (s.loop === undefined) throw new Error(`autoGateFlowYaml: loop step "${s.id}" names no loop`);
       lines.push(`    loop: ${s.loop}`, '    loop_namespace: app');
-      if (s.loop === 'groom-loop') {
-        lines.push('    inputs:', '      - name: ticket', '        type: github-ticket', '        required: true');
-      }
+    }
+    if (s.loop === 'groom-loop' || s.ticketInput === true) {
+      lines.push('    inputs:', '      - name: ticket', '        type: github-ticket', '        required: true');
     }
     if (s.authority !== undefined) lines.push(`    gate_authority: ${s.authority}`);
   }

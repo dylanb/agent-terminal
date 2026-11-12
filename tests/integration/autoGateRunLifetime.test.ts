@@ -262,6 +262,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     endRun: composeLifecycleEndRun(gate),
     releaseLoopTurn: () => {},
     recordTerminate: (repoKey) => recorder.recordTerminate(repoKey),
+    recordRollback: (repoKey, before, after) => recorder.recordTransition(repoKey, 'rollback', before, after),
     clearTodos: () => {},
     clearSliceBrief: () => {},
     clearMonitor: () => {},

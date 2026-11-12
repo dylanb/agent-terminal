@@ -6,7 +6,7 @@ import { createAuditRecorder } from '../../src/main/auditRecorder';
 import { auditTimestamp, parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
-const D = new Date('2026-06-23T10:00:01.000Z');
+const D = new Date('2026-06-23T10:00:01.250Z');
 const NOT_STARTED = { status: 'not_started' as const, stepName: 'plan' };
 const IN_PROGRESS = { status: 'in_progress' as const, stepName: 'plan' };
 
@@ -25,7 +25,7 @@ describe('audit recorder — start opens the run file (§25.3/§25.4)', () => {
 
   const recorder = () => createAuditRecorder({ root, now: () => D, flowName: () => 'feature-dev' });
 
-  it('writes a header document and a flow.started event to <root>/<basename>/<flow>_<ts>.yaml', () => {
+  it('writes a header document, its start to the second, and a flow.started event to the millisecond to <root>/<basename>/<flow>_<ts>.yaml', () => {
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
 
     const file = auditFilePath(root, repo, 'feature-dev', D);
@@ -36,7 +36,7 @@ describe('audit recorder — start opens the run file (§25.3/§25.4)', () => {
       repoPath: repo,
       started: '2026-06-23T10:00:01Z',
     });
-    expect(parsed.events).toEqual([{ ts: '2026-06-23T10:00:01Z', type: 'flow.started', step: 'plan' }]);
+    expect(parsed.events).toEqual([{ ts: '2026-06-23T10:00:01.250Z', type: 'flow.started', step: 'plan' }]);
   });
 
   it('records nothing when the start did not take in_progress', () => {
@@ -92,6 +92,84 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
   const runFiles = () => readdirSync(auditRepoDir(root, repo)).filter((f) => f.endsWith('.yaml'));
   const eventsIn = (file: string) =>
     parseAuditStream(readFileSync(join(auditRepoDir(root, repo), file), 'utf8')).events.map((e) => e.type);
+
+  it('neither appends to a file the repo\'s pointer names outside the audit root nor opens a run for it', () => {
+    const outside = join(repo, 'elsewhere.yaml');
+    const header = 'kind: header\nflow: feature-dev\nrepoPath: /somewhere/else\nstarted: 2026-06-23T10:00:01Z\n';
+    writeFileSync(outside, `---\n${header}`);
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'audit-pointer.yaml'), `file: ${outside}\n`);
+
+    recorder().recordCommand(repo, 'flow', 'echo hi', 0);
+
+    expect({ outside: readFileSync(outside, 'utf8'), runDir: existsSync(auditRepoDir(root, repo)) }).toEqual({ outside: `---\n${header}`, runDir: false });
+  });
+
+  it('does not append to another repo\'s record that this repo\'s pointer names inside the audit root', () => {
+    const other = mkdtempSync(join(tmpdir(), 'audit-other-'));
+    try {
+      recorder().recordTransition(other, 'start', NOT_STARTED, IN_PROGRESS);
+      const otherFile = join(auditRepoDir(root, other), readdirSync(auditRepoDir(root, other)).find((f) => f.endsWith('.yaml'))!);
+      const before = readFileSync(otherFile, 'utf8');
+      mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(repo, '.agent-terminal', 'audit-pointer.yaml'), `file: ${otherFile}\n`);
+
+      const fresh = recorder();
+      fresh.recordCommand(repo, 'flow', 'echo hi', 0);
+      fresh.recordTransition(repo, 'advance', IN_PROGRESS, { status: 'in_progress', stepName: 'build' });
+
+      expect(readFileSync(otherFile, 'utf8')).toBe(before);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('logs a refused pointer once, without the raw control characters its text carries', () => {
+    const logged: unknown[][] = [];
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'audit-pointer.yaml'), 'file: "/x\\e]0;PWNED\\a\\n[fake] audit ok"\n');
+    const rec = createAuditRecorder({ root, now: () => clock, flowName: () => 'feature-dev', log: (...args) => void logged.push(args) });
+
+    for (let i = 0; i < 3; i++) rec.recordCommand(repo, 'flow', 'echo hi', 0);
+
+    expect({ entries: logged.length, raw: logged.some((args) => args.some((a) => typeof a === 'string' && /[\u0000-\u001f\u007f]/.test(a))) }).toEqual({ entries: 1, raw: false });
+  });
+
+  it('does not append to the record of a same-named repo elsewhere that this repo\'s pointer names', () => {
+    const parents = [mkdtempSync(join(tmpdir(), 'audit-twin-a-')), mkdtempSync(join(tmpdir(), 'audit-twin-b-'))];
+    const [first, second] = parents.map((p) => join(p, 'proj'));
+    try {
+      for (const dir of [first, second]) mkdirSync(dir);
+      recorder().recordTransition(first, 'start', NOT_STARTED, IN_PROGRESS);
+      const firstFile = join(auditRepoDir(root, first), readdirSync(auditRepoDir(root, first)).find((f) => f.endsWith('.yaml'))!);
+      const before = readFileSync(firstFile, 'utf8');
+      mkdirSync(join(second, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(second, '.agent-terminal', 'audit-pointer.yaml'), `file: ${firstFile}\n`);
+
+      const fresh = recorder();
+      fresh.recordCommand(second, 'flow', 'echo hi', 0);
+      fresh.recordTransition(second, 'advance', IN_PROGRESS, { status: 'in_progress', stepName: 'build' });
+
+      expect(readFileSync(firstFile, 'utf8')).toBe(before);
+    } finally {
+      for (const p of parents) rmSync(p, { recursive: true, force: true });
+    }
+  });
+
+  it('after a restart, keeps recording a run started through a link to the repo when the repo is reached by its real path', () => {
+    const linkParent = mkdtempSync(join(tmpdir(), 'audit-link-'));
+    const viaLink = join(linkParent, basename(repo));
+    try {
+      symlinkSync(repo, viaLink);
+      recorder().recordTransition(viaLink, 'start', NOT_STARTED, IN_PROGRESS);
+
+      recorder().recordTransition(repo, 'advance', IN_PROGRESS, { status: 'in_progress', stepName: 'build' });
+
+      expect(eventsIn(runFiles()[0])).toEqual(['flow.started', 'step.entered']);
+    } finally {
+      rmSync(linkParent, { recursive: true, force: true });
+    }
+  });
 
   it('appends advance/done events to the open run file', () => {
     const rec = recorder();
@@ -281,7 +359,7 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     const cmd = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events.find(
       (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
     );
-    expect(cmd).toEqual({ ts: '2026-06-23T10:00:01Z', type: 'command', source: 'bootstrap', cmd: 'agent-loop pickup 176', exit: 127 });
+    expect(cmd).toEqual({ ts: '2026-06-23T10:00:01.250Z', type: 'command', source: 'bootstrap', cmd: 'agent-loop pickup 176', exit: 127 });
   });
 
   it('records nothing for a command when no run is open', () => {

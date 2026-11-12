@@ -12,6 +12,7 @@
 ### 22.3 Status strip
 
 - A compact read-out in the rail shows step position (n/total and name), gate state and loop progress. The full step timeline and the gate controls expand from it, one click away.
+- With token counts shown (§27.16), the rail's step list carries each step's total, and the run total sits under it.
 
 #### 22.3.1 The status bar
 

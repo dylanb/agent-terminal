@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentKind } from '../../src/main/agentKind';
+import type { AgentKind } from '../../src/shared/agentKind';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { createAppLoopEngineHarness } from '../helpers/appLoopEngineHarness';
 

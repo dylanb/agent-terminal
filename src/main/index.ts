@@ -89,7 +89,7 @@ import { createHeldRunRecovery, realHeldRunRecoveryDeps } from './heldRunRecover
 import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
 import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
-import { createAuditRecorder } from './auditRecorder';
+import { createAuditRecorder, type AuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
@@ -126,9 +126,12 @@ import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
-import { hostedAgentKind } from './agentKind';
+import { hostedAgentKind, sessionAgent } from './agentKind';
+import { createAgentHosting } from './agentHosting';
+import { readCurrentAuditRun } from './auditRun';
 import { foregroundCommand } from './foregroundCommand';
-import { userConfigAgentsDir } from './userConfig';
+import { userConfigAgentsDir, userConfigRoot } from './userConfig';
+import { createTokenMeter, TOKEN_REFRESH_MS } from './tokenMeter';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
@@ -329,6 +332,15 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
+  const foregroundProgram = (): string => {
+    const foreground = foregroundCommand(ptyProcess.pid);
+    if (foreground !== null) return foreground;
+    try {
+      return ptyProcess.process;
+    } catch {
+      return resolveShellPath(process.env);
+    }
+  };
   // §27.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
@@ -499,17 +511,7 @@ async function createWindow(): Promise<void> {
       const home = codexHome();
       return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
     },
-    hostedAgentKind: () => {
-      let foreground = foregroundCommand(ptyProcess.pid);
-      if (foreground === null) {
-        try {
-          foreground = ptyProcess.process;
-        } catch {
-          foreground = resolveShellPath(process.env);
-        }
-      }
-      return hostedAgentKind(tracker.summaries(), foreground);
-    },
+    hostedAgentKind: () => hostedAgentKind(tracker.summaries(), foregroundProgram()),
     pickupBranch: (repoDir) =>
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),
@@ -743,6 +745,20 @@ async function createWindow(): Promise<void> {
       provideAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor, (n) => observedResolveDef(repoKey, n)),
   });
 
+  const tokenMeter = createTokenMeter({
+    auditRoot: auditRootDir(flowGlobalDir),
+    logRoots: { claudeConfigRoot: userConfigRoot(), codexHome: codexHome() },
+    schedule: {
+      start(refresh) {
+        const timer = setInterval(() => void refresh(), TOKEN_REFRESH_MS);
+        return () => clearInterval(timer);
+      },
+    },
+    showing: uiSettings.get().showTokenCounts,
+    now: () => Date.now(),
+    changed: pushFlowChanged,
+  });
+  win.once('closed', () => tokenMeter.dispose());
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
   // <app-state home>/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. The audit tree hangs off the SAME
   // app-state home as the global flow.yaml (flowGlobalDir, APP_HOME_DIR-overridable), never a second
@@ -754,8 +770,23 @@ async function createWindow(): Promise<void> {
       const load = resolveActiveDefinition(repoKey);
       return load.ok ? load.definition.name : null;
     },
+    countsAtClose: (run, step, closedAt) => tokenMeter.countsAtClose(run, step, closedAt),
   });
-  const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
+  const agentHosting = createAgentHosting({
+    terminalRepo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot),
+    currentRun: (repoKey) => readCurrentAuditRun(auditRootDir(flowGlobalDir), repoKey),
+    hostedAgent: () => sessionAgent(tracker.summaries(), foregroundProgram()),
+    record: (repoKey, agent) => audit.recordHostedAgent(repoKey, agent),
+  });
+  // Deferred past the OSC parse and the transition; the sample still blocks the main process while `ps` runs, until the
+  // run has recorded every agent.
+  const sampleHostedAgent = (): void => void setImmediate(() => agentHosting.sample());
+  tracker.onChange(sampleHostedAgent);
+  const recordTransitionAndSample: AuditRecorder['recordTransition'] = (...args) => {
+    audit.recordTransition(...args);
+    sampleHostedAgent();
+  };
+  const recordFlowTransition = composeRecordFlowTransition({ recordTransition: recordTransitionAndSample }, autoGate);
 
   const trustedAppBootstraps = createTrustedPickups({
     currentRun: inProgressRunIdentity,
@@ -967,7 +998,7 @@ async function createWindow(): Promise<void> {
     // §25.5: every view computation observes the loop mirror, so a §27 loop advance is recorded whether it
     // was fired from the strip or reconstructed on a state re-pull.
     audit.recordLoop(repoKey, view.loop ?? null);
-    return view;
+    return tokenMeter.withTokens(repoKey, view);
   };
   // todoTemplate:instantiate (§6/§4.1): add a named template's items to the repo's todo list; a
   // missing flow/template is a no-op returning the unchanged list.
@@ -1020,6 +1051,7 @@ async function createWindow(): Promise<void> {
     },
     endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    recordRollback: (repoKey, before, after) => recordTransitionAndSample(repoKey, 'rollback', before, after),
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
@@ -1049,7 +1081,7 @@ async function createWindow(): Promise<void> {
   // mutation inside the bootstrap-attribution window (inTransition), record, then re-derive. Shared by
   // the start/restart/undo handlers, which differ only by kind and mutation; advance/provideInput keep
   // their own bodies because their readiness/notice handling diverges.
-  const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
+  const recordedTransition = (repoKey: string, kind: Exclude<TransitionKind, 'rollback'>, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
     const after = inTransition(repoKey, appLoopEntryFor(kind), mutate);
     recordFlowTransition(repoKey, kind, before, after);
@@ -1353,7 +1385,10 @@ async function createWindow(): Promise<void> {
       },
       // Global UI prefs (§16.6) — no sessionId; persisted to userData.
       [CH.uiSetSettings]: (_e, m) => {
-        if (isValidSetSettings(m)) uiSettings.set(m.settings);
+        if (!isValidSetSettings(m)) return;
+        const wasShowing = uiSettings.get().showTokenCounts;
+        const showing = uiSettings.set(m.settings).showTokenCounts;
+        if (showing !== wasShowing) void tokenMeter.setShowing(showing);
       },
     },
     {

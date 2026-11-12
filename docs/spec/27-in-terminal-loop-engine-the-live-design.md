@@ -267,3 +267,38 @@ flowchart LR
 ### 27.15 Test seam
 
 e2e drives the real PTY and shell with a **deterministic, per-turn-scriptable fake agent on `PATH`** in place of the coding agent: on an injected prompt it writes the expected artifact and the done-file and goes quiet, so every engine path (verdicts, rosters, failed reviewers, retry-then-`error`, cost fixtures) is reachable without an LLM.
+
+### 27.16 Per-step token counts
+
+```mermaid
+flowchart LR
+  accTitle: Where per-step token counts come from
+  accDescr: The token meter reads Claude Code and Codex logs and the run's audit record, and feeds the rail and the Tokens by step table. The audit recorder asks the meter for a step's counts at each window close and appends them to the record. agentHosting identifies the hosted agent from the terminal's command spans and foreground program, checks the record for an open step window and the agents already named, and has the recorder name each new agent in the record once.
+  CLAUDE["Claude Code logs<br/>config dir projects/worktree"] --> SWEEP["sweepAgentUsage"]
+  CODEX["Codex rollouts<br/>CODEX_HOME/sessions"] --> SWEEP
+  SWEEP --> METER["tokenMeter"]
+  RECORD["§25 run record"] -->|"step windows, agents that ran"| METER
+  METER -->|"withTokens"| VIEW["flow:state view"]
+  VIEW --> RAIL["rail stations and run total"]
+  VIEW --> TABLE["Tokens by step table"]
+  AUDIT["auditRecorder"] -->|"countsAtClose at a window close"| METER
+  AUDIT -->|"step.tokens, agent.hosted"| RECORD
+  CMD["sessionAgent<br/>command spans and foreground program"] -->|"hosted agent"| HOST["agentHosting"]
+  RECORD -->|"open window, agents already named"| HOST
+  HOST --> AUDIT
+```
+
+- **A step window** is the time a step is the flow's current step. It opens when the flow enters the step and closes when the flow leaves it (an Advance or gate decision, a `repeat` jump, a rollback after a failed start) or stops having a current step (completion, Terminate, a first-step rollback). It follows the flow's state, not the app: a step that is current while the app is closed keeps its window open, so spend logged meanwhile counts to it. Windows come from the run's §25 record, whose event times keep milliseconds.
+- **What a step counts.** Every token an agent that ran in the run billed for the worktree inside the step's windows, by §27.11's counting rules: the work turn, each reviewer subagent, the consolidator, the operator's own conversation and every retry, each billed call once. A call belongs to the window open at its time (open ≤ call < close). A step entered again adds its new spend to its earlier count. The run total sums every entered step, per kind. Spend while the flow has no current step counts nowhere.
+- **Agents that ran.** An agent ran in the run when the terminal hosted it, recognisably as Claude Code or Codex, while a step window was open. A command that only manages an agent and writes no session log, such as `codex login`, `codex --version` or `claude mcp list`, does not count. The run's §25 record names each one once (`agent.hosted`), so the set survives a relaunch. Only their logs are read: Claude Code's from the worktree's own folder under its config dir's `projects/`, recursively, and Codex's from the rollout files under `$CODEX_HOME/sessions/` whose session names the worktree as its working directory.
+- **4 kinds:** cache read, cache write, uncached input and output. Every billed token falls in exactly 1. Codex's input figure includes its cache reads and cache writes, so uncached input is the rest, and output includes reasoning.
+- **4 states** a count can carry besides its number:
+  - **Not reported:** none of the spend behind the count logged this kind, as Codex before 0.145.0 logs no cache-write figure. It is never shown as 0.
+  - **Partly reported:** only some of the agents behind the count logged it; the reported sum shows, marked. A rail total is marked partly reported whenever any kind behind it is not or partly reported.
+  - **Unavailable:** the count cannot be known (below). It is never shown as 0.
+  - **Incomplete:** a run total when some entered steps are unavailable and others can be counted. It sums the countable steps and can also be partly reported, or read not reported. When no entered step can be counted, the run total reads unavailable.
+- **Per-step "unavailable".** A log file that exists but cannot be read makes unavailable the entered steps with a window that overlaps the file's span, from its creation time to its last-modified time. Both ends are included, and an open window ends now. A file the app cannot read, such as one in Codex's shared folder whose working directory it cannot see, counts as this worktree's.
+- **Whole-run "unavailable".** Every entered step and the run total read unavailable when a log file cannot be read and neither can its times (no creation time, or a link to nothing); when a folder that could hold this worktree's logs for an agent that ran cannot be listed (for Claude Code the worktree's folder and every folder in it, for Codex its sessions folder and every folder in it; another project's folder never counts); when the log folder of an agent that ran cannot be found; when no supported agent has logs for the worktree at all; when an agent that ran has no log file for the worktree last modified at or after the run's start; or when the run has no recorded start. The no-logs-since-start rule catches a Codex started in a subdirectory or under a `CODEX_HOME` the app does not see, whose spend would otherwise read as a silent 0. A step not yet entered keeps its dash. None of these stops, pauses or errors the flow.
+- **2 differences from §27.11.** A run with no recorded start reads unavailable instead of sweeping unbounded, because a step's window cannot be placed without it. The run total holds only spend inside step windows, so spend while a completed flow waits for Undo, Restart or Terminate is in no count, where §27.11 counts everything from Start to Terminate.
+- **The setting.** "Show token counts" in Settings (§22.1) is app-wide, off by default and kept in `ui-settings.json` (§16.6). It decides only whether counts show; the §25 record keeps them either way (§25.4). Counts are display only and never gate, pause or throttle a loop. While it is on, the counts refresh every 2 s; each refresh reads only what a log gained since the last one, and a complete flow's logs are read once more after it completes and then no longer.
+- **Where counts show.** On the rail, each flow step's station shows its total, abbreviated (`12.3k`, `4.5M`), a step not entered a dash and an entered step with no spend 0 (until the app first reads a repo's logs, every step and the run total show a dash and no step is marked counting), and the run total sits under the step list. The docked loop panel, when open under its usual rules, shows a "Tokens by step" table with a row per step, a column per kind and a run total row, in exact counts. The current step is marked counting on both, whatever its loop status, and its counts rise while its window is open. The status bar (§22.3.1) shows no count. Each marker is visible and is part of the count's accessible text.

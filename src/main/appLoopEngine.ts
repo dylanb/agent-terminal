@@ -42,7 +42,7 @@ import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterru
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
-import type { AgentKind } from './agentKind';
+import type { AgentKind } from '../shared/agentKind';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);

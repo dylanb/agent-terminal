@@ -5,6 +5,7 @@ import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
 import type { LoopActivity } from '../loopActivity';
 import type { HeldRunView } from '../runHold';
 import type { RunIdentity } from '../runIdentity';
+import type { RunTokens, StepTokens } from '../tokenCounts';
 import type { AgentState } from './monitor';
 import type { ChannelSpecs, SessionId } from './session';
 
@@ -322,6 +323,18 @@ export interface FlowStateView {
   runHold?: HeldRunView;
   /** §27.13 — present while the run is held for the operator to confirm its ticket and pull request. */
   pickupConfirm?: PickupConfirmView;
+  /** Present on every non-error view while the "Show token counts" setting is on. */
+  tokens?: FlowTokensView;
+}
+
+export interface FlowTokensView {
+  /** Aligned with `FlowStateView.steps`; `null` is a dash: a step not entered in this run, or any step before the
+   *  repo's logs are first read. */
+  steps: (StepTokens | null)[];
+  /** The step whose window is open; `null` before the repo's logs are first read. */
+  counting: number | null;
+  /** `null`, a dash, while no step is entered or before the repo's logs are first read. */
+  run: RunTokens | null;
 }
 
 
