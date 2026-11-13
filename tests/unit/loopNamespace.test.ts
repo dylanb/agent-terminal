@@ -61,21 +61,21 @@ afterEach(() => {
 describe('loadFlowDefinition — def-namespace binding on a loop step (AC 4)', () => {
   it('defaults an absent namespace to the surviving engine', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: impl-loop\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.definition.steps[0].loopNamespace).toBe(APP_LOOP_NAMESPACE);
   });
 
   it('parses an explicit app namespace', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) expect(load.definition.steps[0].loopNamespace).toBe('app');
   });
 
   it('LOADS a legacy-marked step rather than rejecting it whole (AC 4 tolerance)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: legacy\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(true);
     if (load.ok) {
       const ns = load.definition.steps[0].loopNamespace;
@@ -86,7 +86,7 @@ describe('loadFlowDefinition — def-namespace binding on a loop step (AC 4)', (
 
   it('rejects the WHOLE file for an unrecognized namespace, naming the real cause', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: mystery\n');
-    const load = loadFlowDefinition(dir);
+    const load = loadFlowDefinition(dir, null);
     expect(load.ok).toBe(false);
     if (!load.ok) expect(load.error.toLowerCase()).toContain('namespace');
   });
@@ -96,16 +96,16 @@ describe('loadFlowDefinition — def-namespace binding on a loop step (AC 4)', (
   // legacy-marked step with the same unsafe name LOADS and fails per-step at resolution (AC 4's floor).
   it('rejects the whole file for an unsafe loop name on an EXPLICITLY-app step', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: plan_loop\n    loop_namespace: app\n');
-    expect(loadFlowDefinition(dir).ok).toBe(false);
+    expect(loadFlowDefinition(dir, null).ok).toBe(false);
   });
 
   it('LOADS a namespace-less step whose loop name is not a safe segment (per-step failure, not whole-file)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: plan_loop\n');
-    expect(loadFlowDefinition(dir).ok).toBe(true);
+    expect(loadFlowDefinition(dir, null).ok).toBe(true);
   });
 
   it('LOADS a legacy-marked step whose loop name is not a safe segment (per-step failure, not whole-file)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: My_Loop\n    loop_namespace: legacy\n');
-    expect(loadFlowDefinition(dir).ok).toBe(true);
+    expect(loadFlowDefinition(dir, null).ok).toBe(true);
   });
 });

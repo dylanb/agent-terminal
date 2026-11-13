@@ -320,7 +320,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     const report = join(repo, '.agent-terminal', 'loop', 'reports', '1.md');
     mkdirSync(join(repo, '.agent-terminal', 'loop', 'reports'), { recursive: true });
     writeFileSync(report, 'operator-private report\n');
-    runGit(repo, ['add', report]);
+    runGit(repo, ['add', '-f', report]);
     const port = createRealAppBootstrapGit(repo);
 
     expect(await port.isCleanTree()).toBe(false);

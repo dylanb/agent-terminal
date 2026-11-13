@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 const launchFor = (execPath: string, env: NodeJS.ProcessEnv) =>
-  resolveLaunchInvocation(execPath, false, undefined, work, appImageFactsFromEnv(env));
+  resolveLaunchInvocation(execPath, false, undefined, work, work, appImageFactsFromEnv(env));
 
 describe('appImageFactsFromEnv (#306)', () => {
   it('lets the resolver see the running binary inside a mount whose APPDIR reaches it through a symlink', () => {
@@ -40,7 +40,7 @@ describe('appImageFactsFromEnv (#306)', () => {
   it('keeps a relative APPDIR relative, so the resolver still ignores it even when it would resolve around the binary', () => {
     const binary = resolve('tests', 'agent-terminal-app');
     const env = { APPIMAGE: '/home/u/agent-terminal.AppImage', APPDIR: 'tests' };
-    expect(launchFor(binary, env)).toEqual({ kind: 'binary', execPath: binary, appArgs: [] });
+    expect(launchFor(binary, env)).toEqual({ kind: 'packaged', execPath: binary });
   });
 
   it('passes an APPDIR that does not exist through as given', () => {

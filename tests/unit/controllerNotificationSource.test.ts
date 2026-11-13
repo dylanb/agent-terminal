@@ -6,7 +6,7 @@ const repo = '/notification-source';
 const halted = { deciding: false, hung: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] };
 const deciding = { deciding: true, hung: false, haltReasons: [] };
 const view = (humanNeeded: boolean, status = 'complete'): FlowStateView => ({
-  stepName: 'red', runStarted: 'started', steps: ['red'], position: 1, total: 1, status: 'in_progress',
+  stepName: 'red', runStarted: 'started', steps: ['red'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
   loop: { status, iteration: 1, humanNeeded, pr: null, branch: null, ready: false, autoGate: humanNeeded ? halted : deciding },
 });
 

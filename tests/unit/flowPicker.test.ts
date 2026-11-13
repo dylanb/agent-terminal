@@ -25,6 +25,8 @@ import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../s
 const neverStarted = (steps: string[]): FlowStateView => ({
   stepName: steps[0] ?? '',
   steps,
+  stepRuns: steps.map(() => 'runs' as const),
+  decisions: {},
   position: 1,
   total: steps.length,
   status: 'not_started',
@@ -1419,6 +1421,8 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
 const viewOf = (over: Partial<FlowStateView> & Pick<FlowStateView, 'status' | 'runStarted'>): FlowStateView => ({
   stepName: 's1',
   steps: ['s1', 's2'],
+  stepRuns: ['runs', 'runs'],
+  decisions: {},
   position: 1,
   total: 2,
   ...over,
@@ -1893,7 +1897,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     const shown = r.host.textContent ?? '';
     expect(shown).toMatch(/missing/i);
     expect(shown).not.toMatch(/unreadable/i);
-    expect(shown).toContain('review-step');
+    expect(shown).toContain('Review step');
     expect(shown).toMatch(/in progress/i);
     r.picker.dispose();
   });
@@ -1931,7 +1935,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     const shown = r.host.textContent ?? '';
     expect(shown).toMatch(/unreadable/i);
     expect(shown).not.toMatch(/missing/i);
-    expect(shown).toContain('s3');
+    expect(shown).toContain('S3');
     expect(shown).toMatch(/done/i);
     r.picker.dispose();
   });

@@ -187,7 +187,7 @@ describe('runDisposition lifecycle over the real FlowManager (§18.7.2/§18.7.4)
     const wt = fx.makeWorktree('a2-disp-start-rollback');
     const globalDir = fx.makeWorktree('a2-disp-start-rollback-global');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
-    const load = loadFlowDefinition(wt);
+    const load = loadFlowDefinition(wt, null);
     let calls = 0;
     const mgr = createFlowManager({
       globalDir,

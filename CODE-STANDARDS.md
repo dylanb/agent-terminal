@@ -144,6 +144,13 @@ redness gets pre-explained as "the environment" and stops being a signal, which 
 behind a red bar. A failing, unrunnable or broken suite is never normalized or deferred to CI; only when
 the Podman harness itself cannot run is it grounds to stop and escalate.
 
+In an agent-loop flow, *done* is the ticket's end (spec §28.8 item 4). A build step (infra, RED, GREEN and
+refactor, and `simple-dev-v1`'s dev step) shows a run of the unit, integration and `browser` suites plus the
+e2e specs for its slice or increment, if it has one, and those that cover the files it changed (a spec that
+uses a changed harness, fixture or fake covers it), all passing except the new or edited tests a RED expects
+to fail by assertion. The full Podman e2e runs at the integration-slice gate and at finalization, and the test
+proof runs everything before a PR is ready or merges.
+
 ## Untrusted data crosses a boundary as data, never as syntax
 
 Anything crossing a process, shell, or OS boundary into a place the far side interprets is carried as a
@@ -303,7 +310,9 @@ and leaves a pre-existing one **byte-for-byte unchanged**.
 
 This generalizes: production never **silently** rewrites a user's tooling config — `.git/`, editor
 configs, shell rc files — to tidy its own state. The exemption is an **explicit, user-invoked install
-action** (§23.5; the §18.1 install-examples action and its destinations), and it is an exemption from
+action** (§23.5; the §18.1 install-examples action and its destinations) or a run's own reviewer install
+(§27.4: one app-owned line, `/.claude/agents/*--*.md`, in the repository's `info/exclude`, and the reviewer
+files it hides, written when the operator starts or restarts a run, or a reviewed turn is checked), and it is an exemption from
 *silence*, not from care: it writes only where the user asked, asks before replacing a file it did not
 create, leaves a declined file byte-for-byte unchanged, and never deletes. Writing into a directory another
 tool owns — `~/.claude/skills`, `~/.claude/commands` — is permitted on exactly those terms and no others.

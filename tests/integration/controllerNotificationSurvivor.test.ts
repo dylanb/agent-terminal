@@ -14,7 +14,7 @@ it('does not reconstruct an ended survivor request when overlap clears through t
   const registry = await startControllerTransport(home);
   const source = createLoopNotifier();
   const view = (humanNeeded: boolean): FlowStateView => ({
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status: 'complete', iteration: 1, humanNeeded, pr: null, branch: null, ready: false },
   });
   const identity = { launchDirectory: '/work', repositoryRoot: '/work' };
@@ -45,7 +45,7 @@ it('current-condition changes preserve legacy qualification instead of creating 
   const registry = await startControllerTransport(home);
   const source = createLoopNotifier();
   const view = (humanNeeded: boolean): FlowStateView => ({
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status: 'complete', iteration: 1, humanNeeded, pr: null, branch: null, ready: false },
   });
   let publish: ((work: ReturnType<typeof workStatus>) => void) | undefined;

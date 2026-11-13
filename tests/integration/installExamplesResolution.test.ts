@@ -210,9 +210,9 @@ describe('the install is global — a repo-local override never redirects where 
   });
 });
 
-// §27.8 — the shipped flow's loops land in its own folder, so a flow that binds the same loop names from the
+// §27.8 — feature-dev-v3's loops land in its own folder, so a flow that binds the same loop names from the
 // shared folder (and an older app, which reads only that) keeps the definitions it had.
-describe('the install seeds the shipped flow’s own loop folder, never the shared one', () => {
+describe('the install seeds feature-dev-v3’s own loop folder, never the shared one', () => {
   const operatorRoot = (): string => userConfigLoopsV2Dir(configRoot) as string;
   const sharedDef = (name: string): string => path.join(operatorRoot(), name, `${name}.yaml`);
   const OLD_DEF = 'name: an-older-definition\n';
@@ -247,7 +247,7 @@ describe('the install seeds the shipped flow’s own loop folder, never the shar
   });
 });
 
-describe('the install seeds every shipped flow’s loops into that flow’s own folder', () => {
+describe('the install seeds a loop only one shipped flow runs into that flow’s own folder', () => {
   it('resolves plan-only’s loops from its own operator folder after the install', () => {
     applyInstallExamples(dirs, []);
     const operator = userConfigLoopsV2Dir(configRoot) as string;

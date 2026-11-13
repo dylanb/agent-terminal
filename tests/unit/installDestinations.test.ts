@@ -10,7 +10,9 @@ import {
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
   resolveExampleCodexSkillsDir,
+  resolveExampleStepsDir,
 } from '../../src/main/exampleAssets';
+import { stepLibraryDir } from '../../src/main/stepLibrary';
 
 // The installer's destinations are pinned to the readers' own resolvers (CLAUDE.md writer↔reader rule).
 
@@ -42,6 +44,7 @@ describe('exampleInstallDirs — bundle sources come from the runtime resolvers'
     expect(bundleOf(dirs, 'appLoops')).toBe(resolveExampleLoopsV2Dir(loc));
     expect(bundleOf(dirs, 'codexLoops')).toBe(resolveExampleLoopsV2Dir(loc));
     expect(bundleOf(dirs, 'codexSkills')).toBe(resolveExampleCodexSkillsDir(loc));
+    expect(bundleOf(dirs, 'stepLibrary')).toBe(resolveExampleStepsDir(loc));
   });
 });
 
@@ -53,6 +56,11 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
     expect(targetOf(exampleInstallDirs(loc, ROOTS), 'flow')).toBe(flowHomeDir(FLOW_HOME));
   });
 
+  it('targets the global step library for the stepLibrary destination (§18.2)', () => {
+    expect(targetOf(exampleInstallDirs(loc, ROOTS), 'stepLibrary')).toBe(stepLibraryDir(FLOW_HOME));
+    expect(exampleInstallDirs(loc, { ...ROOTS, flowGlobalDir: 'relative' }).find((d) => d.id === 'stepLibrary')!.targetDir).toBeNull();
+  });
+
   it('targets the app-state flow catalog for the flowCatalog destination (§18.7.1)', () => {
     // The one destination this PR adds: derived from the READER's own resolver (flowCatalogDir), never a
     // parallel literal, so the seeded catalog and the location A2 reads back cannot drift.
@@ -60,8 +68,6 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
   });
 
   it('targets the user-config app loop definitions and commands directories (§24.2.3)', () => {
-    // The bundle holds only per-flow folders (§27.8), so seeding its tree here lands each flow's loops in
-    // that flow's own folder.
     const dirs = exampleInstallDirs(loc, ROOTS);
     expect(targetOf(dirs, 'appLoops')).toBe(userConfigLoopsV2Dir('/cfg'));
     expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));

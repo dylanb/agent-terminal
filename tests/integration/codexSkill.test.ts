@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
+import { listLoopFolders } from '../../src/main/loopFolders';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 
 // §18.1 — the bundled Codex skill is a writer of names and paths other installed files must match: every
@@ -37,18 +38,15 @@ describe('the bundled Codex skill', () => {
   });
 
   it('finds every file a bundled loop definition names', () => {
-    for (const flow of readdirSync(BUNDLE_LOOPS)) {
-      for (const loop of readdirSync(path.join(BUNDLE_LOOPS, flow))) {
-        const dir = path.join(BUNDLE_LOOPS, flow, loop);
-        const def = parseYaml(readFileSync(path.join(dir, `${loop}.yaml`), 'utf8')) as {
-          work: { recipe: string };
-          consolidator?: { recipe: string };
-          brief?: string;
-          reviewers: { charter: string }[];
-        };
-        const named = [def.work.recipe, ...(def.consolidator !== undefined ? [def.consolidator.recipe] : []), ...(def.brief !== undefined ? [def.brief] : []), ...def.reviewers.map((r) => r.charter)];
-        for (const rel of named) expect(existsSync(path.join(dir, rel)), `${loop}: ${rel}`).toBe(true);
-      }
+    for (const { name: loop, dir } of listLoopFolders(BUNDLE_LOOPS)) {
+      const def = parseYaml(readFileSync(path.join(dir, `${loop}.yaml`), 'utf8')) as {
+        work: { recipe: string };
+        consolidator?: { recipe: string };
+        brief?: string;
+        reviewers: { charter: string }[];
+      };
+      const named = [def.work.recipe, ...(def.consolidator !== undefined ? [def.consolidator.recipe] : []), ...(def.brief !== undefined ? [def.brief] : []), ...def.reviewers.map((r) => r.charter)];
+      for (const rel of named) expect(existsSync(path.join(dir, rel)), `${loop}: ${rel}`).toBe(true);
     }
   });
 });

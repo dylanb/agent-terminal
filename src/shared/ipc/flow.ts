@@ -1,11 +1,13 @@
 import type { AppBootstrapConflictTarget, TicketRef } from '../appBootstrap';
 import type { ConsolidatorVerdict } from '../consolidatorOutput';
+import type { FlowDecision, StepRun } from '../flowBranch';
 import type { StartednessSignal } from '../flowStarted';
 import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
 import type { LoopActivity } from '../loopActivity';
 import type { HeldRunView } from '../runHold';
 import type { RunIdentity } from '../runIdentity';
 import type { WaitingValue } from '../waiting';
+import type { RunTokens, StepTokens } from '../tokenCounts';
 import type { ChannelSpecs, SessionId } from './session';
 
 export const FLOW_CHANNELS = {
@@ -275,9 +277,17 @@ export interface FlowInputSpec {
  *  view when entering a step whose `bootstrap` needs an input that isn't resolved yet. `inputs` are
  *  the fields to collect; `bootstrap` names the command they feed (e.g. `agent-loop pickup`) for the
  *  modal's helper text. The renderer opens its modal, collects values, and calls `flow:provideInput`. */
+export interface FlowInputRefusal {
+  input: string;
+  notice: string;
+  values: Record<string, string>;
+}
+
 export interface FlowPrompt {
   inputs: FlowInputSpec[];
   bootstrap: string;
+  /** Present when main refused the last submission: `notice` explains why `input` was refused, and `values` are what was typed. */
+  refusal?: FlowInputRefusal;
 }
 
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
@@ -286,9 +296,13 @@ export interface FlowPrompt {
  *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
   stepName: string;
-  /** Every step's name, in flow order (§24.2.3 T1) — the §22.3 rail renders one station per entry;
-   *  `stepName` is `steps[position - 1]`. Empty on an `error` view (no steps to show). */
+  /** Every step's name, in flow order (§24.2.3 T1), skipped and undecided ones included; the §22.3 rail
+   *  shows the entries `stepRuns` lets it. `stepName` is `steps[position - 1]`. Empty on an `error` view. */
   steps: string[];
+  /** Whether each entry of `steps` runs on the path decided so far; `position` still indexes `steps`. */
+  stepRuns: StepRun[];
+  /** Each deciding step's latest decision, keyed by step id. */
+  decisions: Record<string, FlowDecision>;
   position: number;
   total: number;
   status: FlowStatus;
@@ -332,6 +346,18 @@ export interface FlowStateView {
   runHold?: HeldRunView;
   /** §27.13 — present while the run is held for the operator to confirm its ticket and pull request. */
   pickupConfirm?: PickupConfirmView;
+  /** Present on every non-error view while the "Show token counts" setting is on. */
+  tokens?: FlowTokensView;
+}
+
+export interface FlowTokensView {
+  /** Aligned with `FlowStateView.steps`; `null` is a dash: a step not entered in this run, or any step before the
+   *  repo's logs are first read. */
+  steps: (StepTokens | null)[];
+  /** The step whose window is open; `null` before the repo's logs are first read. */
+  counting: number | null;
+  /** `null`, a dash, while no step is entered or before the repo's logs are first read. */
+  run: RunTokens | null;
 }
 
 

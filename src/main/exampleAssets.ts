@@ -32,6 +32,11 @@ export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'loops-v2');
 }
 
+/** §18.2. The bundled step library the `stepLibrary` install destination seeds. */
+export function resolveExampleStepsDir(loc: BundleLocation): string {
+  return path.join(bundleRoot(loc), 'example', 'steps');
+}
+
 /** §18.1. */
 export function resolveExampleCodexSkillsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'codex-skills');

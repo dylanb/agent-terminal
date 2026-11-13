@@ -124,6 +124,9 @@ async function approve(run: Adopted, options: ApproveOptions = {}): Promise<Outc
     reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => ({ undo: () => true }),
+    auditDecision: () => undefined,
   };
   await runAppGateDecision(run.w.repo, STEP, TURN_KEY, 'approve', deps);
   return outcome;

@@ -1175,6 +1175,8 @@ describe('Run setup loop over the real flow strip (AC18)', () => {
       stepName: 'setup-entry',
       runStarted: 'started',
       steps: ['setup-entry'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',

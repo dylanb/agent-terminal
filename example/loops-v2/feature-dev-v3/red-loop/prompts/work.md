@@ -11,10 +11,13 @@ appends the result-file instruction; classify the run and write the result it as
 ## Review until clean
 
 1. Do the work above.
-2. Run the repository's tests and confirm the slice's new tests fail by assertion, or all pass for a
-   verification-only slice, as the result file records, while every other test passes. Record the commands and
-   their results under `### Test evidence` before any review, so every reviewer reads results that match the
-   change.
+2. Run the repository's tests, except the full end-to-end suite: of the end-to-end tests, run only those this step
+   added or changed and those that cover the files it changed, counting a test that uses a changed harness, fixture or
+   fake as covering it. The full end-to-end suite runs at the integration-slice step and at finalization. Confirm the
+   slice's new tests fail by assertion, or all pass for a verification-only slice, as the result file records, while
+   every other test that ran passes. Record the commands and their results, and which end-to-end tests you chose for
+   which changed files (or why none covers a change), under `### Test evidence` before any review, so every reviewer
+   reads results that match the change.
 3. Review it with the reviewers below, as the review rules in these instructions say.
 4. Fix or dismiss every finding, and log each in the report. When a fix changes code or tests, run the tests again and
    update `### Test evidence` before the next pass.

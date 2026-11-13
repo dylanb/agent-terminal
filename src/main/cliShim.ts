@@ -7,12 +7,21 @@ export interface AppImageFacts {
   mountDir: string;
 }
 
-export type LaunchInvocation = BinaryInvocation | { kind: 'appImage'; appImage: string };
+export type LaunchInvocation =
+  | { kind: 'packaged'; execPath: string }
+  | {
+      kind: 'development';
+      execPath: string;
+      /** Under electron-vite dev this is the app root, not the main bundle, so the controller entry is
+       *  never derived from it. */
+      startPath: string;
+      mainDir: string;
+    }
+  | { kind: 'appImage'; appImage: string };
 
-export interface BinaryInvocation {
-  kind: 'binary';
+interface ShimCommand {
   execPath: string;
-  appArgs: string[];
+  args: string[];
 }
 
 export const CLI_COMMAND_NAME = 'agent-terminal';
@@ -26,15 +35,14 @@ export const TERMINAL_APPIMAGE_PREFIX = 'agent-terminal';
 const MAC_BUNDLE_BINARY = /^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/;
 
 interface ControllerLookup {
-  candidates: BinaryInvocation[];
+  candidates: ShimCommand[];
   looked: string;
 }
 
-const binary = (execPath: string, appArgs: string[] = []): BinaryInvocation => ({ kind: 'binary', execPath, appArgs });
-
-function binaryControllerCandidates(invocation: BinaryInvocation): BinaryInvocation[] {
-  const [mainScript] = invocation.appArgs;
-  if (mainScript) return [binary(invocation.execPath, [path.join(path.dirname(mainScript), DEV_CONTROLLER_ENTRY)])];
+function binaryControllerCandidates(invocation: Exclude<LaunchInvocation, { kind: 'appImage' }>): ShimCommand[] {
+  if (invocation.kind === 'development') {
+    return [{ execPath: invocation.execPath, args: [path.join(invocation.mainDir, DEV_CONTROLLER_ENTRY)] }];
+  }
   const mac = MAC_BUNDLE_BINARY.exec(invocation.execPath);
   const hostDir = mac ? mac[1] : path.dirname(invocation.execPath);
   const binaryIn = (dir: string): string =>
@@ -43,21 +51,22 @@ function binaryControllerCandidates(invocation: BinaryInvocation): BinaryInvocat
       : path.join(dir, CONTROLLER_PRODUCT_NAME);
   const installed = mac ? hostDir : path.join(path.dirname(hostDir), CONTROLLER_PRODUCT_NAME);
   const built = path.join(path.dirname(hostDir), CONTROLLER_OUTPUT_SUBDIR, path.basename(hostDir));
-  return [installed, built].map((dir) => binary(binaryIn(dir)));
+  return [installed, built].map((dir) => ({ execPath: binaryIn(dir), args: [] }));
 }
 
 function controllerLookup(invocation: LaunchInvocation): ControllerLookup {
   switch (invocation.kind) {
-    case 'binary': {
+    case 'packaged':
+    case 'development': {
       const candidates = binaryControllerCandidates(invocation);
-      return { candidates, looked: candidates.map((c) => c.appArgs[0] ?? c.execPath).join(', ') };
+      return { candidates, looked: candidates.map((c) => c.args[0] ?? c.execPath).join(', ') };
     }
     case 'appImage': {
       const folder = path.dirname(invocation.appImage);
       const name = path.basename(invocation.appImage);
       if (!name.startsWith(TERMINAL_APPIMAGE_PREFIX)) return { candidates: [], looked: folder };
       const sibling = path.join(folder, CONTROLLER_PRODUCT_NAME + name.slice(TERMINAL_APPIMAGE_PREFIX.length));
-      return { candidates: [binary(sibling)], looked: sibling };
+      return { candidates: [{ execPath: sibling, args: [] }], looked: sibling };
     }
     default:
       return invocation satisfies never;
@@ -66,9 +75,9 @@ function controllerLookup(invocation: LaunchInvocation): ControllerLookup {
 
 function controllerBranch(invocation: LaunchInvocation): string[] {
   const { candidates, looked } = controllerLookup(invocation);
-  const launches = candidates.map(({ execPath, appArgs }) => {
-    const present = [`[ -x ${shellQuote(execPath)} ]`, ...appArgs.map((a) => `[ -f ${shellQuote(a)} ]`)];
-    const cmd = [execPath, ...appArgs].map(shellQuote).join(' ');
+  const launches = candidates.map(({ execPath, args }) => {
+    const present = [`[ -x ${shellQuote(execPath)} ]`, ...args.map((a) => `[ -f ${shellQuote(a)} ]`)];
+    const cmd = [execPath, ...args].map(shellQuote).join(' ');
     return `  if ${present.join(' && ')}; then nohup ${cmd} >/dev/null 2>&1 & exit 0; fi`;
   });
   return [
@@ -80,12 +89,15 @@ function controllerBranch(invocation: LaunchInvocation): string[] {
   ];
 }
 
-/** An AppImage's mount exists only while the app runs, so a command for one launches the AppImage file. */
+/** An AppImage's mount exists only while the app runs, so a command for one launches the AppImage file.
+ *  A dev build execs Electron on the path it was started on, absolutized against `cwd` so the
+ *  generated shim launches the same build from anywhere. */
 export function resolveLaunchInvocation(
   execPath: string,
   isDevBuild: boolean,
-  mainScript: string | undefined,
+  startPath: string | undefined,
   cwd: string,
+  mainDir: string,
   appImage?: AppImageFacts,
 ): LaunchInvocation {
   if (appImage && path.isAbsolute(appImage.appImage) && path.isAbsolute(appImage.mountDir)) {
@@ -94,14 +106,16 @@ export function resolveLaunchInvocation(
       return { kind: 'appImage', appImage: appImage.appImage };
     }
   }
-  const appArgs = isDevBuild && mainScript ? [path.resolve(cwd, mainScript)] : [];
-  return binary(execPath, appArgs);
+  if (!isDevBuild || !startPath) return { kind: 'packaged', execPath };
+  return { kind: 'development', execPath, startPath: path.resolve(cwd, startPath), mainDir };
 }
 
 function shimParts(invocation: LaunchInvocation): { cmd: string; before: string[]; afterController: string[] } {
   switch (invocation.kind) {
-    case 'binary':
-      return { cmd: [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' '), before: [], afterController: [] };
+    case 'packaged':
+      return { cmd: shellQuote(invocation.execPath), before: [], afterController: [] };
+    case 'development':
+      return { cmd: [invocation.execPath, invocation.startPath].map(shellQuote).join(' '), before: [], afterController: [] };
     case 'appImage': {
       const file = shellQuote(invocation.appImage);
       const fail = (message: string): string[] => [

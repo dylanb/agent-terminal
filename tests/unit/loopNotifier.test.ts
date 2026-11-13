@@ -9,6 +9,8 @@ function loopView(loop: Partial<FlowLoopView> & { status: string; iteration: num
   return {
     stepName: 'build', runStarted: 'never-started' as const,
     steps: ['build'],
+    stepRuns: ['runs'],
+    decisions: {},
     position: 1,
     total: 1,
     status: 'in_progress',
@@ -37,6 +39,8 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     const runLessFailure: FlowStateView = {
       stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
+      stepRuns: ['runs'],
+      decisions: {},
       position: 1,
       total: 1,
       status: 'in_progress',

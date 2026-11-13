@@ -36,8 +36,8 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       const bringForward = bringForwardLocator(pane);
       if (action === 'resolve') {
         await approve.click();
-        await expect(terminal.page.locator('#flow-strip')).toContainText('verify');
-        await expect.soft(pane).toContainText(/verify/, { timeout: STATUS_BUDGET_MS });
+        await expect(terminal.page.locator('#flow-strip')).toContainText('Verify');
+        await expect.soft(pane).toContainText(/Verify/, { timeout: STATUS_BUDGET_MS });
         await expect.soft(pane).not.toContainText(/needs? (?:a )?human|human.*needed|stop for a human/i, { timeout: STATUS_BUDGET_MS });
         if (source.loop?.verdictReason) await expect.soft(pane).not.toContainText(source.loop.verdictReason, { timeout: STATUS_BUDGET_MS });
       } else {

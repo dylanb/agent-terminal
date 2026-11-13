@@ -2,35 +2,53 @@
 # Electron window real focus + an OS clipboard (a macOS subprocess launch cannot, so the
 # focus/clipboard tests fail there with no product cause). Mirrors the locally-verified Podman setup
 # (see docs/e2e-podman.md). node-pty is rebuilt for the runner's Electron ABI; Xvfb is driven
-# manually (xvfb-run can hang after the test process exits). The authoritative pass tally is this
-# job's live run, not a number pinned here that drifts on the next test added.
+# manually (xvfb-run can hang after the test process exits).
+#
+# --shard splits by test only while fullyParallel is on. Without it, whole spec files land on one
+# shard and the slowest shard outgrows the timeouts below.
 name: e2e
 
-# A PR merges on its local test proof (docs/test-proof.md), so this suite runs only on the push to main
-# that the merge creates: the check that the proofs were honest. A head commit carrying [skip ci]
-# suppresses that run, which is why a PR's squash title and description must not contain it.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
-# This job only checks out and runs tests; it needs no write scopes.
 permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.sha }}
+  group: e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   e2e:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    name: e2e (shard ${{ matrix.shardIndex }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Must stay above setup plus --global-timeout below, or GitHub cancels a long shard before it
+    # uploads its blob report.
+    timeout-minutes: 30
+    outputs:
+      shard-total: ${{ strategy.job-total }}
+    strategy:
+      # One shard failing must not cancel the others, or the merged report loses their results.
+      fail-fast: false
+      matrix:
+        # strategy.job-total counts every matrix combination, so a second matrix axis would break
+        # the --shard split. 8, not 6: with 6, the slowest shard came within a minute of
+        # --global-timeout in CI.
+        shardIndex: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -56,20 +74,72 @@ jobs:
       - run: pnpm run build
 
       - name: e2e under Xvfb
+        env:
+          SHARD: ${{ matrix.shardIndex }}/${{ strategy.job-total }}
         run: |
+          sudo sysctl -w kernel.core_pattern=core
+          ulimit -c 0
           # Xvfb stderr is only the display server's own log (non-fatal xkbcomp "Could not resolve
           # keysym" noise from an xkb-data older than Chromium's keymap); test reporting comes from
           # Playwright, so discard it.
           Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/dev/null 2>&1 &
           export DISPLAY=:99
           sleep 2
-          pnpm exec playwright test --reporter=list
+          # Leaves setup room inside the 20-minute target. A shard that runs longer fails here with its
+          # report written, instead of being cancelled at timeout-minutes with none.
+          pnpm exec playwright test --shard="$SHARD" --reporter=list,blob --global-timeout=$((17 * 60 * 1000))
 
-      - uses: actions/upload-artifact@v7
-        if: failure()
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          name: blob-report-${{ matrix.shardIndex }}
+          path: blob-report/
+          retention-days: 7
+
+  merge-reports:
+    name: merge-reports
+    needs: e2e
+    if: ${{ !cancelled() && needs.e2e.result != 'success' && needs.e2e.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Merging needs only the Playwright CLI, so skip the Electron download and native rebuild.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: blob-report-*
+          path: all-blob-reports
+          merge-multiple: true
+
+      # A shard that fails before Playwright writes its report (in setup, or cancelled at
+      # timeout-minutes) uploads none, and the merge would silently leave its tests out.
+      - name: Check every shard's report arrived
+        env:
+          EXPECTED: ${{ needs.e2e.outputs.shard-total }}
+        run: |
+          found=$(find all-blob-reports -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')
+          echo "Merging ${found} of ${EXPECTED:-an unknown number of} shard reports."
+          if [ "$found" != "$EXPECTED" ]; then
+            echo "::warning::Merging ${found} of ${EXPECTED:-an unknown number of} shard reports. The report leaves out the tests of every shard whose job shows no blob-report upload."
+          fi
+
+      - run: pnpm exec playwright merge-reports --reporter=html ./all-blob-reports
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
-          path: |
-            test-results/
-            playwright-report/
+          path: playwright-report/
           retention-days: 7

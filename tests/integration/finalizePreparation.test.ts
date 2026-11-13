@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { applyInstallExamples, exampleInstallDirs } from '../../src/main/installExamples';
 import { flowCatalogDir, loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { createStepLibrary, type StepLibrary } from '../../src/main/stepLibrary';
 import { loadTodoTemplateFile, parseTodoTemplate } from '../../src/main/todoTemplate';
 
 let root: string;
 let operator: string;
 let repo: string;
 let flows: string;
+let steps: StepLibrary;
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), 'installed-finalize-'));
   repo = join(root, 'target-repository');
@@ -23,12 +25,15 @@ beforeAll(() => {
   const destination = dirs.find((dir) => dir.id === 'appLoops')?.targetDir;
   if (!destination) throw new Error('no installed loop destination');
   operator = destination;
+  const stepsDir = dirs.find((dir) => dir.id === 'stepLibrary')?.targetDir;
+  if (!stepsDir) throw new Error('no installed step library destination');
+  steps = createStepLibrary([{ name: 'global', dir: stepsDir }]);
 });
 afterAll(() => rmSync(root, { recursive: true }));
 
 function finalize() {
   const flowDir = join(flowCatalogDir(flows), 'feature-dev-v3');
-  const flow = loadUntrustedFlowDefinition(join(flowDir, 'flow.yaml'));
+  const flow = loadUntrustedFlowDefinition(join(flowDir, 'flow.yaml'), steps);
   if (!flow.ok) throw new Error(flow.error);
   const step = flow.definition.steps.find((s) => s.id === 'finalize');
   if (step?.kind !== 'loop' || !step.loop) throw new Error('finalize must be a loop');

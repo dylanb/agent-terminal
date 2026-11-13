@@ -25,6 +25,7 @@ const host = (over: Partial<CliHost> = {}): CliHost => ({
   isDevBuild: false,
   mainScript: undefined,
   cwd: '/',
+  mainDir: '/app/out/main',
   ...over,
 });
 

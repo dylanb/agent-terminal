@@ -142,7 +142,7 @@ test('persists a user title across relaunch and keeps it while a PR outranks it 
   // persists to flow-state.yaml and survives a relaunch. Advancing into `work` surfaces the pr ref, which
   // OUTRANKS the name in the bar's display — yet the name is never lost from flow-state (§18.4).
   const dir = seedRefsFlowRepo('agent-term-e2e-sbname-');
-  await enterRepo(dir, 'groom');
+  await enterRepo(dir, 'Groom');
   await statusTitle().click();
   const editor = page.locator('#status-bar input[data-sb-title-edit]');
   await editor.fill('Refactor the shadow parser');
@@ -151,7 +151,7 @@ test('persists a user title across relaunch and keeps it while a PR outranks it 
   await expect.poll(() => readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8')).toContain('Refactor the shadow parser');
 
   await relaunch();
-  await enterRepo(dir, 'groom');
+  await enterRepo(dir, 'Groom');
   await expect(statusTitle()).toHaveText('Refactor the shadow parser'); // persisted; the pr ref is hidden pre-`work`
   await flowControl().click(); // Start → groom
   await flowControl().click(); // Advance → work: the pr typed-input ref surfaces and outranks the user name

@@ -5,14 +5,19 @@
 // before a repo key is known it renders nothing.
 
 import type { FlowViewArgs } from './flowView';
-import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
+import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs, FlowTokensView } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
+import { railTotal, type RunTokens, type StepTokens } from '../../shared/tokenCounts';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
 import { isSelectionLocked } from '../../shared/flowStarted';
+import { stepLabel } from '../../shared/stepLabel';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 import { createPressGroup } from './pressable';
 import { waitingLabel } from '../../shared/waiting';
+import { createTokenCount, type TokenCount, type TokenCountValue } from './tokenCount';
+import { abbreviatedTokens } from './tokenFormat';
+import type { TokenTableView } from './tokenTable';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -26,14 +31,26 @@ const CONTROL: Record<FlowStatus, { label: string; act: Act } | null> = {
   error: null,
 };
 
-/** The rail brackets the real steps with two synthetic stations: "Not started" (active before the
- *  flow starts) and "Completed" (active once it finishes), so the rail reads [Not started] · step₁ ·
- *  … · stepₙ · [Completed] (§24.2.3 T1 generalized the bookends across N real steps). */
-function railStations(state: FlowStateView): Array<{ name: string; st: StationState }> {
+type RailItem = { name: string; st: StationState; step?: number; tag?: string; current?: true } | { marker: string };
+
+const UNDECIDED_MARKER = 'next steps depend on the verdict';
+
+/** The rail brackets the shown steps with two synthetic stations: "Not started" (active before the
+ *  flow starts) and "Completed" (active once it finishes). A step the decisions skip is left out, and
+ *  each run of undecided steps folds into one marker line, unless it is the current step (§24.2.3 T1). */
+function railStations(state: FlowStateView): RailItem[] {
   const status = state.status as Exclude<FlowStatus, 'error'>;
   const currentIndex = state.position - 1;
   const notStarted: StationState = status === 'not_started' ? 'active' : 'done';
-  const steps: Array<{ name: string; st: StationState }> = state.steps.map((name, i) => {
+  const items: RailItem[] = [{ name: 'Not started', st: notStarted }];
+  state.steps.forEach((id, i) => {
+    const isCurrent = status === 'in_progress' && i === currentIndex;
+    const run = state.stepRuns[i];
+    if (run === 'skipped' && !isCurrent) return;
+    if (run === 'unresolved' && !isCurrent) {
+      if (!('marker' in items[items.length - 1])) items.push({ marker: UNDECIDED_MARKER });
+      return;
+    }
     const st: StationState =
       status === 'not_started'
         ? 'todo'
@@ -41,13 +58,24 @@ function railStations(state: FlowStateView): Array<{ name: string; st: StationSt
           ? 'done'
           : i < currentIndex
             ? 'done'
-            : i === currentIndex
+            : isCurrent
               ? 'active'
               : 'todo';
-    return { name, st };
+    const decision = Object.hasOwn(state.decisions, id) ? state.decisions[id] : undefined;
+    const tag = decision === undefined ? undefined : decision.note === undefined ? decision.value : `${decision.value} · ${decision.note}`;
+    items.push({ name: stepLabel(id), st, step: i, ...(tag !== undefined ? { tag } : {}), ...(isCurrent ? { current: true as const } : {}) });
   });
   const completed: StationState = status === 'done' ? 'active' : 'todo';
-  return [{ name: 'Not started', st: notStarted }, ...steps, { name: 'Completed', st: completed }];
+  items.push({ name: 'Completed', st: completed });
+  return items;
+}
+
+function headerText(rail: readonly RailItem[]): string {
+  const activeAt = rail.findIndex((s) => 'st' in s && s.st === 'active');
+  if (rail.slice(activeAt + 1).some((s) => 'marker' in s)) return 'Flow steps';
+  const counted = rail.filter((s) => 'st' in s);
+  const position = counted.findIndex((s) => s.st === 'active') + 1;
+  return `Flow — step ${position} / ${counted.length}`;
 }
 
 export interface FlowStrip {
@@ -100,7 +128,7 @@ export type FlowStripDeps = Omit<
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
-  onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
+  onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs, tokens?: TokenTableView) => void;
   onView?: (...args: FlowViewArgs) => void;
   /** Required status-bar handoff on structural and passive state updates (§22.3.1 / §24.2.2 S5). */
   onStatusBar(model: StatusBarModel, repoKey: string | null): void;
@@ -116,6 +144,29 @@ export type FlowStripDeps = Omit<
    *  no Terminate control is rendered (the strip never reaches across to the dialog directly). */
   onTerminate?: (repoKey: string, confirm: () => void) => void;
 };
+
+const RAIL_STEP_LIST_NAME = 'Flow steps';
+const RAIL_RUN_TOTAL_TEST_ID = 'token-run-total';
+
+const DASH: TokenCountValue = { shown: 'dash' };
+function railCount(cell: StepTokens | RunTokens | null, counting: boolean): TokenCountValue {
+  if (cell === null) return DASH;
+  if (cell.state === 'unavailable') return { shown: 'unavailable', counting };
+  const total = railTotal(cell.kinds);
+  return { shown: 'count', text: abbreviatedTokens(total.n), counting, partly: total.partly, incomplete: 'someStepsUnavailable' in cell && cell.someStepsUnavailable };
+}
+
+interface RailCounts {
+  steps: Map<number, TokenCount>;
+  run: TokenCount;
+}
+
+const panelTokens = (state: FlowStateView): TokenTableView | undefined => (state.tokens ? { steps: state.steps, tokens: state.tokens } : undefined);
+
+function showRailCounts(counts: RailCounts, tokens: FlowTokensView): void {
+  counts.steps.forEach((count, i) => count.set(railCount(tokens.steps[i] ?? null, tokens.counting === i)));
+  counts.run.set(railCount(tokens.run, false));
+}
 
 function header(doc: Document, text: string): HTMLElement {
   const sect = doc.createElement('div');
@@ -145,6 +196,8 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
     state.status,
     state.status === 'error' ? state.error ?? '' : '',
     state.steps,
+    state.stepRuns,
+    state.decisions,
     state.position,
     !!state.loop,
     // The iteration read-out's PRESENCE is structural — absent for a §27 run-less view — so a
@@ -154,6 +207,7 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
+    state.tokens !== undefined,
     // Keyed on the EFFECTIVE notices the strip holds, NOT `state.notice`: a passive
     // re-pull whose only delta is the absent transport notice leaves the effective set unchanged, so the
     // signature is unchanged, the held `.flow-notice` node stays, and the notice is not re-announced
@@ -253,6 +307,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // repo change). A re-pull carrying its OWN notice JOINS it — the two arrive on different responses, so the
   // seam's single-field composition cannot reach them and this is the only place they can both render.
   let heldNotices: string[] = [];
+  let railCounts: RailCounts | null = null;
 
   /** Fold a re-pull's own transport notice into the held set, de-duplicated (a repeated push must not
    *  grow the list or re-announce). */
@@ -342,6 +397,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // WCAG 3.2.5
     const hadFocus = host.contains(doc.activeElement);
     host.replaceChildren();
+    railCounts = null;
 
     if (state.status === 'error') {
       host.append(header(doc, 'Flow'));
@@ -356,33 +412,65 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return;
     }
 
-    // The header position counts the synthetic bookends too (e.g. 1/3 → 3/3 for one real step).
+    // The header position counts the shown stations, synthetic bookends included (e.g. 1/3 → 3/3 for one real step).
     const railStn = railStations(state);
-    const activeIndex = railStn.findIndex((s) => s.st === 'active');
-    host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
+    host.append(header(doc, headerText(railStn)));
 
     // The station rail (§24.1). Deliberately deviates from that section's fully-connected mockup to
     // keep the left rail tight.
     const rail = doc.createElement('div');
     rail.className = 'flow vert';
+    rail.setAttribute('role', 'list');
+    rail.setAttribute('aria-label', RAIL_STEP_LIST_NAME);
+    const stepCounts = new Map<number, TokenCount>();
     railStn.forEach((s, i) => {
       const stn = doc.createElement('span');
-      stn.className = `stn ${s.st}`;
-      const dot = doc.createElement('span');
-      dot.className = 'o';
+      stn.setAttribute('role', 'listitem');
       const name = doc.createElement('span');
       name.className = 'nm';
-      name.textContent = s.name;
-      stn.append(dot, name);
+      if ('marker' in s) {
+        stn.className = 'stn marker';
+        name.textContent = s.marker;
+        stn.append(name);
+      } else {
+        stn.className = `stn ${s.st}`;
+        if (s.current) stn.setAttribute('aria-current', 'step');
+        const dot = doc.createElement('span');
+        dot.className = 'o';
+        name.textContent = s.name;
+        stn.append(dot, name);
+        if (s.tag !== undefined) {
+          const tag = doc.createElement('span');
+          tag.className = 'tag';
+          tag.textContent = s.tag;
+          stn.append(tag);
+        }
+        if (state.tokens && s.step !== undefined) stepCounts.set(s.step, createTokenCount(stn));
+      }
       rail.append(stn);
       const next = railStn[i + 1];
-      if (next && (s.st === 'active' || next.st === 'active')) {
+      const st = 'st' in s ? s.st : null;
+      if (next && (st === 'active' || ('st' in next && next.st === 'active'))) {
         const seg = doc.createElement('span');
-        seg.className = s.st === 'done' ? 'seg' : 'seg future';
+        seg.className = st === 'done' ? 'seg' : 'seg future';
+        seg.setAttribute('aria-hidden', 'true');
         rail.append(seg);
       }
     });
     host.append(rail);
+    if (state.tokens) {
+      const total = doc.createElement('div');
+      total.className = 'flow-run-total';
+      total.dataset.testid = RAIL_RUN_TOTAL_TEST_ID;
+      total.setAttribute('aria-live', 'off');
+      const label = doc.createElement('span');
+      label.className = 'k';
+      label.textContent = 'Run total';
+      total.append(label, ' ');
+      railCounts = { steps: stepCounts, run: createTokenCount(total) };
+      showRailCounts(railCounts, state.tokens);
+      host.append(total);
+    }
 
     // §24.2.3 T2/T7: the loop read-out (loop steps) else the refs read-out (a ticket/PR on any step).
     if (state.loop) {
@@ -391,7 +479,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(refsReadout(doc, state.refs, deps.loopPanelId));
     }
     if ((state.loop || hasFlowRefs(state.refs)) && keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
-    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs);
+    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs, panelTokens(state));
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
     // and pushed via flow:onStateChanged.
@@ -471,6 +559,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   function patchInPlace(state: FlowStateView): void {
     deps.onStatusBar(deriveStatusBar(state), repoKey);
     emitView(state);
+    if (railCounts && state.tokens) showRailCounts(railCounts, state.tokens);
     const dText = derivedText(state);
     if (dText !== null) {
       const line = host.querySelector('.flow-derived');
@@ -487,7 +576,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     }
     // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
     // ride along so a value-only patch never clears the panel's "Working on" section.
-    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs);
+    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs, panelTokens(state));
   }
 
   async function refresh(): Promise<void> {
