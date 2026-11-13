@@ -7,6 +7,9 @@ import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type T
 import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
 import { isRepositoryName } from './appBootstrap';
+import { isStepTokens, runTokens, type RunTokens, type StepTokens } from './tokenCounts';
+import { isAgentKind, type AgentKind } from './agentKind';
+import { isIssueNumber } from './issueNumber';
 
 export interface AuditHeader {
   flow: string;
@@ -46,7 +49,10 @@ export type AuditEvent =
   | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number }
   // §24.2.3 T4 — the OS refused to deliver a raised attention notification. Not folded into the
   // RunTimeline's state: a rejected raise is an event about the delivery surface, not about the run.
-  | { ts: string; type: 'notify.failed'; reason: string };
+  | { ts: string; type: 'notify.failed'; reason: string }
+  | { ts: string; type: 'decision'; step: string; value: string }
+  | { ts: string; type: 'step.tokens'; step: string; counts: StepTokens }
+  | { ts: string; type: 'agent.hosted'; agent: AgentKind };
 
 /** One file captured in an `outputs.snapshot` (§25.5): a `.agent-loop/`-relative path and its size. */
 export interface AuditOutputFile {
@@ -76,10 +82,17 @@ export interface LoopLike {
   pr: number | null;
 }
 
-export type TransitionKind = 'start' | 'advance' | 'restart' | 'undo';
+export type TransitionKind = 'start' | 'advance' | 'restart' | 'undo' | 'rollback';
 
+/** The header's `started`: a run is matched by comparing it as a string, so it keeps its second-precision form. */
 export function auditTimestamp(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** An event's `ts` keeps milliseconds: agent logs do, and a call in the same second as a step change must land in
+ *  the right step's window. */
+export function auditEventTimestamp(date: Date): string {
+  return date.toISOString();
 }
 
 /** §25.2 — the file stamp keeps milliseconds, so two Starts of one flow in the same second get separate files. */
@@ -123,6 +136,9 @@ const eventFields: {
   'loop.cost': { iteration: numberField, usd: numberField, unpriced: (value) => Array.isArray(value) && value.every(textField) },
   'loop.ci': { iteration: numberField, total: numberField, passed: numberField, failed: numberField, pending: numberField },
   'notify.failed': { reason: textField },
+  'decision': { step: textField, value: textField },
+  'step.tokens': { step: textField, counts: isStepTokens },
+  'agent.hosted': { agent: isAgentKind },
 };
 
 function isAuditEvent(value: unknown): value is AuditEvent {
@@ -294,6 +310,23 @@ export interface RunTimeline {
   costs: { iteration: number; usd: number; unpriced: string[] }[];
   /** The per-iteration CI snapshot events, in order — the check counts read at review time. */
   ci: { iteration: number; total: number; passed: number; failed: number; pending: number }[];
+  /** The agents that ran in the run, each once, in the order first recorded. */
+  agents: AgentKind[];
+  /** `null` for a record with no `step.tokens` entry. */
+  tokens: { steps: { step: string; counts: StepTokens }[]; run: RunTokens | null } | null;
+}
+
+function closedStepTokens(visits: AuditVisit[], events: AuditEvent[]): RunTimeline['tokens'] {
+  const entries = events.flatMap((e) => (e.type === 'step.tokens' ? [e] : []));
+  if (entries.length === 0) return null;
+  const steps = [...new Set(visits.map((v) => v.step))].flatMap((step) => {
+    const lastClose = visits.filter((v) => v.step === step && v.exited !== null).at(-1)?.exited;
+    if (lastClose === undefined) return [];
+    const entry = entries.filter((e) => e.step === step && e.ts === lastClose).at(-1);
+    const counts: StepTokens = entry === undefined ? { state: 'unavailable' } : entry.counts;
+    return [{ step, counts }];
+  });
+  return { steps, run: runTokens(steps.map((s) => s.counts)) };
 }
 
 /** Replay a run's stream into its ordered timeline and folded final state (§25.6), tolerating a
@@ -321,6 +354,8 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
     snapshots: [],
     costs: [],
     ci: [],
+    agents: [],
+    tokens: null,
   };
   const entered = enteredSteps(events);
   let visit: AuditVisit | undefined;
@@ -406,9 +441,13 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
       case 'loop.ci':
         tl.ci.push({ iteration: e.iteration, total: e.total, passed: e.passed, failed: e.failed, pending: e.pending });
         break;
+      case 'agent.hosted':
+        if (!tl.agents.includes(e.agent)) tl.agents.push(e.agent);
+        break;
     }
   });
   finishVisit();
+  tl.tokens = closedStepTokens(tl.visits, events);
   tl.todos = [...knownTodos.values()]
     .filter((todo) => !todo.deleted)
     .map(({ id, text, status }) => ({ id, text, status }));
@@ -677,8 +716,7 @@ export function inputEvents(
     const value = values[name];
     events.push({ ts, type: 'input.resolved', name, value });
     if (typeByName[name] === 'github-ticket') {
-      const ticket = Number(value);
-      if (Number.isInteger(ticket) && ticket > 0) events.push({ ts, type: 'ticket.assoc', ticket });
+      if (isIssueNumber(value)) events.push({ ts, type: 'ticket.assoc', ticket: Number(value) });
     }
   }
   return events;

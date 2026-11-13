@@ -37,7 +37,7 @@ describe('redo composer (§27.9 / AC5)', () => {
     createRedoComposer(host).render(open(), vi.fn());
     expect(host.querySelector('.flow-modal')).not.toBeNull();
     expect(textarea()).not.toBeNull();
-    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
+    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('Plan');
   });
 
   it('Submit carries the typed instruction back to the caller', () => {

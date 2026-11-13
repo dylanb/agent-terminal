@@ -42,7 +42,7 @@ describe('feedback composer (§27.9 / AC4)', () => {
     createFeedbackComposer(host).render(open(), vi.fn());
     expect(host.querySelector('.flow-modal')).not.toBeNull();
     expect(textarea()).not.toBeNull();
-    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
+    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('Plan');
   });
 
   it('Submit carries the typed feedback back to the caller', () => {
@@ -292,9 +292,16 @@ describe('feedback composer — the back-to-red variant (§28.4.2)', () => {
   it('names the step the reopen returns to and the gate it is sent from', () => {
     createFeedbackComposer(host).render({ ...backToRed({ step: 'integration' }), target: 'dev' }, vi.fn());
     const dialog = host.querySelector('.flow-modal')!;
-    expect(dialog.querySelector('h3')?.textContent).toContain('dev');
-    expect(dialog.querySelector('h3')?.textContent).toContain('integration');
-    expect(submitBtn().textContent).toBe('Back to dev');
+    expect(dialog.querySelector('h3')?.textContent).toContain('Send this back to Dev from');
+    expect(dialog.querySelector('h3')?.textContent).toContain('Integration');
+    expect(submitBtn().textContent).toBe('Back to Dev');
+  });
+
+  it('labels the brief field with the return step in sentence case', () => {
+    createFeedbackComposer(host).render({ ...backToRed({ step: 'integration' }), target: 'red-slice' }, vi.fn());
+    const label = textarea().getAttribute('aria-label') ?? '';
+    expect(label).toContain('Red slice');
+    expect(label).not.toContain('red-slice');
   });
 
   it('names RED when no return step is given', () => {

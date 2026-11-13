@@ -42,7 +42,7 @@ fi
       rmSync(h.fixture.env.TITLE_STARTED, { force: true });
       await expect(dismissLocator(cardLocator(controller.page, repo))).toBeVisible();
       await dismissLocator(cardLocator(controller.page, repo)).click();
-      const initialPatterns: Record<string, RegExp> = { issue: /#219/, flow: /ticket-flow/, step: /implement/, ...(title === 'slow' ? {} : { title: title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i }) };
+      const initialPatterns: Record<string, RegExp> = { issue: /#219/, flow: /ticket-flow/, step: /Implement/, ...(title === 'slow' ? {} : { title: title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i }) };
       const initialStatus = await observeStatus(controller.page, repo, initialPatterns, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Advance');

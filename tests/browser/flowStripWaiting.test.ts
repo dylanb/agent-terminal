@@ -14,7 +14,7 @@ describe('the flow strip while Waiting, as painted (#319 AC11)', () => {
     host.className = 'blk flowstrip';
     document.body.append(host);
     const view: FlowStateView = {
-      stepName: '/repo-step', runStarted: 'never-started' as const, steps: ['/repo-step'], position: 1, total: 1, status: 'in_progress',
+      stepName: '/repo-step', runStarted: 'never-started' as const, steps: ['/repo-step'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
       derived: { activity: 'quiet', waiting: { program: 'MainThread', others: 1 }, todosDone: 1, todosTotal: 2, ready: false },
     };
     createFlowStrip(host, {

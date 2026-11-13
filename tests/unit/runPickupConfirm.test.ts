@@ -319,15 +319,21 @@ describe('the pickup step a run has reached', () => {
   const contractOf = (s: Step) => (s.pickup === undefined ? null : s.pickup);
 
   it('is none before the first step that runs a pickup', () => {
-    expect(reachedPickupStep(steps, 1, contractOf)).toBeNull();
+    expect(reachedPickupStep(steps, 1, contractOf, [])).toBeNull();
   });
 
   it('is current while the run is on that step', () => {
-    expect(reachedPickupStep(steps, 2, contractOf)).toEqual({ contract: 'planning', at: 'current' });
+    expect(reachedPickupStep(steps, 2, contractOf, [])).toEqual({ contract: 'planning', at: 'current' });
   });
 
   it('is behind once the run has moved past it, and is always the first such step', () => {
-    expect(reachedPickupStep(steps, 3, contractOf)).toEqual({ contract: 'planning', at: 'behind' });
-    expect(reachedPickupStep(steps, 4, contractOf)).toEqual({ contract: 'planning', at: 'behind' });
+    expect(reachedPickupStep(steps, 3, contractOf, [])).toEqual({ contract: 'planning', at: 'behind' });
+    expect(reachedPickupStep(steps, 4, contractOf, [])).toEqual({ contract: 'planning', at: 'behind' });
+  });
+
+  it('passes over a step the run skipped, so a pickup on a path not taken is never reached', () => {
+    const runs = ['runs', 'skipped', 'runs', 'runs'] as const;
+    expect(reachedPickupStep(steps, 4, contractOf, runs)).toEqual({ contract: 'implementing', at: 'behind' });
+    expect(reachedPickupStep(steps, 3, contractOf, ['runs', 'skipped', 'skipped', 'runs'])).toBeNull();
   });
 });

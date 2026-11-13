@@ -1,4 +1,5 @@
 import { syncDockedPanel } from './dockedPanelSync';
+import { stepLabel } from '../../shared/stepLabel';
 import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
@@ -36,6 +37,7 @@ import { createRepoContext } from './repoContext';
 import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
+import { createDisplaySettings } from './displaySettings';
 import { createCliInstall } from './cliInstall';
 import { createCliInstallAction } from './cliInstallAction';
 import { createInstallExamples } from './installExamples';
@@ -89,6 +91,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onRebind: (action, chord) => keymap.setOverride(action, [chord]),
   onReset: (action) => keymap.clearOverride(action),
 });
+createDisplaySettings(document.getElementById('display-settings-view')!, { settings: window.monitor });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
@@ -135,7 +138,7 @@ const showError = (options: ErrorDialogOptions): void => {
 if (errorDialog) {
   window.flow.onBootstrapError((reason, repoKey, step) =>
     showError({
-      title: `Bootstrap failed — ${step}`,
+      title: `Bootstrap failed — ${stepLabel(step)}`,
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
@@ -315,9 +318,9 @@ if (flowStripHost) {
       for (const listener of [...viewListeners]) listener(...args);
     },
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
-    onPanelState: (loop, title, refs) => {
-      syncDockedPanel(loop, title, refs, {
-        render: (l, t, r) => loopPanel?.render(l, t, r),
+    onPanelState: (loop, title, refs, tokens) => {
+      syncDockedPanel(loop, title, refs, tokens, {
+        render: (l, t, r, k) => loopPanel?.render(l, t, r, k),
         closePanel: () => shell.closeLoopPanel(),
         syncExpanded: () => shell.syncLoopReadout(),
       });

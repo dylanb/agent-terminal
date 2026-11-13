@@ -223,7 +223,25 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/adoptionGh.ts', 'tests/helpers/outwardWrites.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts'];
+const EXPECTED_RESULTS_FIXTURES = [
+  'tests/helpers/controllerStatusFixture.ts',
+  'tests/helpers/controllerCards.ts',
+  'tests/helpers/adoptionGh.ts',
+  'tests/helpers/outwardWrites.ts',
+  'tests/helpers/processTable.ts',
+  'tests/helpers/controllerCardOrderFixture.ts',
+  'tests/helpers/tokenCountsUi.ts',
+  'tests/helpers/tokenFormatFixture.ts',
+];
+
+const INJECTED_TIME_MESSAGE =
+  'Token counting reads time only through its injected now() and refresh scheduler; src/main/index.ts supplies the real ones (CLAUDE.md § Test-driven development, injection seams).';
+const TOKEN_COUNTING = ['src/main/stepTokens.ts', 'src/main/tokenMeter.ts', 'src/main/agentUsage/**/*.ts'];
+
+const TOKEN_HELPER = 'tests/helpers/tokenCountsUi.ts';
+const TOKEN_HELPER_MESSAGE = `Read token counts through ${TOKEN_HELPER} (UI-STANDARDS §3.4 rule 1).`;
+const TOKEN_NAME = '/\\btoken-(count|run-total)\\b|^(Tokens by step|Flow steps)$/';
+const TOKEN_DOM = [`Literal[value=${TOKEN_NAME}]`, `TemplateElement[value.raw=${TOKEN_NAME}]`].map((selector) => ({ selector, message: TOKEN_HELPER_MESSAGE }));
 
 const IO_BUILTINS = ['child_process', 'fs', 'fs/promises', 'os', 'process', 'http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns'].flatMap((name) => [name, `node:${name}`]);
 /** A decision core in src/main: no I/O built-in, no `process`/`fetch`/`WebSocket` global, no `require` or dynamic
@@ -296,6 +314,8 @@ Object.assign(localPlugin.rules, {
   pressable: selectorRule('Run a control\'s action through pressable.ts.', RAW_CLICK),
   'clock-seam': selectorRule('Read time through the clock dependency.', [CLOCK_SEAM_SYNTAX]),
   'no-live-region': selectorRule('A card, the card order and the sort control add no live region.', LIVE_REGION),
+  'token-helper': selectorRule('Read token counts through the token-count helper.', TOKEN_DOM),
+  'setup-dialog-screen': selectorRule('Read the setup dialog through its screen helper.', SETUP_DIALOG_DOM),
 });
 
 export default [
@@ -305,6 +325,11 @@ export default [
     languageOptions: { parser: tseslint.parser, ecmaVersion: 'latest', sourceType: 'module' },
     plugins: { local: localPlugin },
     rules: { 'local/no-todo-comments': 'error' },
+  },
+  {
+    files: ['tests/**/*.ts'],
+    ignores: [TOKEN_HELPER, 'tests/unit/tokenCountsUiLint.test.ts'],
+    rules: { 'local/token-helper': 'error' },
   },
   {
     files: ['src/**/*.{ts,tsx,mts,cts,js,mjs,cjs}', 'scripts/**/*.{ts,mts,cts,js,mjs,cjs}'],
@@ -381,7 +406,22 @@ export default [
   },
   {
     files: ['tests/**/setupCheckDialog*.test.ts'],
-    rules: { 'no-restricted-syntax': ['error', ...SETUP_DIALOG_DOM] },
+    rules: { 'local/setup-dialog-screen': 'error' },
+  },
+  {
+    files: TOKEN_COUNTING,
+    rules: {
+      'no-restricted-properties': ['error', ...[['Date', 'now'], ['performance', 'now']].map(([object, property]) => ({ object, property, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-syntax': ['error', ...["NewExpression[callee.name='Date'][arguments.length=0]", "CallExpression[callee.name='Date']"].map((selector) => ({ selector, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-globals': ['error', ...['setTimeout', 'setInterval'].map((name) => ({ name, message: INJECTED_TIME_MESSAGE }))],
+      'no-restricted-imports': ['error', {
+        paths: ['timers', 'node:timers', 'timers/promises', 'node:timers/promises'].map((name) => ({
+          name,
+          importNames: ['setTimeout', 'setInterval', 'scheduler'],
+          message: INJECTED_TIME_MESSAGE,
+        })),
+      }],
+    },
   },
   {
     files: ['src/renderer/**/*.ts'],

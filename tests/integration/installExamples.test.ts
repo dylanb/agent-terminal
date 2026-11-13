@@ -1,3 +1,4 @@
+import { stepLibraryDir } from '../../src/main/stepLibrary';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   mkdtempSync,
@@ -24,7 +25,7 @@ import {
 } from '../../src/main/installExamples';
 import { load as parseYaml } from 'js-yaml';
 import { flowCatalogDir, loadFlowDefinitionLocalFirst } from '../../src/main/flow';
-import { bundledFlowOf } from '../helpers/bundledLoops';
+import { bundledLoopRel } from '../helpers/bundledLoops';
 import {
   isTodoTemplateFile,
   listTodoTemplates,
@@ -76,7 +77,7 @@ let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
 const templateRel = path.join('todo-templates', 'polish.md');
-const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
+const planLoopRel = bundledLoopRel('plan-loop');
 const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';
 
@@ -226,10 +227,11 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1);
-    // exclude that subtree so this still pins that the FLOW destination itself seeds only flow.yaml + templates.
-    const catalogRel = path.relative(targetDirOf('flow'), flowCatalogDir(home));
-    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep));
+    // The flow home also holds the selectable catalog and the step library (sibling destinations nested under it,
+    // §18.7.1/§18.2); exclude those subtrees so this still pins that the FLOW destination itself seeds only
+    // flow.yaml + templates.
+    const nested = [flowCatalogDir(home), stepLibraryDir(home)].map((d) => path.relative(targetDirOf('flow'), d));
+    const flowOnly = walk(targetDirOf('flow')).filter((r) => !nested.some((n) => r === n || r.startsWith(n + path.sep)));
     expect(flowOnly.sort()).toEqual([...FLOW_SET].sort());
   });
 
@@ -812,10 +814,10 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
       { destination: 'codexSkills', root: codexHomeOf() },
     ]);
 
-    // The catalog (§18.7.1) is nested under the flow home, so the walk of the 'flow' root below sees its
-    // files too; they were written by this install, so they belong in the named set exactly as the three
-    // ALL destinations' files do — reported under their own group, not ALL's.
-    const written: InstallDestinationId[] = [...ALL, 'flowCatalog'];
+    // The catalog (§18.7.1) and the step library (§18.2) are nested under the flow home, so the walk of the 'flow'
+    // root below sees their files too; they were written by this install, so they belong in the named set exactly
+    // as the three ALL destinations' files do — reported under their own group, not ALL's.
+    const written: InstallDestinationId[] = [...ALL, 'flowCatalog', 'stepLibrary'];
     const named = new Set(
       written.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
     );
@@ -996,8 +998,8 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       const load = loadFlowDefinitionLocalFirst(localWithoutFlow, home);
       expect(load.ok).toBe(true);
       if (!load.ok) return;
-      const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
-      expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
+      const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id?: string; step?: string }[] };
+      expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id ?? s.step));
     } finally {
       rmSync(localWithoutFlow, { recursive: true, force: true });
     }
@@ -1020,13 +1022,35 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
   });
 });
 
+describe('a damaged step library bundle is a refusal that writes nothing (§18.2)', () => {
+  it.each([
+    ['is empty', (_dir: string) => undefined],
+    ['holds a subdirectory', (dir: string) => mkdirSync(path.join(dir, 'nested'))],
+    ['holds a file that is not a step definition', (dir: string) => writeFileSync(path.join(dir, 'README.md'), '# notes\n')],
+    ['holds a step definition whose name no reference can use', (dir: string) => writeFileSync(path.join(dir, 'Bad_Name.yaml'), 'kind: manual\n')],
+  ])('refuses a step library that %s', (_case, plant) => {
+    const bundle = mkdtempSync(path.join(tmpdir(), 'bundle-steps-damaged-'));
+    try {
+      plant(bundle);
+      const res = applyInstallExamples(withBundle('stepLibrary', bundle), []);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toContain('damaged');
+      expect(existsSync(targetDirOf('stepLibrary'))).toBe(false);
+      for (const id of ALL) expect(existsSync(targetDirOf(id))).toBe(false);
+    } finally {
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('an absent bundle source is a refusal, never a silent success (§18.1)', () => {
   // Enumeration is tree-driven, so a mispackaged build (a tree missing from extraResources) yields an
   // EMPTY plan — indistinguishable, to a planner that swallows ENOENT, from a bundle that legitimately
   // carries no files. Reported as ok, the user is told the examples were installed and nothing was.
   const absent = path.join(tmpdir(), 'install-examples-no-such-bundle');
 
-  it.each(['appLoops', 'commands', 'flow', 'flowCatalog'] as const)(
+  it.each(['appLoops', 'commands', 'flow', 'flowCatalog', 'stepLibrary'] as const)(
     'reports a failure when the %s bundle tree is missing from the build',
     (id) => {
       const res = applyInstallExamples(withBundle(id, absent), []);

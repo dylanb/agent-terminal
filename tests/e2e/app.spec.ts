@@ -4,6 +4,8 @@ import { controllerOf, electron } from './registeredElectron';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { chmodSync, cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { STEP_DEF_EXT, stepLibraryDir } from '../../src/main/stepLibrary';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -12,7 +14,6 @@ import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { PS_ARGS } from '../../src/main/waitingLookup';
-import { shellQuote } from '../../src/shared/shellQuote';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -45,11 +46,12 @@ import {
   v3PlanApproveWork,
   v3PlanGoal,
   v3Section,
+  seedBundledStepLibrary,
   writeCatalogEntry,
   writePromptedArtifact,
   writeV3,
 } from './fakeTools';
-import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
+import { installBundledRunReviewers, ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 
@@ -1968,13 +1970,13 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
 
   // AC1 — the pointer selects the catalog flow.
   await typeCommand(`cd "${repoCat}"`);
-  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
-  await expect(flowStation(2).locator('.nm')).toHaveText('cat-plan');
+  await expect(flowStepName()).toHaveText('Cat groom', { timeout: 10_000 });
+  await expect(flowStation(2).locator('.nm')).toHaveText('Cat plan');
   await expect(flowError()).toHaveCount(0);
 
   // AC2 — the pick wins over a present local flow.yaml.
   await typeCommand(`cd "${repoLocal}"`);
-  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Cat groom', { timeout: 10_000 });
   expect(await page.locator('#flow-strip').innerText()).not.toContain('local-step');
 
   // AC4 — an unknown pointer refuses to run: the §18.1 error names the pick; neither the local nor the global flow runs.
@@ -2004,10 +2006,10 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   seedCatalogEntry(repoWrite, 'flow-a', 'flow-a', 'a-step');
   seedCatalogEntry(repoWrite, 'flow-b', 'flow-b', 'b-groom', 'b-plan');
   await typeCommand(`cd "${repoWrite}"`);
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset, no local → global fallback
+  await expect(flowStepName()).toHaveText('Global fallback step', { timeout: 10_000 }); // pointer unset, no local → global fallback
   const permit = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
   expect(permit).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 }); // the write re-rendered the strip
+  await expect(flowStepName()).toHaveText('B groom', { timeout: 10_000 }); // the write re-rendered the strip
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
 
   await flowControl().click(); // Start → in_progress: the run has begun
@@ -2024,14 +2026,14 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   await confirmModal().locator('.confirm').click();
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
-  await expect(flowStepName()).toHaveText('b-groom');
+  await expect(flowStepName()).toHaveText('B groom');
   expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('never-started');
   expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('a-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('A step', { timeout: 10_000 });
 
   // AC8 — clearing the selection returns the worktree to the silent global fallback.
   expect(await page.evaluate((rk) => window.flow.clearActiveFlow(rk), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Global fallback step', { timeout: 10_000 });
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
   await expect(flowError()).toHaveCount(0);
 
@@ -2055,7 +2057,7 @@ test("the active-flow pointer selects the catalog flow over a local flow.yaml, a
   await once(child, 'exit');
   writeFileSync(lockFile, serializeLockHolder({ pid: deadPid, startTime: 'long-gone' }));
   expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite)).toEqual({ ok: true });
-  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('B groom', { timeout: 10_000 });
 
   for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
 });
@@ -2096,14 +2098,14 @@ test('a begun catalog run keeps its source across a relaunch, and a lost source 
   };
 
   await launch();
-  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Sticky one', { timeout: 10_000 });
   await flowControl().click(); // Start → the run begins on the catalog entry
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await app.close();
 
   writeActiveFlow(repo, 'other'); // the pointer changes on disk while the run is begun
   await launch();
-  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Sticky one', { timeout: 10_000 });
   await expect(flowControl()).toHaveText('Advance');
   expect(await page.locator('#flow-strip').innerText()).not.toContain('other-step');
   await app.close();
@@ -2127,7 +2129,7 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await expect(flowStation(0)).toHaveClass(/\bactive\b/); // synthetic "Not started" bookend
   await expect(flowControl()).toHaveText('Start');
 
@@ -2210,7 +2212,7 @@ test('APP_HOME_DIR relocates the global flow.yaml and the audit tree off the rea
 
   await typeCommand(`cd "${workdir}"`);
   // The global flow resolved from APP_HOME_DIR, not $HOME (which has none) — the step id proves the source.
-  await expect(flowStepName()).toHaveText('relocated-step', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Relocated step', { timeout: 10_000 });
 
   await expect(flowControl()).toHaveText('Start');
   await flowControl().click();
@@ -2366,7 +2368,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
   await flowControl().click(); // Start → groom: run opens
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
   await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
@@ -2392,6 +2394,38 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   rmSync(home, { recursive: true, force: true });
 });
 
+test('a refused github-ticket keeps the input dialog open, and a corrected number is saved', { tag: '@ownapp' }, async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-ticket-refuse-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-refuse-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('#43');
+  await inputModal().locator('.confirm').click();
+
+  const ticketField = inputModal().getByRole('textbox', { name: 'ticket' });
+  await expect(ticketField).toHaveAccessibleDescription(/"#43" is not an issue number/, { timeout: 10_000 });
+  await expect(inputModal().getByText('"#43" is not an issue number', { exact: false })).toBeVisible();
+  await expect(ticketField).toHaveValue('#43');
+  const stateFile = join(repo, '.agent-terminal', 'flow-state.yaml');
+  expect(existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : '').not.toContain('#43');
+
+  await inputModal().locator('.field input').fill('43');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toBeHidden({ timeout: 10_000 });
+  await expect.poll(() => readFileSync(stateFile, 'utf8')).toMatch(/ticket: ['"]?43['"]?/);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', { tag: '@ownapp' }, async () => {
   // A 3-step flow's rail brackets the real steps with Not-started / Completed bookends → FIVE stations.
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);
@@ -2403,8 +2437,8 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   await typeCommand(`cd "${repo}"`);
   // Rail: [Not started] · groom · plan · implement · [Completed].
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 });
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
-  await expect(flowStation(3).locator('.nm')).toHaveText('implement');
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom');
+  await expect(flowStation(3).locator('.nm')).toHaveText('Implement');
   await expect(flowStation(0)).toHaveClass(/\bactive\b/); // Not started
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 1 / 5');
   await expect(flowControl()).toHaveText('Start');
@@ -2462,6 +2496,46 @@ function installEnv(home: string, configDir: string, codexHome: string = join(ho
   };
 }
 
+test('installing the examples installs every bundled step definition where a repository flow can use it', { tag: '@ownapp' }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-home-')));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-cfg-'));
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-steps-ex-repo-')));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const bundled = readdirSync(join('example', 'steps')).filter((f) => f.endsWith(STEP_DEF_EXT)).sort();
+  expect(bundled.length).toBeGreaterThan(0);
+  const names = bundled.map((f) => f.slice(0, -STEP_DEF_EXT.length));
+  const reuse = join(flowCatalogDir(repo), 'reuse');
+  mkdirSync(reuse, { recursive: true });
+  writeFileSync(join(reuse, FLOW_DEF_FILE), `name: reuse\nsteps:\n${names.map((n) => `  - step: ${n}\n`).join('')}`);
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+  for (const file of bundled) {
+    await expect(installReportGroup('stepLibrary')).toContainText(file);
+    expect(existsSync(join(stepLibraryDir(home), file))).toBe(true);
+  }
+
+  await page.locator('[data-viewbtn="1"]').click();
+  await typeCommand(`cd ${shellQuote(repo)} && pwd`);
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  const pickerHost = page.locator('#app .rail:has(#flow-strip) #flow-picker');
+  await expect(pickerHost.getByRole('button', { name: /flow/i })).toBeEnabled({ timeout: 10_000 });
+  await pickerHost.getByRole('button', { name: /flow/i }).click();
+  await pickerHost.getByRole('option', { name: /reuse/ }).click();
+  const stationName = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i).locator('.nm');
+  const shownAs = (id: string): string => id.charAt(0).toUpperCase() + id.slice(1).replaceAll('-', ' ');
+  for (const [i, name] of names.entries()) await expect(stationName(i + 1)).toHaveText(shownAs(name), { timeout: 10_000 });
+
+  await app.close();
+  for (const dir of [home, configDir, repo]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('installing the bundled examples seeds the flow, app and commands (§18.1/§23.4 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group.
@@ -2481,7 +2555,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'appLoops', 'commands', 'agents']) {
+  for (const dest of ['flow', 'appLoops', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
   await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
@@ -2497,10 +2571,8 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
-  // §27.4 — each bundled reviewer landed where Claude Code discovers a sub-agent, its charter as its instructions.
-  const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
-  expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
-  expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
+  // §27.4 — each run installs its own Claude reviewers, so none land in the config folder every session loads.
+  expect(existsSync(join(configDir, 'agents', 'green-loop--impl-review-principal.md'))).toBe(false);
   // §18.1 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
   const codexLoopRel = join('loops-v2', 'feature-dev-v3', 'integration-slice-loop', 'integration-slice-loop.yaml');
   expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
@@ -2762,7 +2834,7 @@ test('after install, the active step offers its bundled todo template as the pic
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → groom-ticket active (todo_template: polish)
 
   await openQuickSend('todo');
@@ -2791,7 +2863,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom', { timeout: 10_000 });
 
   await flowControl().click(); // Start → groom: no skill, nothing injected
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -2818,6 +2890,7 @@ function seedCompletedAppBootstrap(dir: string, issue = 176): void {
 function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2837,6 +2910,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
 function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2961,13 +3035,14 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 // §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
 // record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
 // app binary) and sees pass before signalling; the round then completes and the loop moves on.
-test('§27.4 — a review round whose reviewer is not installed as a sub-agent stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
+test('§27.4 — a review round whose reviewers cannot be installed in the run folder stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-noagent-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
   cpSync(exampleConfigDir, cfg, { recursive: true });
-  const missingAgent = `plan-loop--${PLAN_V2_ROSTER[1]}`;
-  rmSync(join(cfg, 'agents', `${missingAgent}.md`), { force: true });
+  const blocked = join(repo, '.claude', 'agents');
+  rmSync(blocked, { recursive: true, force: true });
+  writeFileSync(blocked, 'not a folder\n');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noagent-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
   app = await electron.launch({
@@ -2983,7 +3058,7 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  await expectLoopMessage('error', missingAgent, /restart your agent session/i);
+  await expectLoopMessage('error', blocked, /restart your agent session/i);
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
 
   await app.close();
@@ -2991,6 +3066,61 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
   rmSync(cfg, { recursive: true, force: true });
+});
+
+async function restartsAfterLateReviewerInstall(prefix: string, shellIntegration: boolean): Promise<void> {
+  const repo = seedPrebootstrappedAppLoopFlowRepo(`${prefix}-`);
+  rmSync(join(repo, '.claude'), { recursive: true, force: true });
+  const home = mkdtempSync(join(tmpdir(), `${prefix}-home-`));
+  const { binDir, logFile } = seedFakeGhGit(`${prefix}-bin-`);
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  // Launched as `claude`, so with shell integration the app identifies it as Claude Code, as it would the real one.
+  cpSync(join(binDir, 'fake-agent'), join(binDir, 'claude'));
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', ...(shellIntegration ? {} : { APP_SHELL_INTEGRATION: '0', APP_LAUNCH_DIR: repo }), HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('claude');
+  await flowControl().click();
+  // Without shell integration the app cannot tell this script is Claude Code, so Start asks for no restart; the
+  // check before the review still does.
+  if (shellIntegration) await expect(page.locator('#flow-strip .flow-notice')).toContainText(/restart/i, { timeout: 10_000 });
+  else await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  await expectLoopMessage('error', 'after your agent session started', /restart/i);
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  expect(log()).not.toContain('Spawn each reviewer');
+  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+
+  await focusTerminal();
+  await page.keyboard.press('Control+C');
+  await typeCommand('claude');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
+
+  await expect.poll(() => log().includes('Spawn each reviewer'), { timeout: 40_000 }).toBe(true);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+}
+
+test('§27.4 — a run whose reviewers were installed after its agent session started stops before the review, and runs it once the session is restarted', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
+  await restartsAfterLateReviewerInstall('agent-term-e2e-v2-restart', true);
+});
+
+test('§27.4 — without shell integration (as under zsh), restarting the agent session still lets the review run', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
+  await restartsAfterLateReviewerInstall('agent-term-e2e-v2-restart-noint', false);
 });
 
 test('§27.3 — the bundled loop brief reaches both the work prompt and the review-and-fix prompt', { tag: '@ownapp' }, async () => {
@@ -3013,6 +3143,11 @@ test('§27.3 — the bundled loop brief reaches both the work prompt and the rev
   const rule = 'No acceptance criterion may be deferred';
   const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
   await expect.poll(() => log().includes('Spawn each reviewer'), { timeout: 40_000 }).toBe(true);
+  // §27.4 — the reviewers were already in place before the agent started, so Start asked for no restart.
+  await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
+  // §27.4 — the reviewers ran from the run folder; the operator's agents folder holds none.
+  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+  expect(existsSync(join(exampleConfigDir, 'agents'))).toBe(false);
   await expect.poll(() => log().lastIndexOf(rule) > log().indexOf('Spawn each reviewer'), { timeout: 15_000 }).toBe(true);
   const workPart = log().slice(0, log().indexOf('Spawn each reviewer'));
   expect(workPart).toContain(rule);
@@ -3123,6 +3258,7 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
 function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3404,9 +3540,22 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     await expect(page.getByRole('alertdialog').filter({ hasText: 'could not be removed' })).toHaveCount(0);
 
     rmSync(saved, { recursive: true, force: true });
+    // §27.4 — Restart installs the flow's reviewers again, so one the operator deleted is back.
+    const reviewer = join(repo, '.claude', 'agents', `plan-loop--${PLAN_V2_ROSTER[0]}.md`);
+    rmSync(reviewer);
+    // §18.7.4 AC11 — while a live peer holds the worktree lock, Restart is refused with the reason and installs nothing.
+    const lockFile = worktreeLockFile(worktreeLockRoot(home), repo);
+    mkdirSync(dirname(lockFile), { recursive: true });
+    writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
+    const locked = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
+    expect(locked.notice).toContain('Another Agent Terminal window');
+    expect(locked.status).toBe('done');
+    expect(existsSync(reviewer)).toBe(false);
+    rmSync(lockFile);
     const restarted = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
     expect(restarted.notice ?? '').not.toContain('Not restarted');
     expect(restarted.status).toBe('in_progress');
+    expect(existsSync(reviewer)).toBe(true);
   } finally {
     rmSync(repo, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -3448,6 +3597,7 @@ test('Terminate still ends a run held for its ticket and PR (§27.13)', { tag: '
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3463,9 +3613,32 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
   return dir;
 }
 
+function seedAppChainStepRefRepo(prefix: string, pr: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
+  mkdirSync(stepLibraryDir(dir), { recursive: true });
+  writeFileSync(
+    join(stepLibraryDir(dir), 'plan-step.yaml'),
+    'kind: loop\nloop: plan-loop\nloop_namespace: app\ninputs:\n  - name: ticket\n    type: github-ticket\n  - name: pr\n    type: pr\n',
+  );
+  writeFileSync(join(stepLibraryDir(dir), 'implement-step.yaml'), 'kind: loop\nloop: infra-loop\nloop_namespace: app\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-chain-refs\nsteps:\n  - step: plan-step\n    id: plan\n  - step: implement-step\n    id: implement\n',
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
+  );
+  seedCompletedAppBootstrap(dir);
+  return dir;
+}
+
 function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3494,12 +3667,13 @@ function seedPickupCatalogEntry(home: string, id: string, name: string, extraSte
 // #167 AC 1 (§18.7.5). The budget covers the longest stalled path so a mutant's red is a named assertion, never a
 // test timeout.
 const FLOW_X_ID = 'flow-x-pinned';
-const FLOW_X_STEPS = ['x-groom', 'pickup', 'x-review', 'x-ship'];
 const FLOW_Y_STEPS = ['y-alpha', 'y-beta'];
 const PIN_WAIT = { firstPaint: 15_000, pickupOutcome: 30_000, verdict: 40_000, ui: 10_000 } as const;
 const PIN_GREEN_MS = 9_000;
 const stripStepNames = () => page.locator('#flow-strip .flow.vert .stn .nm');
-const rail = (steps: string[]): string[] => ['Not started', ...steps, 'Completed'];
+const rail = (labels: string[]): string[] => ['Not started', ...labels, 'Completed'];
+const FLOW_X_LABELS = ['X groom', 'Pickup', 'X review', 'X ship'];
+const FLOW_Y_LABELS = ['Y alpha', 'Y beta'];
 const pickerTrigger = () => flowPicker().locator('.flow-picker-trigger');
 const pickerOption = (id: string) => flowPicker().getByRole('option', { name: new RegExp(id) });
 const budget = (uiWaits: number): number =>
@@ -3574,6 +3748,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
   mkdirSync(join(repo, '.git'));
+  installBundledRunReviewers(repo);
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'pickup');
 
   await typeCommand(`cd "${repo}"`);
@@ -3582,7 +3757,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   await expect(pickerTrigger()).toBeEnabled({ timeout: PIN_WAIT.ui });
   await pickerTrigger().click();
   await pickerOption(FLOW_X_ID).click();
-  await expect(stripStepNames()).toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames()).toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect(pickerTrigger()).toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await expect.poll(() => readActiveFlow(repo), { timeout: PIN_WAIT.ui }).toEqual({ kind: 'value', id: FLOW_X_ID });
   await expect(flowControl()).toHaveText('Start', { timeout: PIN_WAIT.ui });
@@ -3594,13 +3769,13 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   if ((await loopReadout().isVisible()) && (await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await expect.soft(loopPanel().locator('[data-gate-option="approve"]'), "X's pickup step still owns the run after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
 
-  await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
-  for (const step of FLOW_Y_STEPS) await expect(stripStepNames()).not.toContainText([step], { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
+  for (const label of FLOW_Y_LABELS) await expect(stripStepNames()).not.toContainText([label], { timeout: PIN_WAIT.ui });
   await expect.soft(pickerTrigger(), 'the picker still shows X after pickup').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
 
   await terminateRun();
   expect.soft(readActiveFlow(repo), 'the selection is still X after Terminate').toEqual({ kind: 'value', id: FLOW_X_ID });
-  await expect.soft(stripStepNames(), 'the strip still shows X after Terminate').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect.soft(stripStepNames(), 'the strip still shows X after Terminate').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect.soft(pickerTrigger(), 'the picker still shows X after Terminate').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await pickerTrigger().click();
   await expect.soft(pickerOption(FLOW_Y_ID), 'Y is listed in the catalog').toBeVisible({ timeout: PIN_WAIT.ui });
@@ -3609,7 +3784,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   await page.keyboard.press('Escape');
 
   await enterPickupStep('the second Start runs X: its pickup step asks for the ticket');
-  await expect(stripStepNames(), 'the strip shows X at the second Start').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows X at the second Start').toHaveText(rail(FLOW_X_LABELS), { timeout: PIN_WAIT.ui });
   await expect(pickerTrigger(), 'the picker shows X at the second Start').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
@@ -3622,15 +3797,14 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   const catalog = createCatalogFixture();
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(seedAppBootstrapFlowRepo('agent-term-e2e-167-unset-repo-'));
-  const localSteps = ['groom', 'plan'];
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'plan');
 
   await typeCommand(`cd "${repo}"`);
-  await expect(stripStepNames()).toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames()).toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await typeCommand('fake-agent');
   await pickUpServedTicket(repo, logFile);
   await expect.soft.poll(() => readIf(appRunState(repo)), { message: 'the local pickup step runs to its clean gate', timeout: PIN_WAIT.verdict }).toContain('verdict: clean');
-  await expect(stripStepNames(), 'the strip still shows the local flow after pickup').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip still shows the local flow after pickup').toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await terminateRun();
 
   expect.soft(readActiveFlow(repo), 'no selection was written from the ticket').toEqual({ kind: 'unset' });
@@ -3642,7 +3816,7 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   await page.keyboard.press('Escape');
 
   await enterPickupStep('the next Start runs the local flow: its pickup step asks for the ticket');
-  await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(['Groom', 'Plan']), { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
   await closeTicketPinApp(catalog, [repo, home, binDir, ticketDir]);
@@ -3657,7 +3831,6 @@ function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) =>
   const after = transform(before);
   expect(after).not.toBe(before);
   writeFileSync(defFile, after);
-  cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
   return root;
 }
 
@@ -3795,6 +3968,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-resume-refs-');
   const other = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-refs-other-'));
   mkdirSync(join(other, '.git'), { recursive: true });
+  installBundledRunReviewers(other);
   mkdirSync(join(other, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(other, '.agent-terminal', 'flow.yaml'),
@@ -4008,6 +4182,7 @@ test('a def resolved from the REPOSITORY tier declaring a pickup contract bootst
 test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (AC 10)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -4132,7 +4307,6 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   const retiredDef = join(retiredDir, 'plan-loop.yaml');
   const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
   writeFileSync(retiredDef, retiredContent);
-  cpSync(join(exampleConfigDir, 'agents'), join(config, 'agents'), { recursive: true });
   const migratedDef = join(config, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml');
   expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');
@@ -4413,7 +4587,7 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
   await expect(errorDialog).toContainText('working tree is not clean');
   await expect(errorDialog).toContainText(repo);
-  await expect(errorDialog).toContainText('plan');
+  await expect(errorDialog).toContainText('Plan');
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
   expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
@@ -4770,6 +4944,64 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§27.4 — Start installs the reviewers of every loop the flow reaches into an empty run folder, and asks no restart at a bare prompt', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainStepRefRepo('agent-term-e2e-v2-start-install-', '77');
+  rmSync(join(repo, '.claude'), { recursive: true, force: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-start-install-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-start-install-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+
+  const agents = join(repo, '.claude', 'agents');
+  await expect.poll(() => (existsSync(agents) ? readdirSync(agents) : []), { timeout: 15_000 }).toEqual(expect.arrayContaining(PLAN_V2_ROSTER.map((p) => `plan-loop--${p}.md`)));
+  expect(readdirSync(agents).some((f) => f.startsWith('infra-loop--'))).toBe(true);
+  await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a step reference chains the approved loop\'s output into the next referenced loop\'s work turn (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainStepRefRepo('agent-term-e2e-v2-chain-refs-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-chain-refs-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-chain-refs-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement');
+  await expect
+    .poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 })
+    .toContain(`- plan: ${APP_ARTIFACT_REL}`);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
 test('a branch switched away from the pickup branch stops the next step\'s work turn before it injects, naming both branches (§27.10)', { tag: '@ownapp' }, async () => {
@@ -5689,6 +5921,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // rather than erroring for want of a hosted agent; that is incidental to the Restart-clears-input behavior.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -5705,7 +5938,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom', { timeout: 10_000 });
   await typeCommand('fake-agent'); // a hosted agent is at the prompt for the §27 work turn
 
   await flowControl().click(); // Start → groom (manual, no prompt)
@@ -5724,7 +5957,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
-  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
+  await expect(flowStation(1).locator('.nm')).toHaveText('Groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
@@ -5753,7 +5986,7 @@ test('typed-input ticket + PR surface only once the flow enters the step that de
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → in_progress on the manual `groom` step
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStepName()).toHaveText('Groom');
   // The `work` step has not been entered, so nothing ref-derived shows — even though flow-state carries it.
   await expect(loopReadout()).toHaveCount(0);
 
@@ -5831,7 +6064,7 @@ test('Restart clears the ticket/PR display and wipes its resolved inputs (§24.2
   await expect(loopReadout()).toBeVisible(); // still shown at done — the `work` step was entered this run
 
   await flowControl().click(); // Restart → in_progress at the groom step, resolved inputs wiped
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStepName()).toHaveText('Groom');
   await expect(loopReadout()).toHaveCount(0); // cleared — the `work` step is no longer entered
 
   // Re-entering `work` shows nothing: Restart wiped the inputs, and (unlike the retired mirror) there is no
@@ -5862,7 +6095,7 @@ test('a §27 loop step shows a Loop read-out that expands a docked panel reflect
   await typeCommand(`cd "${repo}"`);
   // Rail: [Not started] · groom · build · [Completed]. The pre-loop manual `groom` step shows no read-out.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
-  await expect(flowStation(2).locator('.nm')).toHaveText('build');
+  await expect(flowStation(2).locator('.nm')).toHaveText('Build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
   await flowControl().click(); // Start → groom (manual): the loop step is not entered, so no read-out
@@ -5994,18 +6227,18 @@ test('changing directories swaps flow state; each repo is independent and visiti
 
   // In repo A: start the flow (→ in progress).
   await typeCommand(`cd "${repoA}"`);
-  await expect(flowStepName()).toHaveText('alpha', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Alpha', { timeout: 10_000 });
   await flowControl().click();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
   // cd into repo B: the strip shows B's step at NOT started — A's progress must not leak.
   await typeCommand(`cd "${repoB}"`);
-  await expect(flowStepName()).toHaveText('beta', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Beta', { timeout: 10_000 });
   await expect(flowStation(1)).toHaveClass(/\btodo\b/);
 
   // cd back into repo A: its in-progress state is preserved.
   await typeCommand(`cd "${repoA}"`);
-  await expect(flowStepName()).toHaveText('alpha', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Alpha', { timeout: 10_000 });
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
   // State is per-repo on disk; merely visiting B (never starting) wrote nothing there.
@@ -6055,7 +6288,7 @@ test('the definition falls back to the global flow.yaml, but state is still writ
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 }); // definition from global $HOME
+  await expect(flowStepName()).toHaveText('Global step', { timeout: 10_000 }); // definition from global $HOME
   await flowControl().click(); // Start
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
 
@@ -6074,7 +6307,7 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
     page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await typeCommand(`cd "${repo}"`);
-    await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   };
 
   await launch();
@@ -6103,7 +6336,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → in progress
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowDerived()).toContainText('0 / 0', { timeout: 10_000 }); // derived live status, no todos yet
@@ -6135,7 +6368,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start
 
   await openQuickSend('todo');
@@ -6174,7 +6407,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await expect(flowControl()).toHaveText('Start');
 
   await flowControl().click();
@@ -6216,7 +6449,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
   await flowControl().click(); // Start → step active
 
   await openQuickSend('todo');
@@ -6248,7 +6481,7 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStepName()).toHaveText('Groom ticket', { timeout: 10_000 });
 
   // A busy shell that keeps OUTPUT flowing (printf every 0.2s < QUIET_MS 1s), not a silent `cat`:
   // the running loop holds the OSC-133 command span open (so isShellBusy refuses Start) AND keeps the
@@ -6617,7 +6850,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'launch-marker.md' })).toHaveCount(1);
 
     // At launch the cwd IS launchDir, so its LOCAL flow.yaml drives the strip — the local-first tier.
-    await expect(flowStepName()).toHaveText('launch-local-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Launch local step', { timeout: 10_000 });
 
     // Shell cwd (§5): pwd reports the launch dir before any cd.
     await page.keyboard.press('Control+1');
@@ -6629,7 +6862,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     // Flow global dir (§18.1) = $HOME, not L: cd into a repo with no local flow; the global flow
     // resolves from HOME (home-global-step), NOT the launch dir's local flow.
     await typeCommand(`cd "${noFlowRepo}"`);
-    await expect(flowStepName()).toHaveText('home-global-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Home global step', { timeout: 10_000 });
   } finally {
     await launched.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
     rmSync(launchDir, { recursive: true, force: true });
@@ -6684,7 +6917,7 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
     // Flow global dir (§18.1) = $HOME: cd into a repo with no local flow; the global flow under home
     // resolves — the bogus target never anchors the flow global dir.
     await typeCommand(`cd "${noFlowRepo}"`);
-    await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 });
+    await expect(flowStepName()).toHaveText('Global step', { timeout: 10_000 });
   } finally {
     await launched.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
     rmSync(home, { recursive: true, force: true });
@@ -6798,6 +7031,7 @@ function seedFlowRepoBase(
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
+  installBundledRunReviewers(dir);
   g('config', 'user.email', 't@t');
   g('config', 'user.name', 'T');
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
@@ -6811,6 +7045,7 @@ function seedFlowRepoBase(
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
   if (opts.flowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  seedBundledStepLibrary(dir);
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
@@ -7347,6 +7582,7 @@ function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntr
   });
   if (entry !== undefined) {
     writeCatalogEntry(entry.home, entry.id, flowYaml.replace(/^name:.*$/m, `name: ${JSON.stringify(entry.name)}`));
+    seedBundledStepLibrary(entry.home);
     writeActiveFlow(dir, entry.id);
   }
   mkdirSync(join(dir, V3_ART), { recursive: true });
@@ -7566,12 +7802,12 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
-  await expect(backToRed).toHaveText('Back to red'); // named after the flow's return step
+  await expect(backToRed).toHaveText('Back to Red'); // named after the flow's return step
   await backToRed.click();
   // The composer opens; submitting it empty is a plain reopen (the brief is optional).
   const composer = page.locator('#feedback-composer-host .flow-modal');
   await expect(composer).toBeVisible({ timeout: 10_000 });
-  await expect(composer.locator('.confirm')).toHaveText('Back to red'); // the composer is told the same return step
+  await expect(composer.locator('.confirm')).toHaveText('Back to Red'); // the composer is told the same return step
   await composer.locator('.confirm').click();
   await expect(composer).toHaveCount(0, { timeout: 15_000 });
 
@@ -7680,9 +7916,10 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
   test.setTimeout(chainBudget(4));
   const SLICE_STEPS = ['red', 'green', 'refactor', 'integration-slice'];
   const returnToInfra = (yaml: string): string => {
-    const flow = load(yaml) as { steps: { id: string; repeat?: unknown }[] };
-    flow.steps = flow.steps.filter((st) => !SLICE_STEPS.includes(st.id));
-    for (const st of flow.steps) if (st.id === 'impl-approve') st.repeat = { back_to: 'infra', count_input: 'never-repeats' };
+    const flow = load(yaml) as { steps: { id?: string; step?: string; repeat?: unknown }[] };
+    const idOf = (st: { id?: string; step?: string }): string | undefined => st.id ?? st.step;
+    flow.steps = flow.steps.filter((st) => !SLICE_STEPS.includes(idOf(st) ?? ''));
+    for (const st of flow.steps) if (idOf(st) === 'impl-approve') st.repeat = { back_to: 'infra', count_input: 'never-repeats' };
     return dump(flow);
   };
   const repo = seedV3ChainRepo('agent-term-e2e-retbrief-', { startStep: 'infra', editFlow: returnToInfra });
@@ -7712,7 +7949,7 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
   await atImplApprove();
   const BRIEF = 'Cover the empty-input case the tests missed';
   const backTo = loopPanel().locator('[data-gate-option="back-to-red"]');
-  await expect(backTo).toHaveText('Back to infra');
+  await expect(backTo).toHaveText('Back to Infra');
   await backTo.click();
   const composer = page.locator('#feedback-composer-host .flow-modal');
   await expect(composer).toBeVisible({ timeout: 10_000 });
@@ -7745,6 +7982,7 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
 function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
+  installBundledRunReviewers(dir);
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
   writeFileSync(

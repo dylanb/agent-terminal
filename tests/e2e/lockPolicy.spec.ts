@@ -48,7 +48,7 @@ test('a lockfile whose holder cannot be identified refuses the pick and Start, s
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
 
   const remedy = unidentifiedHolderRemedy(lockFile);
   const pointerBefore = readActiveFlow(repo);
@@ -87,7 +87,7 @@ test('an unusable lock directory blocks neither Start nor Terminate, and the fil
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
 
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
@@ -103,7 +103,7 @@ test('a Terminate while a live peer holds the worktree lock is refused, shows it
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
 

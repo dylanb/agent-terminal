@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowManager } from '../../src/main/flow';
+import { isSelectionLocked } from '../../src/shared/flowStarted';
 
 // The flow follows the terminal's cwd, mirroring the repo-scoped todo logic (§16.3): the flow
 // manager is keyed by repoKey (a git root, or a plain dir), each key owning its own definition
@@ -140,5 +141,72 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     } finally {
       rmSync(plain, { recursive: true, force: true });
     }
+  });
+});
+
+describe('flow manager: a saved run past a deciding step whose decision flow.yaml no longer allows', () => {
+  let repo: string;
+  let home: string;
+  const branched = (values: string, yValue: string): string =>
+    [
+      'name: branched',
+      'steps:',
+      `  - { id: d, kind: loop, loop: l, decides: [${values}] }`,
+      '  - { id: x, kind: manual, when: { d: a } }',
+      `  - { id: y, kind: manual, when: { d: ${yValue} } }`,
+      '  - { id: z, kind: manual, when: { d: a } }',
+      '',
+    ].join('\n');
+  const flowFile = (): string => join(repo, '.agent-terminal', 'flow.yaml');
+  const stateFile = (): string => join(repo, '.agent-terminal', 'flow-state.yaml');
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'flow-mgr-stranded-'));
+    home = mkdtempSync(join(tmpdir(), 'flow-mgr-stranded-home-'));
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(stateFile(), ['step: y', 'status: in_progress', 'inputs:', "  ticket: '176'", 'decisions:', '  d:', '    value: b', ''].join('\n'));
+    writeFileSync(flowFile(), branched('a, c', 'c'));
+  });
+  afterEach(() => {
+    for (const d of [repo, home]) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('is not resumed: the operator sees why, naming the step and the value, and is offered Terminate', () => {
+    const v = createFlowManager({ globalDir: home }).state(repo);
+    expect(v.status).toBe('error');
+    expect(v.error).toContain('"d"');
+    expect(v.error).toContain('"b"');
+    expect(isSelectionLocked(v.runStarted)).toBe(true);
+  });
+
+  it('moves nothing while it is held', () => {
+    const mgr = createFlowManager({ globalDir: home });
+    expect(() => mgr.advance(repo)).toThrow();
+    expect(mgr.pendingDecision(repo)).toBeNull();
+    expect(readFileSync(stateFile(), 'utf8')).toMatch(/^step: y$/m);
+  });
+
+  it('resumes where it was once flow.yaml allows the value again', () => {
+    const mgr = createFlowManager({ globalDir: home });
+    expect(mgr.state(repo).status).toBe('error');
+    writeFileSync(flowFile(), branched('a, b', 'b'));
+    const v = mgr.state(repo);
+    expect([v.status, v.stepName]).toEqual(['in_progress', 'y']);
+    expect(v.decisions).toEqual({ d: { value: 'b' } });
+  });
+
+  it('Terminate resets it, and a new run starts at the deciding step', () => {
+    const mgr = createFlowManager({ globalDir: home });
+    const t = mgr.terminate(repo);
+    expect([t.outcome, t.view.status]).toEqual(['reset', 'not_started']);
+    expect(mgr.start(repo).stepName).toBe('d');
+  });
+
+  it('a saved run past the deciding step with nothing left that waits on it still resumes', () => {
+    writeFileSync(
+      flowFile(),
+      ['name: branched', 'steps:', '  - { id: d, kind: loop, loop: l, decides: [a, c] }', '  - { id: x, kind: manual, when: { d: a } }', '  - { id: y, kind: manual }', ''].join('\n'),
+    );
+    const v = createFlowManager({ globalDir: home }).state(repo);
+    expect([v.status, v.stepName]).toEqual(['in_progress', 'y']);
   });
 });

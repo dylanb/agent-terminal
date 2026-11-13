@@ -11,6 +11,7 @@ export interface CliHost {
   isDevBuild: boolean;
   mainScript: string | undefined;
   cwd: string;
+  mainDir: string;
 }
 
 export function cliRuntime(host: CliHost): RuntimeInfo {
@@ -18,7 +19,7 @@ export function cliRuntime(host: CliHost): RuntimeInfo {
     home: host.home,
     shell: resolveShellPath(host.env, host.user.shell ?? undefined),
     currentPath: host.env.PATH ?? '',
-    invocation: resolveLaunchInvocation(host.execPath, host.isDevBuild, host.mainScript, host.cwd, appImageFactsFromEnv(host.env)),
+    invocation: resolveLaunchInvocation(host.execPath, host.isDevBuild, host.mainScript, host.cwd, host.mainDir, appImageFactsFromEnv(host.env)),
     uid: host.user.uid,
   };
 }

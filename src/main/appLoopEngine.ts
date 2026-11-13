@@ -17,11 +17,12 @@
 // signal, the stall timer, the §27 loop-state writer, and the flow — never the primitives behind them.
 
 import path from 'node:path';
+import { reviewerFix } from './reviewerPlacement';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy, SelfCheck } from './loopDefV2';
+import { decisionOutput, type ArtifactBinding, type LoopDefV2, type LoopDefV2Result, type PolishPolicy, type SelfCheck } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type DecisionPrompt, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -44,7 +45,7 @@ import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterru
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
-import type { AgentKind } from './agentKind';
+import type { AgentKind } from '../shared/agentKind';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -203,8 +204,9 @@ export interface AppLoopEngineDeps {
   currentBranch(repoDir: string): GitBranchRead;
   /** §27.10 */
   pickupBranch(repoDir: string): PickupBranch;
-  /** §27.4 — why this reviewer cannot run as the agent `kind` installed for it carrying its charter, or null when it can. */
-  reviewerAgentProblem(reviewer: RosterEntry, kind: AgentKind): string | null;
+  /** §27.4 — installs what the agent `kind` loads from this run folder, then names every reviewer that still
+   *  cannot run as the agent installed for it carrying its charter; empty when every one can. */
+  ensureReviewersRunnable(repoDir: string, reviewers: readonly RosterEntry[], kind: AgentKind): string[];
   /** §27.4 */
   hostedAgentKind(): AgentKind;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
@@ -216,6 +218,9 @@ export interface AppLoopEngineDeps {
   sliceBrief(repoDir: string): SliceBrief | null;
   /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
   reopenStep(repoDir: string): string | null;
+  stepDecides(repoDir: string, stepId: string): readonly string[] | null;
+  /** Delete a deciding step's decision file; a missing file is not an error. The caller wraps it best-effort. */
+  clearDecision(file: string): void;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
@@ -310,6 +315,7 @@ type ActiveAppTurn =
       inputs?: ChainedInput[];
       /** §27.10 */
       reportSections?: SectionedOutput[];
+      decisionRel?: string;
       /** §27.3 */
       run: WorkRun;
       /** §27.3 */
@@ -357,6 +363,7 @@ type ActiveAppTurn =
       inputs?: ChainedInput[];
       /** §27.3 */
       briefPath?: string;
+      decisionRel?: string;
     }
   | {
       phase: 'consolidate';
@@ -515,6 +522,11 @@ function isPhaseRound(c: Extract<ActiveAppTurn, { phase: 'review' }>['completion
   return c.kind === 'red-report' || c.kind === 'green-report' || c.kind === 'refactor-report';
 }
 
+function decisionRelField(def: LoopDefV2): { decisionRel?: string } {
+  const output = decisionOutput(def);
+  return output === undefined ? {} : { decisionRel: output.rel };
+}
+
 function activeTurnFor(
   repoDir: string,
   loopName: string,
@@ -558,6 +570,7 @@ function activeTurnFor(
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
     ...(sectionedOf(def.outputs).length > 0 ? { reportSections: sectionedOf(def.outputs) } : {}),
     ...(def.work.selfCheck !== undefined ? { selfCheck: def.work.selfCheck } : {}),
+    ...decisionRelField(def),
   };
 }
 
@@ -1137,13 +1150,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return kindRead.kind;
   };
 
-  const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
+  const ensureReviewersOrRefusal = (repoDir: string, reviewers: RosterEntry[]): string | null => {
     if (reviewers.length === 0) return null;
     const kind = hostedKind();
-    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind)).filter((p): p is string => p !== null);
+    const problems = deps.ensureReviewersRunnable(repoDir, reviewers, kind);
     if (problems.length === 0) return null;
-    const installed = kind === 'codex' ? 'the Codex agents' : 'the Claude Code sub-agents';
-    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. ${reviewerFix(kind)}. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
   /** §27.10 */
@@ -1177,6 +1189,22 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   const readBrief = (a: { briefPath?: string }): string | undefined | null =>
     a.briefPath === undefined ? undefined : deps.readRecipe(a.briefPath);
+
+  const decisionFor = (a: { repoDir: string; stepId: string; decisionRel?: string }): { decision?: DecisionPrompt } => {
+    const decides = a.decisionRel !== undefined ? deps.stepDecides(a.repoDir, a.stepId) : null;
+    if (a.decisionRel === undefined || decides === null) return {};
+    return { decision: { rel: a.decisionRel, values: decides, checkCommand: deps.artifactCheckCommand({ kind: 'decision', rel: a.decisionRel, values: [...decides] }) } };
+  };
+
+  const clearDecision = (repoDir: string, loopName: string, stepId: string, def: LoopDefV2, moment: 'enter' | 'redo'): void => {
+    const output = decisionOutput(def);
+    if (output === undefined || deps.stepDecides(repoDir, stepId) === null) return;
+    try {
+      deps.clearDecision(output.path);
+    } catch (e) {
+      deps.audit(repoDir, `§27 ${loopName} ${stepId} ${moment} clear-decision failed: ${errMsg(e)}`, 1);
+    }
+  };
 
   runner = createTurnRunner({
     compose: (turnKey, retry) => {
@@ -1226,6 +1254,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(loopBrief !== undefined ? { loopBrief } : {}),
           ...(isPhaseRound(active.completion) ? { slice: deps.currentSlice(active.repoDir) } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
+          ...decisionFor(active),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
           ...(active.completion.kind === 'refactor-report'
@@ -1253,6 +1282,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         ...promptIntent(workRefs),
+        ...decisionFor(active),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
@@ -1320,8 +1350,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     injectionRefusal: () => {
       if (!active) return null;
       const reviewers = active.phase === 'review' ? active.reviewers : active.phase === 'work' && active.run.kind === 'goal' ? active.run.reviewers : [];
-      // §27.2 — with no agent at the prompt the runner says so; which agent's reviewers to check is unknowable.
-      return offPickupBranch(active.repoDir) ?? (deps.hostedAgent() === 'absent' ? null : reviewerAgentsRefusal(reviewers));
+      const offBranch = offPickupBranch(active.repoDir);
+      if (offBranch !== null) return offBranch;
+      // §27.4 — installed even with no agent at the prompt, so the session the operator starts next loads them; the
+      // refusal itself waits for an agent (§27.2: with none at the prompt the runner says so).
+      const reviewersRefusal = ensureReviewersOrRefusal(active.repoDir, reviewers);
+      return deps.hostedAgent() === 'absent' ? null : reviewersRefusal;
     },
     completionShortfall,
     unretryableShortfall: () => {
@@ -1465,6 +1499,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       ...(subject !== null ? { subjectRel: subject.rel } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
       ...(r.def.brief !== undefined ? { briefPath: r.def.brief } : {}),
+      ...decisionRelField(r.def),
     };
   };
 
@@ -1778,6 +1813,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
       }
       setCarry(repoDir, stepId, ids);
+      clearDecision(repoDir, loopName, stepId, r.def, 'enter');
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs, ...(opts?.slice !== undefined ? { slice: opts.slice } : {}) }), opts?.deferRequest === true);
       return 'entered';
     },
@@ -2150,6 +2186,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!r.ok) return false;
       const { ids, inputs } = reEnter(repoDir, stepId, r.def, state);
       setCarry(repoDir, stepId, ids);
+      clearDecision(repoDir, state.loop, stepId, r.def, 'redo');
       start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs }));
       return true;
     },

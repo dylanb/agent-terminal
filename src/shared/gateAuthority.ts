@@ -17,11 +17,13 @@ export const AUTO_HALT_REASONS = [
   'relaunched',
   'epic-promotion',
   'approve-not-persisted',
+  'decision-held',
+  'decision-invalid',
   'stop-for-a-human',
 ] as const;
 export type AutoHaltReason = (typeof AUTO_HALT_REASONS)[number];
 
-type AutoHaltLetter = 'a' | 'b' | 'c' | 'd' | 'e' | 'h' | 'i' | 'j' | 'k' | 'l';
+type AutoHaltLetter = 'a' | 'b' | 'c' | 'd' | 'e' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n';
 
 // §27.9.1 N9b.6 letters; `stop-for-a-human` is the §27.6 verdict and carries none.
 const AUTO_HALT: Record<AutoHaltReason, { letter: AutoHaltLetter | null; label: string }> = {
@@ -35,6 +37,8 @@ const AUTO_HALT: Record<AutoHaltReason, { letter: AutoHaltLetter | null; label: 
   relaunched: { letter: 'j', label: 'relaunched' },
   'epic-promotion': { letter: 'k', label: 'epic promotion' },
   'approve-not-persisted': { letter: 'l', label: 'approve did not persist' },
+  'decision-held': { letter: 'm', label: 'decision held' },
+  'decision-invalid': { letter: 'n', label: 'decision invalid' },
   'stop-for-a-human': { letter: null, label: 'stop for a human' },
 };
 

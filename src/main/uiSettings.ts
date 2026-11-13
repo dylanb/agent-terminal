@@ -50,6 +50,10 @@ function coerceKeymapProfile(raw: unknown, fallback: KeymapProfileSetting): Keym
   return raw === 'auto' || raw === 'mac' || raw === 'pc' ? raw : fallback;
 }
 
+function coerceBoolean(raw: unknown, fallback: boolean): boolean {
+  return typeof raw === 'boolean' ? raw : fallback;
+}
+
 function coerceChord(raw: unknown): Chord | null {
   if (!isRecord(raw) || typeof raw.key !== 'string') return null;
   const c: Chord = { key: raw.key };
@@ -83,6 +87,7 @@ function coerce(raw: unknown, base: UiSettings): UiSettings {
     theme: coerceTheme(r.theme, base.theme),
     artifactTreeWidth: coerceWidth(r.artifactTreeWidth, base.artifactTreeWidth),
     keymapProfile: coerceKeymapProfile(r.keymapProfile, base.keymapProfile),
+    showTokenCounts: coerceBoolean(r.showTokenCounts, base.showTokenCounts),
   };
   const fs = coerceFsWidth(r.artifactFullscreenTreeWidth, base.artifactFullscreenTreeWidth);
   if (fs !== undefined) out.artifactFullscreenTreeWidth = fs; // omit when unset so it never persists as null

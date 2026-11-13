@@ -1,35 +1,38 @@
 # Runs the vitest suites — the `node` project (tests/unit + tests/integration) and the `browser`
 # project (tests/browser), which runs in real Chromium. Both are fast; neither needs a display server,
 # so this job stays separate from the Electron e2e workflow.
-# A PR merges on its local test proof (docs/test-proof.md), so this runs only on the push to main that
-# the merge creates: the check that the proofs were honest. Lint and typecheck gate PRs in lint.yml.
-# The authoritative pass tally is this job's live run, not a number pinned here that drifts on the
-# next test added.
 name: test
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.sha }}
+  group: test-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   test:
+    name: test
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm

@@ -25,7 +25,7 @@ First in the plan, so the operator reads it before anything else:
 ```
 ## Fit
 
-Simple-dev fit: yes | no
+Light-path fit: yes | no
 - No RED/GREEN dependency: holds | fails — <evidence>
 - Estimated size: <n> lines (production <p>, test <t>) — holds | fails
 - No new test infrastructure: holds | fails — <evidence>
@@ -90,7 +90,7 @@ take precedence over anything the method says:
   Never stop to ask a question.
 - **Re-review is yours.** Your own review passes re-check the polished plan, so "Re-review?" informs them; it
   does not need to request anything.
-- **The plan's own tokens.** Keep `## Fit`, `Simple-dev fit:`, `## Scrutiny flags`, `## Increments`,
+- **The plan's own tokens.** Keep `## Fit`, `Light-path fit:`, `## Scrutiny flags`, `## Increments`,
   `### Increment` and `Acceptance criteria:` exactly as written: the next steps look for them by name.
 
 ---

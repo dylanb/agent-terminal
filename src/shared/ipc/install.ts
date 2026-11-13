@@ -35,6 +35,7 @@ export type CliInstallResult =
 export const INSTALL_DESTINATION_IDS = [
   'flow',
   'flowCatalog',
+  'stepLibrary',
   'appLoops',
   'commands',
   'agents',
@@ -86,10 +87,15 @@ export interface InstallExamplesApplyMsg {
   removeRetired: boolean;
 }
 
-/** §18.1. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
+/** §18.1. A `retired-flow` entry is a whole folder or a single file directly under the destination's root;
+ *  a `moved-loop` entry is a loop folder inside a flow's folder whose loop now lives in the shared folder; a
+ *  `moved-reviewer` entry is a Claude Code reviewer sub-agent file an older build wrote to the user's agents
+ *  folder, where reviewers are no longer installed. */
+export type RetiredKind = 'retired-flow' | 'moved-loop' | 'moved-reviewer';
 export interface RetiredExample {
   destination: InstallDestinationId;
   rel: DestRelativePath;
+  kind: RetiredKind;
 }
 
 /** A file's path relative to the root of the destination it installs under. A plain `string` is not

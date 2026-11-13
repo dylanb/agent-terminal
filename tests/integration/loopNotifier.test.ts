@@ -4,7 +4,7 @@ import type { NotificationCondition } from '../../src/shared/controllerProtocol'
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
 const REPO = '/repo';
-const BASE: FlowStateView = { stepName: 'build', runStarted: 'never-started' as const, steps: ['build'], position: 1, total: 1, status: 'in_progress' };
+const BASE: FlowStateView = { stepName: 'build', runStarted: 'never-started' as const, steps: ['build'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress' };
 
 const view = (status: string, iteration: number | undefined, humanNeeded: boolean): FlowStateView => {
   const loop: FlowLoopView = {

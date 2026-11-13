@@ -2,8 +2,8 @@
 # feature-dev-v3's integration gate and finalize.
 name: simple-dev-v1
 steps:
-  - id: preparation
-    kind: manual
+  - step: dev-preparation
+    id: preparation
   - id: plan
     kind: loop
     gate_authority: auto
@@ -14,11 +14,9 @@ steps:
       - name: ticket
         type: github-ticket
         required: true
-  - id: plan-approve
-    kind: loop
+  - step: dev-plan-approve
+    id: plan-approve
     gate_authority: human
-    loop: simple-plan-approve-loop-v1
-    loop_namespace: app
   - id: dev
     kind: loop
     gate_authority: auto
@@ -33,17 +31,12 @@ steps:
     todo_template: impl-loop-review
   # This repeat exists only to name `dev` as the step every back-to-red gate control returns to. Its count input is
   # one nothing writes, so it stays 1 and the flow never loops back, whatever an approved plan's text holds.
-  - id: impl-approve
-    kind: loop
+  - step: dev-impl-approve
+    id: impl-approve
     gate_authority: human
-    loop: simple-impl-approve-loop-v1
-    loop_namespace: app
     repeat:
       back_to: dev
       count_input: never-repeats
-  - id: finalize
-    kind: loop
+  - step: dev-finalize
+    id: finalize
     gate_authority: human
-    loop: simple-finalize-loop-v1
-    loop_namespace: app
-    todo_template: finalize
