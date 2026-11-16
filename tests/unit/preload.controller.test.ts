@@ -20,6 +20,7 @@ it('exposes only the narrow controller API to the controller window', async () =
     clearHistory: expect.any(Function),
     dismissLoopMessage: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
+    getSortMode: expect.any(Function), setSortMode: expect.any(Function),
     getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function), onAlwaysOnTopChanged: expect.any(Function),
   });
 });
@@ -27,7 +28,7 @@ it('exposes only the narrow controller API to the controller window', async () =
 it('preserves the terminal window APIs without the controller role', async () => {
   process.argv = argv.filter(value => value !== '--agent-terminal-controller-window');
   await import('../../src/preload/index');
-  expect([...exposed.keys()].sort()).toEqual(['cli', 'examples', 'flow', 'monitor', 'term', 'viewer']);
+  expect([...exposed.keys()].sort()).toEqual(['cli', 'examples', 'flow', 'monitor', 'setup', 'term', 'viewer']);
 });
 
 
@@ -65,6 +66,21 @@ it('reads and saves the controller theme through the controller bridge, with the
   expect({ read, calls: vi.mocked(ipcRenderer.invoke).mock.calls }).toEqual({
     read: 'dark',
     calls: [[CONTROLLER_CH.getTheme, { sessionId: SESSION_ID }], [CONTROLLER_CH.setTheme, { sessionId: SESSION_ID, theme: 'dark' }]],
+  });
+});
+
+it('reads and saves the controller card order through the controller bridge, with the session id', async () => {
+  process.argv = [...argv, '--agent-terminal-controller-window'];
+  await import('../../src/preload/index');
+  const { ipcRenderer } = await import('electron');
+  const { SESSION_ID } = await import('../../src/shared/ipc');
+  vi.mocked(ipcRenderer.invoke).mockClear().mockResolvedValue('recently-used');
+  const api = exposed.get('controller') as { getSortMode?(): Promise<string>; setSortMode?(sortMode: string): Promise<void> };
+  const read = await api.getSortMode?.();
+  await api.setSortMode?.('recently-used');
+  expect({ read, calls: vi.mocked(ipcRenderer.invoke).mock.calls }).toEqual({
+    read: 'recently-used',
+    calls: [['controller:getSortMode', { sessionId: SESSION_ID }], ['controller:setSortMode', { sessionId: SESSION_ID, sortMode: 'recently-used' }]],
   });
 });
 

@@ -10,7 +10,7 @@ const recorded = (): string[] => consoleError.mock.calls.map((call: unknown[]) =
 
 it.each([0, Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps known work visible when persisted ticket %s is invalid', number => {
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: number },
     } }),
     refTitle: async () => null,
@@ -26,7 +26,7 @@ it.each([0, Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps known work visible wh
 
 it.each(['Issue title', ''])('accepts only the required flow facts and a title string (%j)', async title => {
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: 219 },
       loop: { status: 'awaiting-approval', humanNeeded: true, verdictReason: 'Review required' },
     } }),
@@ -44,7 +44,7 @@ it.each(['Issue title', ''])('accepts only the required flow facts and a title s
 
 it('keeps publishing the work when a title or branch read throws before returning', async () => {
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: 219 },
     } }),
     refTitle: () => { throw new Error('title read failed'); },
@@ -63,7 +63,7 @@ it('keeps publishing the work when a title or branch read throws before returnin
 it('keeps delivering the work to every subscriber when one subscriber throws', async () => {
   let resolveTitle: (title: string | null) => void = () => {};
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: 219 },
     } }),
     refTitle: () => new Promise(resolve => { resolveTitle = resolve; }),
@@ -83,7 +83,7 @@ it('keeps delivering the work to every subscriber when one subscriber throws', a
 
 it('gives each status subscriber its own snapshot, including late subscribers', () => {
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started',
       loop: { status: 'awaiting-approval', humanNeeded: true, verdictReason: 'Review required' },
     } }),
@@ -104,7 +104,7 @@ it('gives each status subscriber its own snapshot, including late subscribers', 
 it('publishes the latest loop message beside the flow\'s own error, and none when there is none', () => {
   let loopMessage: ControllerLoopMessage | null = { id: 'm1', kind: 'notice', reason: 'nothing to commit' };
   const source = createControllerStatus({
-    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: 'quiet', loopMessage, view: {
+    current: () => ({ repoKey: '/repo', flowName: 'delivery', activity: { activity: 'quiet' }, loopMessage, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', error: 'step failed',
     } }),
     refTitle: async () => null,
@@ -126,7 +126,7 @@ function stepSource(initial: { step: string; loop: string; message: ControllerLo
   const source = createControllerStatus({
     current: () => {
       const errorReason = now.loop === 'error' ? now.errorReason ?? now.message?.reason : undefined;
-      return { repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: now.message, view: {
+      return { repoKey: '/repo', flowName: 'delivery', activity: { activity: 'active' }, loopMessage: now.message, view: {
         stepName: now.step, status: 'in_progress', runStarted: 'started', loop: { status: now.loop, ...(errorReason ? { errorReason } : {}) },
       } };
     },
@@ -257,7 +257,7 @@ function identitySource(initial: { repoKey?: string; refs?: Refs; userTitle?: st
   const titleRequests: TitleRequest[] = [];
   const branchRequests: BranchRequest[] = [];
   const source = createControllerStatus({
-    current: () => ({ repoKey: now.repoKey, flowName: 'delivery', activity: 'active', loopMessage: null, view: {
+    current: () => ({ repoKey: now.repoKey, flowName: 'delivery', activity: { activity: 'active' }, loopMessage: null, view: {
       stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ...now.refs },
       ...(now.userTitle !== undefined ? { userTitle: now.userTitle } : {}),
     } }),

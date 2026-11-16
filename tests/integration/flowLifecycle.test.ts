@@ -25,6 +25,7 @@ import { createPendingNotices } from '../../src/main/pendingNotices';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import type { FlowStateView } from '../../src/shared/ipc';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) T6a / T6b — the flow lifecycle owns every Terminate's side effects and takes the worktree lock itself,
 // so the UI route and the engine ports alike are refused while a live or unidentifiable peer holds it; a rebind's
@@ -60,7 +61,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     const wt = fx.makeWorktree(opts.worktreeName ?? 'a3-lc-wt');
     const lockRoot = join(fx.outsideDir('a3-lc-locks'), 'locks');
     const audit = createAuditRunFixture(fx.outsideDir('a3-lc-audit'), 'global-fallback');
-    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
+    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home, repoOnlyDefTiers())(k) });
     const todos = createTodoStore({ maxDoneTodos: 10 });
     const notices = createPendingNotices();
     const effects = { monitorCleared: 0, flowChanged: 0, forgotten: [] as string[], released: [] as string[] };
@@ -71,7 +72,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       recovery: createHeldRunRecovery({
         lock,
         ...({
-          ...realHeldRunRecoveryDeps(home),
+          ...realHeldRunRecoveryDeps(home, repoOnlyDefTiers()),
           terminate: (k: string) => manager.terminate(k),
           selectIfUnlocked: gateModule.selectIfUnlocked,
         } satisfies Omit<HeldRunRecoveryDeps, 'lock'>),
@@ -633,7 +634,7 @@ describe('the flow manager names why a Terminate was refused (A3 T6b)', () => {
     const home = fx.makeWorktree('a3-mgr-fail-home');
     fx.writeFlowHome(home, { name: 'g', stepIds: ['s1'] });
     const wt = fx.makeWorktree('a3-mgr-fail-wt');
-    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
+    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home, repoOnlyDefTiers())(k) });
     expect(manager.start(wt).status).toBe('in_progress');
 
     expect(withReadOnlyFlowHome(wt, () => manager.terminate(wt))).toMatchObject({ outcome: 'refused', cause: 'failed' });

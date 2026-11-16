@@ -1003,7 +1003,7 @@ describe('createRealAppBootstrapGitHub — repository pinning', () => {
       '#!/usr/bin/env bash\n' +
         'printf \'%s GH_REPO=%s\\n\' "$*" "${GH_REPO-unset}" >> "$FAKE_GH_LOG"\n' +
         'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
-        'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then printf \'%s\\n\' "https://github.com/owner/repository/pull/7"; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then case " $* " in *" --body-file - "*) cat > "$FAKE_GH_LOG.stdin";; esac; printf \'%s\\n\' "https://github.com/owner/repository/pull/7"; exit 0; fi\n' +
         'exit 0\n',
       { mode: 0o755 },
     );
@@ -1052,11 +1052,24 @@ describe('createRealAppBootstrapGitHub — repository pinning', () => {
     }
   });
 
+  it('sends the draft PR body on stdin, never on the command line', async () => {
+    const github = createRealAppBootstrapGitHub(repo, createGitHubRepositorySource(repo));
+    const body = 'Closes #78\n\nA body that must not travel as an argument.';
+
+    await github.createDraftPr({ base: 'main', head: 'plan-loop/issue-78', title: 'title', body });
+
+    const argv = readFileSync(log, 'utf8');
+    expect.soft(argv).not.toContain('must not travel');
+    expect.soft(argv.split('\n').find((line) => line.startsWith('pr create'))).toContain('--body-file -');
+    expect.soft(readFileSync(`${log}.stdin`, 'utf8')).toBe(body);
+  });
+
   it('refuses a created PR URL that names another repository', async () => {
     writeFileSync(
       join(root, 'gh'),
       '#!/usr/bin/env bash\n' +
         'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'case " $* " in *" --body-file - "*) cat > /dev/null;; esac\n' +
         'printf \'%s\\n\' "https://github.com/attacker/other/pull/7"\n',
       { mode: 0o755 },
     );

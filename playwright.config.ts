@@ -2,6 +2,9 @@ import { defineConfig } from '@playwright/test';
 import { availableParallelism } from 'node:os';
 import { resolveE2eWorkers } from './playwright.workers';
 
+// The e2e suite's scripted agents run as `fake-agent`; every launch inherits this unless its own env sets it.
+process.env.APP_AGENT_COMMANDS ??= 'claude,codex,fake-agent';
+
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 60_000,

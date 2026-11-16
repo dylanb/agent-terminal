@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { getConfig } from 'app-builder-lib/out/util/config/config';
+import { effectiveLinuxExecutableName } from '../helpers/linuxExecutableName';
 import { resolveWindowIconPath } from '../../src/main/appIcon';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
@@ -15,7 +17,7 @@ test('packaged controller identifies and activates independent packaged terminal
   execFileSync('pnpm', ['exec', 'electron-builder', '--dir', '--config.npmRebuild=false'], { timeout: PACKAGE_BUILD_MS, stdio: 'inherit' });
   execFileSync('pnpm', ['exec', 'electron-builder', '--dir', '--config', 'electron-builder.controller.yml', '--config.npmRebuild=false'], { timeout: PACKAGE_BUILD_MS, stdio: 'inherit' });
   const h = await createControllerDesktopHarness();
-  const install = (output: string, name: string) => {
+  const install = async (output: string, name: string, configFile: string) => {
     const directory = process.platform === 'darwin'
       ? `mac${process.arch === 'arm64' ? '-arm64' : ''}`
       : `linux${process.arch === 'arm64' ? '-arm64' : ''}-unpacked`;
@@ -23,11 +25,11 @@ test('packaged controller identifies and activates independent packaged terminal
     cpSync(resolve(output, directory), destination, { recursive: true, verbatimSymlinks: true });
     return process.platform === 'darwin'
       ? join(destination, `${name}.app`, 'Contents', 'MacOS', name)
-      : join(destination, name);
+      : join(destination, effectiveLinuxExecutableName(await getConfig(process.cwd(), configFile, null)));
   };
   try {
-    const controllerExecutable = install('dist/controller', 'agent-terminal-controller');
-    const terminalExecutable = install('dist', 'agent-terminal');
+    const controllerExecutable = await install('dist/controller', 'agent-terminal-controller', 'electron-builder.controller.yml');
+    const terminalExecutable = await install('dist', 'agent-terminal', 'electron-builder.yml');
     const resources = (executable: string) => process.platform === 'darwin'
       ? resolve(executable, '..', '..', 'Resources')
       : resolve(executable, '..', 'resources');

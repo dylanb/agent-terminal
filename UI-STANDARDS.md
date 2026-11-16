@@ -67,7 +67,7 @@ first one, and a second press starts the same action, or a related one, again.
   only after a confirmation as a press of the control that asked for it.
 - Busy controls are never `disabled`: that would blur the pressed control to `<body>` for the whole round-trip
   (WCAG 2.4.3).
-- A `no-restricted-syntax` lint rule in `eslint.config.mjs` fails any click listener or `onclick` in
+- The `local/pressable` lint rule in `eslint.config.mjs` fails any click listener or `onclick` in
   `src/renderer/` outside `pressable.ts`.
 
 ---
@@ -117,16 +117,32 @@ required services (injected `deps`) are all named. Nothing reaches outside it.
    fails on a listed one that has gone, so the list only shrinks.
 6. **Clean teardown.** `dispose()` removes every listener, timer, and node it created, so an
    organism can be unmounted from frame A and mounted in frame B without leaks.
-7. **A component that rebuilds the child components it composes keeps their state through their
-   interface.** When a rebuild replaces a child (a card rebuilt on each live update), whatever must
-   survive it (which control held focus, what the user expanded or showed in full) passes from the old
-   child to its replacement as a state value only the child can read: the old child hands it over and
-   the replacement is built from it. The parent never reads a child's markup to find that state, and
-   never keeps its own copy of state the child owns. Rule 4 keeps organisms out of each other's DOM;
-   this keeps a parent out of its children's. Otherwise renaming a child's element or attribute breaks
-   the parent, and the parent's copy drifts from the child's, as `controllerPanes` did before
-   `controllerCard`'s `state()` and `from` (the shape to copy). The parent still owns what is its own,
-   such as a layout default it passes in.
+7. **A component that composes live child components updates them in place, through an interface that
+   takes data only.** A child that stays on screen across a live update (a card on each snapshot) is kept
+   and given the new model, never rebuilt, so the focus, selection, pending press and anything the user
+   expanded or showed in full stay with it without a handover. The child's interface keeps three things
+   apart. `update(model)` takes data only. Callbacks are fixed when the child is built and receive the
+   current model, so a press always reports what the child shows now. Every other value the parent sets
+   (a layout default, a label) has exactly one setter. `update` throws when the model names a different
+   identity from the one the child was built for (another launch directory), because a kept child that
+   silently became another one carries the wrong state. `createControllerCard` (`update`,
+   `setExpandedByDefault`, `setTimeText`, `setHeld`) is the shape to copy. Where a child truly must be
+   replaced, whatever must survive passes from the old child to its replacement as a state value only the
+   child can read. Either way the parent never reads a child's markup to find that state, and never keeps
+   its own copy of state the child owns. Rule 4 keeps organisms out of each other's DOM; this keeps a
+   parent out of its children's. Otherwise renaming a child's element or attribute breaks the parent, and
+   the parent's copy drifts from the child's. The parent still owns what is its own, such as a layout
+   default it passes in.
+8. **State a component's own event handlers read stays consistent while it changes its DOM.** Moving or
+   removing a focused or hovered node fires `focusout`, `focusin` and pointer events synchronously, in the
+   middle of the change, and the component's own handlers run then. So a component swaps any state those
+   handlers read (the map from a child to its model, the set of held children) only after the DOM change
+   is complete, and moves focus to its fallback before it removes the node holding it (§4 rule 5). A flag
+   that makes the handlers ignore events during a render hides the inconsistency rather than removing it,
+   and is not a fix. `controllerPanes` once swapped its card map before reconciling its list, so a
+   `focusout` mid-render found no held card, ended the hold and re-rendered inside the render;
+   "keeps a card held by keyboard focus alone through a group change" in
+   `tests/browser/controllerHold.test.ts` pins it in real Chromium.
 
 ### 2.3 Frames are dumb
 A layout/frame's job is to hand each organism a container and wire the declared contract. A
@@ -180,7 +196,7 @@ the e2e alike.
    text. Never by tag (`button`, `h1…h6`), class, `id`, a single naming attribute (`aria-label` alone),
    or how the text is split into elements. Each component's tests go through **one** helper, and every
    query in it shares one matcher, so a `role="button"` element is found everywhere or nowhere. For the
-   controller's cards that helper is `tests/helpers/controllerCards.ts`, and a `no-restricted-syntax`
+   controller's cards that helper is `tests/helpers/controllerCards.ts`, and the `local/card-helper`
    lint rule in `eslint.config.mjs` fails a controller test that spells the card element, the card
    role or a card part's test id itself.
 2. **Check inside the element that owns the fact.** Read a card's status from that card's status row,
@@ -235,7 +251,9 @@ announcement and can create a focus trap. The rules:
    replacement *after* — but only if focus has not since moved away (it is on `<body>`, blurred there by
    the rebuild, or still inside the container), never pulling focus in when it was elsewhere and never
    stealing focus the user redirected. Compose `captureSubtreeFocus` (`dom.ts`); never hand-roll the
-   capture/guard. When a component empties its host with no replacement to land on, focus must not
+   capture/guard. A component that updates a subtree in place instead composes `reconcileChildren` (`dom.ts`):
+   it keeps every control and element the component passes again, focused one included, reuses only nodes
+   marked `content(…)`, and moves focus to a named fallback before it removes the one holding it. When a component empties its host with no replacement to land on, focus must not
    strand on `<body>`: either it signals across its contract (an `onFocusLost`-style callback) so the
    root re-places focus, or a caller contract guarantees focus is moved out *before* the emptying call —
    and the emptying entry point says which. A component never reaches across organisms to move focus
@@ -294,6 +312,28 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the shell's `setView` itself, not on its
    callers, so every caller is covered, and it shares ONE "a dialog is open" predicate with the
    loop-panel's Escape deference — two copies disagree about which roles count.
+9. **A condition the app notices opens no dialog on its own.** A modal takes keyboard input from the
+   terminal beneath it, so the operator cannot answer the shell or the agent until it closes. The app
+   shows the condition as a control instead, and the dialog opens only when that control is pressed. The
+   setup check's **setup needed** button in the status bar is the reference implementation (§29.1). This
+   rule does not cover a system alert reporting the failure of something the operator just did
+   (errorDialog), which still shows at once.
+10. **A reason a dialog is rebuilt with is part of its description (WCAG 4.1.3).** Sometimes a dialog
+    renders its card again to report why an action failed or was refused, or returns to an earlier
+    step. The reason is then written into its error line as the card is built, and that line is named in the card's `describedById`, so it is read with the dialog when
+    focus moves in. A `role="alert"` line filled in the same task that mounts the rebuilt card and moves
+    focus into it can be dropped by a screen reader: the §4 Alert pattern's host is permanent, and a
+    rebuilt card's is not. A reason added to a card already showing still goes into its alert line. The
+    setup-check popup is the reference implementation.
+11. **Content shown in more than one dialog builds its whole card; each dialog supplies only its
+    footer.** A question or form that two dialogs show is one molecule (§1.2). It builds the card from
+    the dialog's `titleId` and the dialog's own footer, and returns a whole `ModalCard`: its title, its
+    `describedById`, its `grow`/`scroll` slots, and its initial focus, which falls back to a control
+    the dialog names. It also returns an accessor for the value the operator chose. It never returns
+    loose parts with instructions for wiring them, because every dialog then repeats that wiring and
+    the copies drift. Each dialog builds only its own controls, so its accept and dismiss doors stay its
+    own (item 6). `installConsent.ts`'s `card(foot, fallbackFocus)` and `choice()` are the reference
+    implementation.
 
 **Every** blocking dialog composes `createModalShell`; this doc keeps no list of them, because the
 composer a list omits is the one that drifts. A dialog is tested like any organism
@@ -321,7 +361,8 @@ focus-restored-to-opener, and accept-is-not-dismiss.
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
-- [ ] If it rebuilds child components: their state passes to the replacements through the children's own interface, never by reading their markup or keeping a copy (UI §2.2 rule 7).
+- [ ] If it composes live child components: it updates them in place through a data-only `update` that refuses another identity, with fixed callbacks and one setter per other value; a child it must replace gets its state through the child's own interface, never by reading its markup or keeping a copy (UI §2.2 rule 7).
+- [ ] State its own event handlers read is swapped only after each DOM change completes, and focus moves to a fallback before the focused node is removed — no flag that ignores events mid-render (UI §2.2 rule 8).
 - [ ] Styled via `src/renderer/src/tokens.css`; light + dark both correct.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
@@ -332,4 +373,6 @@ focus-restored-to-opener, and accept-is-not-dismiss.
 - [ ] Every press runs through `pressable`; an action returns the promise for the work it starts, related controls share one group created per instance, a dialog's controls bind to the shell's `presses`, and a control rebuilt while its press is pending is bound under a `key` (UI §1.4).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
+- [ ] If it rebuilds its card to report a failure or refusal: the reason is written as the card is built and named in its `describedById`, not filled into a fresh alert line in the same task (UI §5 item 10).
+- [ ] If its content is shown in more than one dialog: it builds the whole `ModalCard` from the dialog's `titleId` and footer, and returns a value accessor; it never hands back parts for each dialog to wire (UI §5 item 11).
 - [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.

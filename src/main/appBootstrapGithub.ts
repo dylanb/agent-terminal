@@ -50,13 +50,14 @@ export function createRealAppBootstrapGitHub(
   repoDir: string,
   repositorySource: GitHubRepositorySource,
 ): AppBootstrapGitHub {
-  const gh = async (args: string[], failure: string): Promise<string> => {
+  const gh = async (args: string[], failure: string, stdin?: string): Promise<string> => {
     const identity = await repositorySource.resolve();
     try {
       return await runAppCommand(
         'gh',
         [...args, '--repo', identity.selector],
         repoDir,
+        stdin,
       );
     } catch (e) {
       throw new Error(`${failure}: ${errMsg(e)}`);
@@ -99,8 +100,9 @@ export function createRealAppBootstrapGitHub(
       let out: string;
       try {
         out = await gh(
-          ['pr', 'create', '--draft', '--base', base, '--head', head, '--title', title, '--body', body],
+          ['pr', 'create', '--draft', '--base', base, '--head', head, '--title', title, '--body-file', '-'],
           'draft PR creation failed',
+          body,
         );
       } catch (e) {
         throw new AmbiguousBootstrapOperationError(errMsg(e));

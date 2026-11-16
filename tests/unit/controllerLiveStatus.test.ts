@@ -2,13 +2,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bringForwardIn, cardIn, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { statusService, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
+import { statusService, statusTerminal, type WorkStatusOverrides } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
 const DIRECTORY = statusTerminal().launchDirectory;
 
-function mount(work: Partial<WorkStatus> = {}, tag = 'main') {
+function mount(work: WorkStatusOverrides = {}, tag = 'main') {
   const parent = document.createElement(tag);
   document.body.append(parent);
   const { host, service, dispose } = mountControllerPanes({ terminals: [statusTerminal(work)], parent });

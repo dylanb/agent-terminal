@@ -1,0 +1,13 @@
+# §29
+name: repo-setup
+steps:
+  - id: setup
+    kind: loop
+    gate_authority: human
+    loop: repo-setup-loop
+    loop_namespace: app
+  - id: publish
+    kind: loop
+    gate_authority: human
+    loop: repo-setup-publish-loop
+    loop_namespace: app

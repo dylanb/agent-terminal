@@ -285,7 +285,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
   });
 
   it('runs exactly the selected tests once each, with no retries, and a JSON report into the I/O directory', () => {
-    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
+    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep', 'node']);
     const io = mkdtempSync(join(tmpdir(), 'red-check-io-'));
     try {
       writeFileSync(join(io, 'select.txt'), 'tests/e2e/a.spec.ts:3\ntests/e2e/a.spec.ts:11\n');
@@ -304,7 +304,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
   });
 
   it('still runs the whole suite with the list reporter and an optional -g filter when no red-check run is asked for', () => {
-    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
+    const bin = fakeBin(['pnpm', 'Xvfb', 'sleep', 'node']);
     try {
       const r = spawnSync('bash', ['e2e/entrypoint.sh'], {
         cwd: ROOT,

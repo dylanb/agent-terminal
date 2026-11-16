@@ -26,7 +26,7 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 **Prerequisite:** install both apps and the tools they need, as described in [Install](#install), including [Before you use it](#before-you-use-it).
 
 1. **Launch the controller and Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
-2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux, read [The `agent-terminal` command](#the-agent-terminal-command) first: the `.deb` needs `~/.local/bin` on your `PATH`, and an AppImage alone cannot keep a working command.
+2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux with AppImages, read [The `agent-terminal` command](#the-agent-terminal-command) first.
 3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
 4. **Pick a flow and start it.** Open a terminal in your repo (`agent-terminal ~/path/to/repo`), choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`.
 5. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
@@ -51,9 +51,12 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **`feature-dev-v3`.** The full chain: `preparation` (manual), `groom-intent`, `groom`, `groom-approve`, `plan`, `plan-approve`, `infra`, `red`, `green`, `refactor` (repeating back to `red` for each slice), `integration-slice`, `impl-approve`, `finalize`. See [Bundled flows](#bundled-flows).
 - **`simple-dev-v1`.** The light path for a ticket that would be one `feature-dev-v3` slice: `preparation` (manual), `plan` (picks up the ticket and writes its intent), `plan-approve` (warns when the ticket is better suited to `feature-dev-v3` and flags new complexity that would go under-reviewed), `dev` (one test-driven loop with a `RED:` and a `GREEN:` commit per increment, written by Sonnet sub-agents), `integration-slice`, `impl-approve` and `finalize`. Back to dev on the `dev`, `integration-slice` and `impl-approve` gates returns the run to `dev`.
 - **`plan-only`.** Groom a ticket and produce a reviewed plan, then stop.
+- **`repo-setup`.** Gets a repository ready for agent loops with no ticket: the agent ignores `.agent-terminal/` in `.gitignore` and writes a `loop-capabilities.yaml`, you approve, then it opens a draft PR following the repository's own contribution rules.
+- **Setup check.** For the directory the terminal is in, the app checks that the installed examples are current, that git ignores the whole `.agent-terminal/` folder, and that the repository has a valid `loop-capabilities.yaml`. When something fails, a **setup needed** button appears in the status bar. Pressing it opens a popup that lists what fails and offers **Install/update examples**, **Run setup loop** (starts `repo-setup`; offered once Claude Code or Codex is running in the terminal), or a dismissal per repository or until the app updates. See [spec §29](docs/spec/29-repository-setup-check.md).
 - **Epics.** An epic-capable plan is parsed into ordered sub-tickets. At the approve gate, a confirm-first **promote** action creates them on GitHub, and the preview and the promotion read the same parse.
 - **Goal-mode work turns.** A loop step can run as an agent `/goal` session that reports progress through a validated progress file.
 - **Context hygiene.** `/clear` is sent at loop boundaries (`boundary: pre-work`), and goal loops send `/compact` as a checkpoint every `checkpoint.passes` review passes (set per loop), with an optional boundary `/compact`.
+- **Runs on an existing pull request.** A flow step can adopt a pull request instead of picking up a ticket (`pickup: { adopt: pr }`). The run takes its intent only from the tickets the PR closes, works on its own fix branch at the PR's head, and publishes nothing until you approve at the human gate. On approval it publishes one outcome: a draft fix PR into the reviewed PR's branch with a linking comment, a report comment, or a report-and-patch comment. See [spec §27.10](docs/spec/27-in-terminal-loop-engine-the-live-design.md) and §27.13.
 - **Conflict hold at pickup.** If the ticket's branch or PR already exists, the run holds and offers to inspect it, delete the branch or close the PR, each confirm-first.
 - **Runs are bound to their flow.** A started run keeps the flow definition it started with. If that definition changes or vanishes, the run is held and you can rebind or terminate it.
 
@@ -76,7 +79,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 - **Gate options.** approve, request-changes, impasse, redo, polish, and **Back to RED** (with an optional slice brief).
 - **Hand back to me.** Returns an iterating loop to you at the next consolidation.
 - **Decision boundaries.** Briefs state what the agent may decide; anything outside it surfaces under **Needs your call** at the gate.
-- **Todo checklists per stage** (ticket grooming, plan review, implementation review, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
+- **Todo checklists per stage** (plan review, implementation review, polish, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
 - **Needs-you signals.** The terminal shows a red **Loop needs you** status bar, and the controller highlights the card and tray icon. These are in-app signals, not OS notifications.
 
 ### Controller
@@ -84,14 +87,18 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 A separate tray app (see [docs/controller.md](docs/controller.md)):
 
 - One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
-- Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
+- Statuses: Working, Waiting, Idle, Needs a human, Flow error, Completed, Disconnected.
+- **Waiting · `<program>`** when the agent's screen is quiet but a command it started (a test run, a build) is still running. It counts as working, and the card reads Idle within about 5 s of the command ending. The terminal's status strip and flow strip show it too. Helpers the agent keeps running never count; if one does, list its program name in `~/.agent-terminal/helper-programs.yaml` (a YAML list, picked up within about 20 s). See [docs/controller.md](docs/controller.md#cards).
 - Each card's header shows the repository, the terminal's title (its PR's or ticket's title, else the one you gave it), its git branch and its status, so sibling checkouts of one repository are told apart even when collapsed. The branch is re-read every five minutes by default (`APP_BRANCH_REFRESH_MS`).
 - An expanded card shows a timeline of its three newest events, newest first with times: notifications, and status changes such as Working, Idle, a flow step or Disconnected. **Clear history** empties it.
+- Cards sort by **Attention** (Errors, Needs a human, Idle & unassigned, Working, each under a heading with its count, longest-waiting first) or **Recently used** (cards you used in the controller first), picked in the window header. The choice survives a restart.
+- Each card header shows how long it has been in its state, for example **Needs a human · Idle · waiting 41m**.
+- A card under your pointer, or with keyboard focus in it, holds the list still and shows **position held**, so nothing moves while you act on it. The list re-sorts when you move away.
 - Tray dot: amber when a human is needed, red on error.
 - The arrow icon in each card's header (**Bring forward**) raises the right window, collapsed or expanded. Agents sharing a directory are flagged **Duplicate directory**, and the same icon brings all of them forward.
 - An always-on-top toggle.
 
-  <img src="docs/images/controller.png" alt="The controller window showing three terminal cards: one Idle, one Needs a human · Working, and one Needs a human · Idle, with a summary of 0 errors, 1 needing a human, 1 idle and 1 working" width="480">
+  <img src="docs/images/controller.png" alt="The controller window showing six connected terminal cards grouped by attention, with a summary of 0 errors, 1 needing a human, 4 idle and 1 working" width="480">
 
 ### Proof of work and audit
 
@@ -157,15 +164,14 @@ Assets: `agent-terminal-<version>-arm64.dmg`, `agent-terminal-<version>-arm64-ma
 Assets: `agent-terminal_<version>_amd64.deb`, `agent-terminal-<version>.AppImage`, and the same two files for `agent-terminal-controller`.
 
 - **`.deb`** (Debian, Ubuntu): run `sudo apt install ./agent-terminal_<version>_amd64.deb ./agent-terminal-controller_<version>_amd64.deb` from the download folder. Launch each app from your applications menu.
-- **`.AppImage`**: run `chmod +x agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage`, then start each file (`./agent-terminal-<version>.AppImage`).
+- **`.AppImage`**: run `chmod u+x,go-w agent-terminal-<version>.AppImage agent-terminal-controller-<version>.AppImage` (executable, and writable only by you), then start each file (`./agent-terminal-<version>.AppImage`).
 
 #### The `agent-terminal` command
 
 Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. To install it, open **Settings → Command line → Install** in the app, or use the install button on the "Startup paused" card.
 
 - It goes to `~/.local/bin` (then `~/bin`) when that folder is already on the app's own `PATH` when it starts, and only you can write to it. Otherwise it goes to `~/.agent-terminal/bin`, and a block is added to your shell profile that appends that folder to `PATH`. Either way, open a new shell afterwards.
-- **Linux `.deb`:** the package also links `/usr/bin/agent-terminal` to the app itself, which is not the command. So the command must go to `~/.local/bin`, which a stock Ubuntu profile puts on `PATH` before `/usr/bin` once the folder exists. Create it (`mkdir -p ~/.local/bin`), log out and back in so the desktop session, and the app launched from it, picks it up, then install the command. In a new shell, `command -v agent-terminal` should print a path under your home folder. If it prints `/usr/bin/agent-terminal`, the app did not see `~/.local/bin`: check that `echo $PATH` lists it before `/usr/bin`, log out and back in, and install again.
-- **Linux `.AppImage`:** a command installed from an AppImage stops working when that app exits, so there is no working command with an AppImage alone. Use the `.deb` if you want the command.
+- **Linux `.AppImage`:** the command launches the AppImage file. Keep the terminal and controller AppImages together in a folder only you can write to (Install refuses a folder, or a parent folder, that others can write or that another user owns, and an AppImage file that others can write: run `chmod go-w` on the file), either with the release file names or both renamed the same way (`agent-terminal-controller` replacing `agent-terminal` at the start of the name), because `--controller` starts the sibling file. A newer AppImage with the same file name keeps the command working. If you move or rename the file, reinstall the command.
 
 #### Before you use it
 
@@ -178,6 +184,7 @@ Optional but handy. `agent-terminal [dir]` opens a new terminal rooted at `dir` 
 2. Relaunch both apps (macOS may block the replaced apps again; repeat the first-launch step).
 3. Open **Settings → Install examples** to pick up updated flows and loops. It previews the changes and asks before replacing any file you changed.
 4. If the apps moved, reinstall the `agent-terminal` command.
+5. Upgrading a Linux `.deb` from v0.2.0 or earlier: choose **Settings → Command line → Install** once. Until then plain `agent-terminal` does nothing, though `agent-terminal --controller` works.
 
 > **`simple-dev-v1`** (see [Bundled flows](#bundled-flows)) is not yet in a published release. It is available when built from source.
 
@@ -232,6 +239,7 @@ Merging is always left to a person. The definitions live in [`example/flows/`](e
 | A bug fix or small feature that fits one slice of work | `simple-dev-v1` (build from source until a release ships it) |
 | A multi-slice feature, or an epic to split into sub-tickets | `feature-dev-v3` |
 | "Plan this, don't build it" | `plan-only` |
+| Get a repository ready for agent loops (no ticket) | `repo-setup` (build from source until a release ships it) |
 
 `simple-dev-v1` runs fewer reviews. Its plan approval warns you when the ticket looks too big for it, and the way out is to terminate that run and start the ticket again under `feature-dev-v3`.
 
@@ -345,6 +353,28 @@ Legend: `manual` means a person completes the step.
 
 **When:** you want a reviewed plan to hand to someone else, or to build later.
 
+### `repo-setup`
+
+Not yet in a published release; available when built from source.
+
+**What:** Gets a repository ready for agent loops. It takes no GitHub issue. The agent adds a whole-folder `.agent-terminal/` rule to `.gitignore` if git doesn't already ignore it, and writes a `loop-capabilities.yaml` from the repository's real test files and commands if there is none, checking it with the app's own reader. Nothing is committed or pushed until you approve.
+
+**How:** start it from the picker, or with **Run setup loop** in the setup-check popup. It refuses to start while the repository already has a flow run in progress.
+
+```mermaid
+flowchart TD
+  setup["setup<br/>human"] --> publish["publish<br/>human"]
+```
+
+Legend: neither step has reviewers.
+
+**Your decisions:**
+
+- `setup` (approve or redo): review the `.gitignore` and `loop-capabilities.yaml` changes. Approve lets the agent commit them and open a draft PR, following the repository's `CLAUDE.md`, `CONTRIBUTING` and PR template; it files an issue only if those rules require one.
+- `publish` (approve or redo): approve completes the run. Merging the PR is yours.
+
+**When:** a new repository, or one the setup-check popup says is missing its ignore rule or capabilities file.
+
 ### Your own flows
 
 Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<repo>/.agent-terminal/flows/<id>/` (that repo only). When names clash, the repo copy wins. The folder form lets a flow keep its own templates beside it. See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) for the format, [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md) for the loop engine, and [§28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md) for how the full TDD chain is built.
@@ -361,6 +391,9 @@ Write a `flow.yaml` in `~/.agent-terminal/flows/<id>/` (for every repo) or `<rep
 | `APP_STARTUP_EXIT_GRACE_MS` | `1000` | A shell that exits sooner than this is treated as a startup failure, and the window stays open to show the diagnostic. |
 | `APP_SHELL_INTEGRATION` | on | `0` disables the bash OSC 133 hooks used for command capture. |
 | `APP_BRANCH_REFRESH_MS` | `300000` | How often a terminal re-reads its git branch for its controller card. A branch switch can take up to this long to show; a change of repository shows at once. Lower it (e.g. `1000`) to follow switches sooner, at the cost of one `git` process per terminal per interval. |
+| `APP_WAITING_LOOKUP_TIMEOUT_MS` | `1000` | How long one process-table lookup for **Waiting** may take before it is abandoned and read as no commands running. Raise it on a heavily loaded machine if a running command flickers between Waiting and Idle. |
+| `APP_AGENT_WAIT_MS` | `60000` | How long a loop turn waits for an agent (`claude`, `codex`, …) to reach the prompt before it stops with an error. Start the agent within this time after starting a flow. A non-finite or non-positive value falls back to the default. |
+| `APP_AGENT_COMMANDS` | `claude,codex` | Comma-separated program names that count as an agent at the terminal's prompt. Loop turns are typed only into one of these, and the setup popup offers Run setup loop only while one is running. Add another agent, or the name of your own wrapper or alias (`cc`). An empty list falls back to the default. |
 | `APP_AUTO_GATE_DECISION_MS` | `300000` | How long the engine may take to decide an `auto` gate before it hands the gate to a human. A non-finite or non-positive value falls back to the default; values above 2147483647 are clamped to it. |
 
 ## Architecture

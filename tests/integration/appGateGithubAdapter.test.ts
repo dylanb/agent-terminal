@@ -64,7 +64,7 @@ describe('real app gate GitHub adapter', () => {
         pr: null,
         ticket: 78,
         bodyFile: body,
-        bootstrap: null,
+        pickup: null,
       }),
     ).rejects.toThrow(/empty/i);
     expect(existsSync(marker)).toBe(false);
@@ -89,7 +89,7 @@ describe('real app gate GitHub adapter', () => {
       pr: null,
       ticket: 78,
       bodyFile: body,
-      bootstrap: null,
+      pickup: null,
     });
 
     expect(readFileSync(marker, 'utf8')).toBe('# Groomed\n');
@@ -112,7 +112,7 @@ describe('real app gate GitHub adapter', () => {
       pr: null,
       ticket: 78,
       bodyFile: body,
-      bootstrap: null,
+      pickup: null,
     });
 
     expect(existsSync(marker)).toBe(true);
@@ -151,7 +151,8 @@ describe('real app gate GitHub adapter', () => {
         pr: 42,
         ticket: 78,
         bodyFile: null,
-        bootstrap: {
+        pickup: {
+          kind: 'opened',
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
@@ -182,7 +183,7 @@ describe('real app gate GitHub adapter', () => {
         pr: 42,
         ticket: null,
         bodyFile: body,
-        bootstrap: null,
+        pickup: null,
       }),
     ).rejects.toThrow(/empty/i);
     expect(existsSync(marker)).toBe(false);

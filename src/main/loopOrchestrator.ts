@@ -3,7 +3,8 @@
 // run-state writer (the CLAUDE.md domain-port seam — the runner names what it needs, not the backing
 // mechanism). The §27 app-loop engine is its consumer.
 
-import type { AgentState } from '../shared/ipc';
+import type { AgentState, HostedAgentState } from '../shared/ipc';
+import { runsAgentCommand } from './agentCommand';
 
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
@@ -12,18 +13,23 @@ export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
  *    'idle'   — a hosted agent is at its own input box and quiescent (§8.3): inject now.
  *    'busy'   — a hosted agent is present but mid-turn: defer until `onInjectable()`.
  *    'absent' — no hosted agent at the prompt (a bare shell): NEVER inject. Injecting would type the whole
- *               prompt into the shell (the motivating leak); the run stops in `error` instead. */
-export type HostedAgentState = 'idle' | 'busy' | 'absent';
+ *               prompt into the shell (the motivating leak); the turn waits for an agent to start, and
+ *               stops in `error` if none has by the end of the wait. */
+export type { HostedAgentState };
 
-/** Derive the §27.2 presence fact from the OSC-133 command spans: a hosted agent occupies the prompt
- *  unless the shell is sitting idle at a bare ready prompt. That idle case — instrumented spans exist but
- *  NONE is running — is exactly where an injected turn would leak into the shell (the motivating defect),
- *  so it is the only `false`. A running span (the agent is the foreground command) OR zero spans (the
- *  agent is itself the PTY program, so there is no bash prompt to sit idle at — e.g. APP_SHELL=<agent>)
- *  are both present. Coupling: this leans on the shim instrumenting every interactive shell (§15.5); a
- *  future uninstrumented shell would produce zero spans and read as present. Pure so the gate is tested. */
-export function hostedAgentPresent(spans: readonly { running: boolean }[]): boolean {
-  return spans.length === 0 || spans.some((s) => s.running);
+/** Derive the §27.2 presence fact from the OSC-133 command spans: a hosted agent occupies the prompt when a
+ *  running span's command line starts a listed agent, so a turn is never typed into a bare shell or another
+ *  program. With no span, an instrumented shell that has shown its prompt is bare; one that never has is taken
+ *  to be the agent itself as the PTY program (e.g. APP_SHELL=<agent>). Coupling: this leans on the shim
+ *  instrumenting every interactive shell (§15.5); an uninstrumented shell never shows a prompt mark and reads
+ *  as present. */
+export function hostedAgentPresent(
+  spans: readonly { running: boolean; command: string }[],
+  shellPrompted: boolean,
+  agentCommands: readonly string[],
+): boolean {
+  if (spans.length === 0) return !shellPrompted;
+  return spans.some((s) => s.running && runsAgentCommand(s.command, agentCommands));
 }
 
 /** Map presence + activity to injection-readiness (§27.2). `agentPresent` is the host-supplied domain
@@ -48,8 +54,11 @@ export interface TurnRunnerDeps {
    *  /clear drained ahead of the turn, so the host can tell it apart from the turn prompt (§27 activity). */
   inject(prompt: string, opts?: { preamble?: boolean }): void;
   /** The hosted instance's injection-readiness (§27.2) — see `HostedAgentState`. `absent` is the guard that
-   *  keeps a prompt from ever leaking into a bare shell: it errors rather than injecting or deferring. */
+   *  keeps a prompt from ever leaking into a bare shell. */
   hostedAgent(): HostedAgentState;
+  /** Start the wait for an agent to reach the prompt; the host calls `onAgentWaitElapsed()` when it ends. */
+  armAgentWait(): void;
+  cancelAgentWait(): void;
   /** Null when the turn's completion condition holds (§27.12); otherwise the operator-facing clause it falls
    *  short on, phrased to follow "done-signal received but …". */
   completionShortfall(): string | null;
@@ -83,7 +92,7 @@ export interface TurnRunnerDeps {
 export type PrecomputedGate = { ok: true } | { ok: false; reason: string };
 
 export interface TurnRunner {
-  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§27.2).
+  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, waits for one if absent (§27.2).
    *  `opts.preamble` (§27.12) is a command drained BEFORE the turn prompt — the actor-boundary /clear —
    *  injected gated on its own settle and ordered ahead of the prompt, so neither races the agent.
    *  `opts.forceChained` forces the chained arm on an INITIAL turn: the runner re-arms
@@ -91,8 +100,10 @@ export interface TurnRunner {
    *  requested in the same tick as a just-submitted skill injection never races it (CWE-74). */
   requestTurn(turnKey: string, opts?: { preamble?: string; forceChained?: boolean }): void;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
-   *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§27.2). */
+   *  if now idle, or keep waiting while it is busy or absent (§27.2). */
   onInjectable(): void;
+  /** The wait for an agent to reach the prompt ended: a turn still without one errors. */
+  onAgentWaitElapsed(): void;
   /** A done-signal was observed for the in-flight turn (§27.12). `gate` is the caller's OPTIONAL pre-evaluated
    *  completion condition (§28 Option C — see PrecomputedGate); omitting it preserves the prior behavior. */
   onDoneSignal(gate?: PrecomputedGate): void;
@@ -124,6 +135,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let state: TurnState = 'idle';
   let transitions = 0;
   const setState = (next: TurnState): void => {
+    if (next !== 'in-flight') stopAgentWait();
     state = next;
     transitions += 1;
   };
@@ -132,6 +144,12 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let awaitingInjectable = false;
   // §27.12 — the turn stopped on a stall after its prompt went in, so its own done-signal still completes it.
   let stalled = false;
+  let waitingForAgent = false;
+  const stopAgentWait = (): void => {
+    if (!waitingForAgent) return;
+    waitingForAgent = false;
+    deps.cancelAgentWait();
+  };
   // §27.12 — a command (the actor-boundary /clear) to drain, gated, BEFORE the turn prompt. Consumed on
   // its own settle; injecting it re-arms quiescence so the prompt waits for /clear to drain (serialized pair).
   let preamble: string | null = null;
@@ -149,15 +167,16 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     }
     const agent = deps.hostedAgent();
     if (agent === 'absent') {
-      // §27.2 — no hosted agent at the prompt (a bare shell). Injecting now would type the whole prompt
-      // into the shell (the motivating defect). Never inject, never defer waiting for an agent that isn't
-      // there: stop in `error` (human-needed) so the operator is told to start Claude and retry.
-      awaitingInjectable = false;
-      deps.cancelTimer();
-      setState('error');
-      deps.writeError('no hosted agent at the prompt');
+      // §27.2 — injecting into a bare shell would type the whole prompt into it. The operator may not have
+      // started the agent yet, so wait for one; onAgentWaitElapsed errors the turn if none arrives.
+      awaitingInjectable = true;
+      if (!waitingForAgent) {
+        waitingForAgent = true;
+        deps.armAgentWait();
+      }
       return;
     }
+    stopAgentWait();
     if (agent === 'busy') {
       awaitingInjectable = true;
       // The stall watchdog runs during the wait — visible activity (the busy instance is producing output)
@@ -260,6 +279,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     },
     onInjectable() {
       if (state === 'in-flight' && awaitingInjectable) tryInject();
+    },
+    onAgentWaitElapsed() {
+      if (state !== 'in-flight' || !waitingForAgent) return;
+      waitingForAgent = false;
+      awaitingInjectable = false;
+      deps.cancelTimer();
+      setState('error');
+      deps.writeError('no hosted agent at the prompt');
     },
     onDoneSignal(gate) {
       resolveCompletion(gate);

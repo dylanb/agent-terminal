@@ -34,6 +34,46 @@ export function captureSubtreeFocus(container: HTMLElement): (resolve: () => HTM
   };
 }
 
+const CONTENT = Symbol('reusable content');
+/** A node with no listeners or state of its own, which `reconcileChildren` may swap for an equal one already shown. */
+export interface Content { readonly [CONTENT]: Node }
+export const content = (node: Node): Content => ({ [CONTENT]: node });
+const placedContent = new WeakSet<Node>();
+const isContent = (entry: Node | Content): entry is Content => CONTENT in entry;
+
+/**
+ * Makes `wanted` the children of `parent`, in order, moving only nodes out of place. A `content(…)` node is swapped
+ * for an equal child placed as content before, so unchanged content keeps its nodes and a text selection in them; any
+ * other node is placed as given. `moveBefore` keeps focus on a moved node; where it is missing, focus is put back.
+ * Focus inside a removed child goes to `fallback()` first, so it never drops to the body.
+ */
+export function reconcileChildren(parent: Element, wanted: readonly (Node | Content)[], fallback?: () => HTMLElement | undefined): void {
+  const doc = parent.ownerDocument;
+  const given = wanted.map(entry => (isContent(entry) ? entry[CONTENT] : entry));
+  const kept = new Set(given);
+  const spare = [...parent.childNodes].filter(child => !kept.has(child) && placedContent.has(child));
+  const nodes = wanted.map(entry => {
+    if (!isContent(entry)) return entry;
+    const node = entry[CONTENT];
+    const index = node.parentNode === parent ? -1 : spare.findIndex(old => old.isEqualNode(node));
+    const placed = index < 0 ? node : spare.splice(index, 1)[0];
+    placedContent.add(placed);
+    return placed;
+  });
+  const active = doc.activeElement;
+  nodes.forEach((node, index) => {
+    const at = parent.childNodes[index] ?? null;
+    if (at === node) return;
+    if (typeof parent.moveBefore === 'function' && node.isConnected && parent.isConnected) parent.moveBefore(node, at);
+    else parent.insertBefore(node, at);
+  });
+  if (active instanceof HTMLElement && active.isConnected && doc.activeElement !== active) active.focus();
+  for (const child of [...parent.childNodes].slice(nodes.length)) {
+    if (child.contains(doc.activeElement)) fallback?.()?.focus();
+    child.remove();
+  }
+}
+
 /** Look up a required element by id; throw naming the id if it is absent. */
 export function requireElement<T extends HTMLElement = HTMLElement>(id: string, doc: Document = document): T {
   const el = doc.getElementById(id);

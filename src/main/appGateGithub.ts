@@ -1,16 +1,20 @@
 import { readFile } from 'node:fs/promises';
 import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { errMsg } from './errno';
+import { GH_ACTION, TICKET_RUN_EFFECTS } from './gateEffects';
 import type { AppLoopBootstrap } from './appLoopState';
+import type { RunPickup } from './trustedPickups';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
+import { createRealPublishPrReviewPorts, publishPrReview, type PublishPrReviewRequest } from './publishPrReview';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
   ticket: number | null;
   bodyFile: string | null;
-  bootstrap: AppLoopBootstrap | null;
+  pickup: RunPickup | null;
 }
 
 /** §27.13 — `no-target` when the run has no PR or issue for the action to act on. */
@@ -32,13 +36,15 @@ export interface AppGateGitHubOperations {
     bodyFile: string,
     closingIssue: number | null,
   ): Promise<void>;
+  /** §27.13 `publish-pr-review`: publishes an adopting run's review into the PR it adopted, or throws having
+   *  written nothing. */
+  publishPullRequestReview(request: PublishPrReviewRequest): Promise<void>;
 }
 
 export function createAppGateGitHub(
   github: AppGateGitHubOperations,
 ): RunAppGateSideEffect {
-  const verifyBootstrap = async (ctx: AppGateSideEffectCtx): Promise<void> => {
-    const bootstrap = ctx.bootstrap;
+  const verifyBootstrap = async (ctx: AppGateSideEffectCtx, bootstrap: AppLoopBootstrap | null): Promise<void> => {
     if (bootstrap === null) return;
     if (ctx.pr !== bootstrap.pr || ctx.ticket !== bootstrap.issue) {
       throw new Error('bootstrap PR identity does not match the gate refs');
@@ -56,13 +62,19 @@ export function createAppGateGitHub(
   };
 
   return async (action, ctx) => {
+    if (ctx.pickup !== null && isAdoptedPickup(ctx.pickup) && TICKET_RUN_EFFECTS.has(action)) {
+      throw new Error(
+        `${action} acts on a ticket run's own PR and ticket, and this run adopted PR #${ctx.pickup.pr}; it wrote nothing — remove ${action} from this gate, or terminate the run`,
+      );
+    }
+    const bootstrap = ctx.pickup === null || isAdoptedPickup(ctx.pickup) ? null : ctx.pickup;
     switch (action) {
-      case 'mark-ready':
+      case GH_ACTION.markReady:
         if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
-        await verifyBootstrap(ctx);
+        await verifyBootstrap(ctx, bootstrap);
         await github.markPullRequestReady(ctx.pr);
         return { outcome: 'done' };
-      case 'update-issue-body':
+      case GH_ACTION.updateIssueBody:
         if (ctx.ticket === null) {
           return { outcome: 'no-target', reason: 'no issue to publish the body to' };
         }
@@ -71,19 +83,22 @@ export function createAppGateGitHub(
         }
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
         return { outcome: 'done' };
-      case 'publish-pr-body':
+      case GH_ACTION.publishPrBody:
         if (ctx.pr === null) {
           return { outcome: 'no-target', reason: 'no PR to publish the body to' };
         }
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
-        await verifyBootstrap(ctx);
+        await verifyBootstrap(ctx, bootstrap);
         await github.publishPullRequestBody(
           ctx.pr,
           ctx.bodyFile,
-          ctx.bootstrap?.issue ?? null,
+          bootstrap?.issue ?? null,
         );
+        return { outcome: 'done' };
+      case GH_ACTION.publishPrReview:
+        await github.publishPullRequestReview({ pickup: ctx.pickup, pr: ctx.pr, report: ctx.bodyFile });
         return { outcome: 'done' };
       default:
         throw new Error(`unknown approve side-effect action: ${action}`);
@@ -158,6 +173,9 @@ export function createRealAppGateGitHub(
       await bodies.replaceBody(pullRequest, closingIssue === null
         ? body
         : `${body.trimEnd()}\n\ncloses #${closingIssue}\n`);
+    },
+    publishPullRequestReview: async (request) => {
+      await publishPrReview(createRealPublishPrReviewPorts(repoDir), request);
     },
   };
   return createAppGateGitHub(github);

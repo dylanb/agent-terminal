@@ -11,6 +11,7 @@ import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PR
 import { createControllerTimelines } from './controllerTimeline';
 import { createWorktreeLock, type LockRefusalWording } from './worktreeLock';
 import { isErrno } from './errno';
+import { isPrivateDirectory } from './ownerOnlyPath';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
@@ -40,7 +41,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const directory = dirname(endpoint);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const directoryStat = await lstat(directory);
-  if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid?.() || (directoryStat.mode & 0o777) !== 0o700) {
+  if (!isPrivateDirectory(directoryStat, process.getuid?.() ?? -1)) {
     throw new Error('The controller endpoint directory must be owned by the current user with permissions 0700.');
   }
   const ownership = createWorktreeLock({ lockRoot: directory, wording: CONTROLLER_LOCK_WORDING }).acquire(endpoint);

@@ -12,6 +12,7 @@ import { isSelectionLocked } from '../../shared/flowStarted';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 import { createPressGroup } from './pressable';
+import { waitingLabel } from '../../shared/waiting';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -54,6 +55,9 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Starts `repoKey`'s selected flow exactly as a press of Start does; settles once that has finished, and never
+   *  rejects. */
+  start(repoKey: string): Promise<void>;
   /** Focus the loop read-out if one is shown, returning whether it did (so the root can fall back),
    *  so the root needn't reach into the strip's markup (WCAG 2.4.3). */
   focusLoopReadout(): boolean;
@@ -73,6 +77,8 @@ export type FlowStripDeps = Omit<
   | 'onBootstrapError'
   | 'onAppBootstrapConflict'
   | 'resolveAppBootstrapConflict'
+  | 'onAdoptTicketChoice'
+  | 'resolveAdoptTicket'
   | 'onEpicPromotionPreview'
   | 'resolveEpicPromotion'
   | 'githubRef'
@@ -123,7 +129,8 @@ function header(doc: Document, text: string): HTMLElement {
 function derivedText(state: FlowStateView): string | null {
   if (state.status === 'in_progress' && state.derived && !state.loop) {
     const d = state.derived;
-    return `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+    const activity = d.waiting ? `waiting · ${waitingLabel(d.waiting)}` : d.activity;
+    return `${d.todosDone} / ${d.todosTotal} done · ${activity}`;
   }
   return null;
 }
@@ -388,11 +395,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
     // and pushed via flow:onStateChanged.
-    if (state.status === 'in_progress' && state.derived && !state.loop) {
-      const d = state.derived;
+    const dText = derivedText(state);
+    if (dText !== null) {
       const line = doc.createElement('div');
       line.className = 'flow-derived';
-      line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+      line.textContent = dText;
       host.append(line);
     }
 
@@ -540,6 +547,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       void refresh();
     },
+    start: (key) => runAct('start', key, '').then(afterTransition(key)).catch(onActFailed),
     focusLoopReadout() {
       const el = host.querySelector<HTMLElement>('.loopstat');
       el?.focus();

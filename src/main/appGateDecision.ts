@@ -4,12 +4,9 @@
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd, type GateDecider, type GateDecisionAuditKind } from '../shared/audit';
 import type { AutoHaltReason } from '../shared/gateAuthority';
-import {
-  validFeedback,
-  validInstruction,
-  type AppLoopBootstrap,
-  type AppLoopRunState,
-} from './appLoopState';
+import { validFeedback, validInstruction, type AppLoopRunState } from './appLoopState';
+import type { RunPickup } from './trustedPickups';
+import { isAdoptedPickup } from '../shared/appBootstrap';
 import type {
   GateSideEffect,
   LoopDefV2,
@@ -29,7 +26,8 @@ import type { SectionedReport } from './reportSections';
 export interface AppGateRefs {
   pr: number | null;
   ticket: number | null;
-  bootstrap: AppLoopBootstrap | null;
+  /** The run's trusted pickup: a ticket run's, or an adopting run's. */
+  pickup: RunPickup | null;
 }
 
 /** The executor's injection seam — each member a domain concept, not a mechanism (CODE-STANDARDS seam rule),
@@ -307,7 +305,7 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
         pr: refs.pr,
         ticket: refs.ticket,
         bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-        bootstrap: refs.bootstrap,
+        pickup: refs.pickup,
       };
       try {
         const result = await deps.runSideEffect(action, ctx);
@@ -362,8 +360,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
       return false;
     }
     // §28.3
-    if (refs.bootstrap === null) return true;
-    const branch = refs.bootstrap.branch;
+    if (refs.pickup === null || isAdoptedPickup(refs.pickup)) return true;
+    const branch = refs.pickup.branch;
     try {
       await deps.runPushSideEffect(branch);
       gateAudit('side-effect', 0, `push: ${branch}`);

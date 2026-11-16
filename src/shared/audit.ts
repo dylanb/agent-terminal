@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
 import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
+import { isRepositoryName } from './appBootstrap';
 
 export interface AuditHeader {
   flow: string;
@@ -32,7 +33,7 @@ export type AuditEvent =
   | { ts: string; type: 'todo.deleted'; id: string }
   // Phase 2 — loop integration (§25.5).
   | { ts: string; type: 'input.resolved'; name: string; value: string }
-  | { ts: string; type: 'ticket.assoc'; ticket: number }
+  | { ts: string; type: 'ticket.assoc'; ticket: number; repo?: string }
   | { ts: string; type: 'pr.assoc'; pr: number }
   | { ts: string; type: 'loop.status'; from: string; to: string }
   | { ts: string; type: 'loop.iteration'; n: number }
@@ -112,7 +113,7 @@ const eventFields: {
   'todo.text': { id: textField, text: textField },
   'todo.deleted': { id: textField },
   'input.resolved': { name: textField, value: textField },
-  'ticket.assoc': { ticket: numberField },
+  'ticket.assoc': { ticket: numberField, repo: (value) => value === undefined || isRepositoryName(value) },
   'pr.assoc': { pr: numberField },
   'loop.status': { from: textField, to: textField },
   'loop.iteration': { n: numberField },

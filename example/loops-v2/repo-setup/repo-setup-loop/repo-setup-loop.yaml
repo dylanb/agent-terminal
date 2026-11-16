@@ -1,0 +1,18 @@
+version: v2
+name: repo-setup-loop
+work:
+  recipe: prompts/work.md
+  artifact: repo-setup-summary
+  self_check: loop-capabilities
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+  - option: redo
+outputs:
+  - id: repo-setup-summary
+    path: repo-setup-summary.md

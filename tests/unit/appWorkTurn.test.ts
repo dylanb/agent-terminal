@@ -11,6 +11,7 @@ import {
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 import { phaseOutputRel } from '../../src/shared/phaseResult';
+import { exampleLoopCapabilities } from '../../src/shared/loopCapabilities';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop
@@ -448,5 +449,29 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
 
   it('says nothing about sections for a step whose outputs declare none', () => {
     expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
+  });
+});
+
+describe('composeAppWorkPrompt — a work turn handed the capabilities self-check (§29)', () => {
+  const base = {
+    recipeBody: '# work turn\nSet the repository up.',
+    turnKey: 'work-setup',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: { kind: 'file' as const, artifactRel: '.agent-terminal/loop/artifacts/repo-setup-summary.md', marker: completionMarker('setup') },
+  };
+  const checkCommand = "ELECTRON_RUN_AS_NODE=1 '/opt/app/run me' '/opt/app/check.js' 'capabilities'";
+
+  it('hands the agent the check command and the canonical example when the def declares the self-check', () => {
+    const prompt = composeAppWorkPrompt({ ...base, selfCheck: { kind: 'loop-capabilities', checkCommand } });
+
+    expect.soft(prompt).toContain(checkCommand);
+    expect.soft(prompt).toContain(exampleLoopCapabilities().trimEnd());
+  });
+
+  it('carries neither the check command nor the canonical example when the def declares none', () => {
+    const prompt = composeAppWorkPrompt(base);
+
+    expect.soft(prompt).not.toContain(checkCommand);
+    expect.soft(prompt).not.toContain(exampleLoopCapabilities().trimEnd());
   });
 });

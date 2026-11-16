@@ -38,6 +38,7 @@ mac:
     - dmg
     - zip
 linux:
+  executableName: agent-terminal-app
   target:
     - AppImage
     - deb

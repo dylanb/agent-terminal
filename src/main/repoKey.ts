@@ -6,15 +6,19 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { RepoInfo } from '../shared/ipc';
 
-export function resolveRepoKey(cwd: string): string {
-  const start = path.resolve(cwd);
-  let dir = start;
+/** The nearest directory at or above `cwd` holding a `.git` entry, or null when none does. */
+export function findRepoRoot(cwd: string): string | null {
+  let dir = path.resolve(cwd);
   for (;;) {
     if (existsSync(path.join(dir, '.git'))) return dir;
     const parent = path.dirname(dir);
-    if (parent === dir) return start;
+    if (parent === dir) return null;
     dir = parent;
   }
+}
+
+export function resolveRepoKey(cwd: string): string {
+  return findRepoRoot(cwd) ?? path.resolve(cwd);
 }
 
 /**

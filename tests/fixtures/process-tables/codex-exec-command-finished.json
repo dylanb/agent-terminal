@@ -1,0 +1,20 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 39234,
+  "note": "Codex 0.167.0 (codex exec, started through its pnpm launcher, in a pty shell on macOS, default sandbox) with one stdio MCP server configured (node, which keeps a child fake-browser alive), 2 s after its sleep 4 tool command finished, while it was still writing its reply; only helpers run. Captured from outside the shell's tree",
+  "rows": [
+    "39234 39232 39234 39287       00:14 zsh             ",
+    "39287 39234 39287 39287       00:12 codex           ",
+    "39338 39287 39338 39287       00:12 node            ",
+    "39345 39338 39338 39287       00:12 fake-browser    ",
+    "39591 39287 39591 39287       00:06 codex-code-mode-"
+  ],
+  "expected": {
+    "waiting": null
+  }
+}

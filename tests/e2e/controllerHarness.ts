@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { createControllerFixture } from '../helpers/controllerFixture';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { withSetupCheckOff } from './setupCheckEnv';
 
 export type ControllerTestApplication =
   | { kind: 'development'; entry: string }
@@ -28,7 +29,7 @@ export function createControllerHarness() {
         ...(target.kind === 'packaged' ? { executablePath: target.executablePath } : {}),
         args: [...(target.kind === 'development' ? [target.entry] : []), `--user-data-dir=${profile}`],
         cwd: fixture.nonGit,
-        env: { ...fixture.env, ...options.env, APP_LAUNCH_DIR: launchDir },
+        env: { ...withSetupCheckOff({ ...fixture.env, ...options.env }), APP_LAUNCH_DIR: launchDir },
         timeout: WINDOW_TIMEOUT_MS,
       });
       apps.push(app);

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { bodyControlIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusItem } from '../helpers/controllerHistory';
-import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
+import { STATUS_CASES, statusTerminal, withActivity, type StatusCase } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
@@ -110,7 +110,7 @@ describe('an untoggled card follows the rule', () => {
 });
 
 describe('an activity change alone', () => {
-  it('changes an untoggled one-column card\'s written status, open state and the summary counts in the same update, keeping its place', () => {
+  it('changes an untoggled one-column card\'s written status, open state, summary counts and place in its status group in the same update', () => {
     const gated = (row: StatusCase) => ({ ...row.terminal, id: 'gated', launchDirectory: '/cards/gated', repositoryRoot: '/cards' });
     const [busy, quiet] = [STATUS_CASES['needs-human-working'], STATUS_CASES['needs-human']];
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, gated(busy)], oneColumn: true });
@@ -129,9 +129,9 @@ describe('an activity change alone', () => {
       const onceIdle = read(quiet);
       service.publish([peer, gated(busy)]);
       const workingAgain = read(busy);
-      const shown = (c: StatusCase, open: boolean) => ({ status: c.text, expanded: open, order: [0, 1], countsNotShown: [] });
+      const shown = (c: StatusCase, open: boolean, order: number[]) => ({ status: c.text, expanded: open, order, countsNotShown: [] });
       expect({ whileWorking, onceIdle, workingAgain })
-        .toEqual({ whileWorking: shown(busy, false), onceIdle: shown(quiet, true), workingAgain: shown(busy, false) });
+        .toEqual({ whileWorking: shown(busy, false, [0, 1]), onceIdle: shown(quiet, true, [1, 0]), workingAgain: shown(busy, false, [0, 1]) });
     } finally { dispose(); }
   });
 });
@@ -201,7 +201,7 @@ describe('focus on a card header across a live update', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, working] });
     try {
       header(host, working.launchDirectory)?.focus();
-      service.publish([peer, { ...working, work: { ...working.work, activity: 'quiet' } }]);
+      service.publish([peer, { ...working, work: withActivity(working.work, 'quiet') }]);
       const target = header(host, working.launchDirectory);
       expect(target !== undefined && document.activeElement === target).toBe(true);
     } finally { dispose(); }

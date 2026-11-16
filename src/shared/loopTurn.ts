@@ -28,6 +28,10 @@ export function doneSignalInstruction(turnKey: string, artifact: string | undefi
   return [
     ...verify,
     '',
+    'Run test suites and other long commands in the foreground, not in the background, and split one that',
+    "would exceed your tool's time limit into parts. While you wait on a background command your screen",
+    'stays still, and the loop reads a screen still for too long as a stalled turn and calls the operator.',
+    '',
     `When this turn (turn-done:${turnKey}) is completely finished (after any spawned subagents have`,
     'returned), your very last action MUST be a tool call that writes the file',
     `${doneRelPath} with its only contents being exactly: ${turnKey}`,

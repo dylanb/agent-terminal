@@ -50,6 +50,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const file = path.join(__dirname, 'test-proof-gh.json');
 const lock = file + '.lock';
+// Read before the lock is taken, so a caller that never closes stdin cannot leave the lock held.
+const argv = process.argv.slice(2);
+const STDIN = argv.some((a, i) => a === '-' && argv[i - 1] === '--input') ? fs.readFileSync(0, 'utf8') : null;
 for (;;) {
   try { fs.closeSync(fs.openSync(lock, 'wx')); break; } catch (e) {
     if (e.code !== 'EEXIST') throw e;
@@ -77,6 +80,12 @@ function options(list, withValue, bare) {
       const eq = pair.indexOf('=');
       if (eq < 1) unexpected();
       parsed.fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else if (arg === '--input') {
+      if (list[++i] !== '-' || STDIN === null) unexpected();
+      let input;
+      try { input = JSON.parse(STDIN); } catch { fail(1, 'HTTP 400: Problems parsing JSON'); }
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) unexpected();
+      Object.assign(parsed.fields, input);
     } else if (withValue.includes(arg)) {
       if (i + 1 >= list.length) unexpected();
       parsed.values[arg] = list[++i];
@@ -228,9 +237,10 @@ unexpected();
  *   back to back as real `gh` does, and `--paginate --slurp` prints one array of pages. The one `--jq` filter
  *   modelled projects each comment to a line `{"id","login","marked"}`, `marked` meaning the body starts with the
  *   summary marker; any other filter, or `--jq` with `--slurp`, exits 97.
- * - The same path with `-f body=…` — creates a comment authored by `login`.
- * - `gh api -X PATCH repos/fixture/project/issues/comments/<id> -f body=…` — edits it, refused for another
- *   login's comment. Both writes fail while `failCommentWrite` is set.
+ * - The same path with `-f body=…`, or `--input -` carrying `{"body": …}` on stdin — creates a comment authored by
+ *   `login`.
+ * - `gh api -X PATCH repos/fixture/project/issues/comments/<id>` with the body either way — edits it, refused for
+ *   another login's comment. Both writes fail while `failCommentWrite` is set.
  *
  * Fields are raw strings only (`-f`/`--raw-field`); `-F`/`--field`, which `gh` type-converts and reads `@file`
  * from, exits 97. `--hostname github.com` is accepted on `gh api`. Every argv is appended to `calls`. Concurrent

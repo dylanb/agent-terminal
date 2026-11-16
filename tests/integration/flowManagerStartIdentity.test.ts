@@ -12,6 +12,7 @@ import { auditTimestamp, parseAuditStream } from '../../src/shared/audit';
 import { createAutoGate } from '../../src/main/autoGate';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import { composeRecordFlowTransition, composeStartTransition } from '../../src/main/autoGateComposition';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // #137 — a run's identity (its flow's `name:` and its Start instant) is written into flow-state at Start and kept
 // by every later transition, so the §25 file it names can be found again for the run's whole lifetime.
@@ -31,7 +32,7 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
     seedEntry(wt, 'auto-x', 'Auto X Flow', 'x-one', 'x-two', 'x-three');
     seedEntry(wt, 'flow-y', 'Flow Y', 'y-step');
     writeActiveFlow(wt, 'auto-x');
-    const resolve = createRunResolver(globalDir);
+    const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
     const persisted = () => createFlowStateStore(wt).read();
     return { wt, mgr, persisted, resolve };

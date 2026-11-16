@@ -2,7 +2,7 @@ import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -11,6 +11,8 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
+import { PS_ARGS } from '../../src/main/waitingLookup';
+import { shellQuote } from '../../src/shared/shellQuote';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -686,6 +688,31 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
     w.setSize(width + 120, height + 80);
   });
   await expect.poll(() => app.evaluate(({ app: a }) => a.isReady()), { timeout: 8000 }).toBe(true);
+});
+
+test('a kept-open window stops reading the process table once its shell exits (#319)', { tag: '@ownapp' }, async () => {
+  const shimDir = mkdtempSync(join(tmpdir(), 'waiting-ps-'));
+  const log = join(shimDir, 'lookups');
+  const realPs = execFileSync('sh', ['-c', 'command -v ps'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(shimDir, 'ps'), `#!/bin/sh\n[ "$*" = ${shellQuote(PS_ARGS.join(' '))} ] && echo lookup >> ${shellQuote(log)}\nexec ${shellQuote(realPs)} "$@"\n`);
+  chmodSync(join(shimDir, 'ps'), 0o755);
+  const lookups = (): number => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
+  try {
+    app = await electron.launch({
+      args: launchArgs(),
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+    });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await expect.poll(lookups, { timeout: 20_000 }).toBeGreaterThan(0);
+    await typeCommand('exit');
+    await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+    const atExit = lookups();
+    const closed = await app.waitForEvent('close', { timeout: 5000 }).then(() => true, () => false);
+    expect({ closed, lookupsAfterExit: lookups() - atExit }).toEqual({ closed: false, lookupsAfterExit: 0 });
+  } finally {
+    rmSync(shimDir, { recursive: true, force: true });
+  }
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -1612,9 +1639,13 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted — survives a renderer reload (§20.2).
+  // Persisted — survives a renderer reload (§20.2). A chord pressed before the reloaded renderer installs its
+  // key handler is dropped, so the press repeats until the view it selects is showing.
   await page.reload();
-  await page.keyboard.press('Control+2');
+  await expect(async () => {
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect.poll(() => treeW()).toBe('318px');
 
   // Reset to default so the persisted width doesn't leak into later runs.
@@ -2458,7 +2489,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'groom-goal-loop', 'groom-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v3', 'plan-goal-loop', 'plan-goal-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
@@ -2599,7 +2630,7 @@ test('the shipped-flow migration is confirm-first and a decline preserves the ex
   expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
   const installedFlow = readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8');
   expect(installedFlow).not.toBe(customFlow);
-  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'plan-loop-review.md'))).toBe(true);
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2726,22 +2757,23 @@ test('after install, the active step offers its bundled todo template as the pic
 
   writeFileSync(
     join(home, '.agent-terminal', 'flow.yaml'),
-    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: ticket-grooming\n',
+    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: polish\n',
   );
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom-ticket active (todo_template: ticket-grooming)
+  await flowControl().click(); // Start → groom-ticket active (todo_template: polish)
 
   await openQuickSend('todo');
   const toggle = page.locator('#todo-list .tmpl-toggle');
   await expect(toggle).toBeVisible({ timeout: 10_000 });
   await toggle.click();
-  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('ticket-grooming'); // the step's bundled default
+  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('polish'); // the step's bundled default
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0);
   await page.locator('#todo-list .tmpl-add').click();
   // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
-  await expect(page.locator('.todo').filter({ hasText: 'run grooming skill' })).not.toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('#todo-list .todo')).not.toHaveCount(0, { timeout: 10_000 });
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -3359,7 +3391,8 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     await loopReadout().click({ timeout: 10_000 });
     await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
     await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
-    await page.evaluate((repoKey) => window.flow.advance(repoKey, 'done'), repo);
+    await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+    await flowControl().click();
     await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
     rmSync(saved);
@@ -7334,12 +7367,14 @@ async function passAutoGate(home: string, repo: string, step: string, consumes?:
       .toMatch(new RegExp(`^step: ${step}$[\\s\\S]*chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`, 'm'));
   }
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: AUTO_GATE_PASS_MS }).not.toContain(`step: ${step}\n`);
-  const deciders = auditRunFiles(home, repo).flatMap((f) =>
-    stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
-      e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
-    ),
-  );
-  expect(deciders, step).toEqual(['engine']);
+  // The audit recorder writes off the flow path, so the decision can land after the flow has moved on.
+  const deciders = () =>
+    auditRunFiles(home, repo).flatMap((f) =>
+      stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
+        e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
+      ),
+    );
+  await expect.poll(deciders, { message: step, timeout: AUTO_GATE_PASS_MS }).toEqual(['engine']);
 }
 
 /** Approve `human` step `step` once its gate is clean, and wait for the flow to leave it. */

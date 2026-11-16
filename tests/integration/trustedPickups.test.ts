@@ -10,7 +10,7 @@ import { inProgressRunIdentity, type RunIdentity } from '../../src/main/gateRunS
 // §27.10 — the pickup a run completed holds that run's turns and gate side-effects, including for a run resumed
 // across a relaunch; a pickup an earlier run left never does.
 
-const PICKUP: AppLoopBootstrap = { pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' };
+const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' };
 const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
 const asRoot = process.getuid?.() === 0;
 
@@ -243,11 +243,11 @@ describe('the persisted record fails closed', () => {
     app.set(repo, PICKUP);
     const saved = readFileSync(file(), 'utf8');
     writeAppLoopBootstrapIntent(repo, { branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
-    writeAppLoopBootstrap(repo, { pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
+    writeAppLoopBootstrap(repo, { kind: 'opened', pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
     clearAppLoopBootstrap(repo);
     expect(readFileSync(file(), 'utf8')).toBe(saved);
 
-    writeAppLoopBootstrap(repo, { pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
+    writeAppLoopBootstrap(repo, { kind: 'opened', pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
     const record = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
     const recorded = readFileSync(record, 'utf8');
     app.set(repo, { ...PICKUP, pr: 240 });

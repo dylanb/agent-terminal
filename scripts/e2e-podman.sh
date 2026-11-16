@@ -51,12 +51,16 @@ tty=()
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
+# out/ is a container-local tmpfs, so the app reads its build (including the example trees the build copies into
+# out/main/example) from the VM: parallel installs listing them through the macOS file share intermittently failed
+# with ENOMEM (scandir). It also keeps the Linux build out of the host's out/.
 exec podman run --rm --init ${tty[@]+"${tty[@]}"} \
   --cap-add=SYS_ADMIN \
   --security-opt label=disable \
   --shm-size=1g \
   -v "$PWD":/work \
   -v "$VOLUME":/work/node_modules \
+  --tmpfs /work/out:rw,exec \
   -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \

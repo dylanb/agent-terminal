@@ -14,7 +14,9 @@
   - **Codex reviewers are read-only by instruction only.** A Codex sub-agent inherits its parent's permissions and an agent file cannot narrow them, so a reviewer whose def lists a tool beyond Read/Grep/Glob/Bash is refused as mispackaged. Codex destinations are skipped, and reported as skipped, when the Codex home does not exist.
   - The action never deletes outside the leftovers it previewed and the user ticked, and never edits a `.gitignore` (§19.1): it is the explicit, user-invoked exemption to the no-silent-rewrite rule.
 
-The shipped flows are in `example/flows/`.
+The setup popup's **Install/update examples** runs this same install, with the same replace question, from inside the popup (§29.3).
+
+The shipped flows are in `example/flows/`. One of them, `repo-setup`, is the flow the setup popup's **Run setup loop** starts (§29).
 
 ### 18.2 Steps & kinds (D3/D7/D30)
 
@@ -32,6 +34,7 @@ The shipped flows are in `example/flows/`.
 ### 18.4 Typed step inputs (D29/D34)
 
 - Each step declares its required **typed inputs**; when one is not already available the app prompts with the matching **picker** (`github-ticket`, `pr`, `files`, `free-text`). A loop may **create** outputs (new PRs) not known up front.
+- A `pr` input can also name a pull request for a loop step to **adopt** (`pickup: { adopt: pr }`, §27.10): the run then works on that PR rather than on a ticket. Such a step's `pr` input must be required, and it is the flow's only `pr` input; a flow that breaks this, or another §27.10 adoption load rule, fails to load (§18.1 `error`), naming both sides.
 
 ### 18.5 Authoring is separate (D20)
 

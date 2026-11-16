@@ -8,7 +8,7 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
 import { readDirEntries } from './dirEntries';
-import { isGitObjectId } from '../shared/appBootstrap';
+import { isAdoptedPickup, isAdoptedPickupIntent, isGitObjectId, parseAdoptedPickup, serializeAdoptedPickup, type AdoptedPickup } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { PHASE_OUTPUT_SUFFIX, phaseOutputRel } from '../shared/phaseResult';
 
@@ -376,7 +376,9 @@ export function refactorResultFile(repoDir: string, round: number): string | nul
 const BOOTSTRAP_FILE = 'bootstrap.yaml';
 
 /** §27.10 */
+/** A ticket run's pickup: the draft PR it opened on its own branch. Its files carry no `kind`; it is read as this. */
 export interface AppLoopBootstrap {
+  kind: 'opened';
   pr: number;
   branch: string;
   issue: number;
@@ -387,7 +389,7 @@ export type ReadAppLoopBootstrap = Omit<AppLoopBootstrap, 'initialStatus'> & {
   initialStatus?: string;
 };
 
-export type AppLoopBootstrapIntent = Omit<AppLoopBootstrap, 'pr'>;
+export type AppLoopBootstrapIntent = Omit<AppLoopBootstrap, 'pr' | 'kind'>;
 
 const bootstrapFileOf = (repoDir: string): string | null => {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
@@ -454,11 +456,34 @@ export function writeAppLoopBootstrapIntent(
   }
 }
 
+export function writeAdoptedPickupIntent(repoDir: string, intent: Pick<AdoptedPickup, 'pr' | 'fixBranch'>, now: () => Date = () => new Date()): void {
+  const doc = { schema_version: APP_LOOP_STATE_SCHEMA, status: 'pending', kind: 'adopted', pr: intent.pr, fix_branch: intent.fixBranch, updated_at: now().toISOString() };
+  if (!isAdoptedPickupIntent(doc)) throw new Error('invalid §27 adopted pickup intent');
+  writeBootstrapDoc(repoDir, doc);
+}
+
+export function writeAdoptedPickup(repoDir: string, pickup: AdoptedPickup, now: () => Date = () => new Date()): void {
+  const doc = { schema_version: APP_LOOP_STATE_SCHEMA, status: 'complete', ...serializeAdoptedPickup(pickup), updated_at: now().toISOString() };
+  if (!parseAdoptedPickup(doc).ok) throw new Error('invalid §27 adopted pickup');
+  writeBootstrapDoc(repoDir, doc);
+}
+
+function writeBootstrapDoc(repoDir: string, doc: Record<string, unknown>): void {
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §27 pickup record: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** A pickup record's pickup: the ticket run's opened arm (a file with no `kind`), or an adopted PR's. */
+export type RecordedPickup = ReadAppLoopBootstrap | AdoptedPickup;
+
 /** §27.10 */
 export type PickupRecord =
   | { kind: 'none' }
   | { kind: 'pending' }
-  | { kind: 'complete'; bootstrap: ReadAppLoopBootstrap }
+  | { kind: 'complete'; bootstrap: RecordedPickup }
   | { kind: 'invalid'; detail: string };
 
 const BOOTSTRAP_REL = [...APP_LOOP_DIR_SEGMENTS, BOOTSTRAP_FILE].join('/');
@@ -482,6 +507,13 @@ export function readPickupRecord(repoDir: string): PickupRecord {
   }
   if (!isRecord(doc)) return invalid('is not a YAML mapping');
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return invalid(`has unsupported schema_version ${String(doc.schema_version)}`);
+  if (doc.kind !== undefined) {
+    if (doc.kind !== 'adopted') return invalid(`has unknown kind ${String(doc.kind)}`);
+    if (doc.status === 'pending') return isAdoptedPickupIntent(doc) ? { kind: 'pending' } : invalid('is a pending adoption without a positive integer pr and a fix_branch');
+    if (doc.status !== 'complete') return invalid(`has unknown status ${String(doc.status)}`);
+    const adopted = parseAdoptedPickup(doc);
+    return adopted.ok ? { kind: 'complete', bootstrap: adopted.pickup } : invalid(adopted.reason);
+  }
   if (doc.status === 'pending') {
     return isPositiveInt(doc.issue) && isNonBlank(doc.branch) && isNonBlank(doc.initial_status)
       ? { kind: 'pending' }
@@ -494,6 +526,7 @@ export function readPickupRecord(repoDir: string): PickupRecord {
   return {
     kind: 'complete',
     bootstrap: {
+      kind: 'opened',
       pr: doc.pr,
       branch: doc.branch,
       issue: doc.issue,
@@ -504,7 +537,7 @@ export function readPickupRecord(repoDir: string): PickupRecord {
 
 export function readAppLoopBootstrap(repoDir: string): ReadAppLoopBootstrap | null {
   const record = readPickupRecord(repoDir);
-  return record.kind === 'complete' ? record.bootstrap : null;
+  return record.kind === 'complete' && !isAdoptedPickup(record.bootstrap) ? record.bootstrap : null;
 }
 
 export function clearAppLoopBootstrap(repoDir: string): void {

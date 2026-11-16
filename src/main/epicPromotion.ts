@@ -3,6 +3,7 @@
 // drift. The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
 // coordinator (§27.10).
 
+import { PROMOTE_KIND } from './gateEffects';
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
@@ -18,7 +19,7 @@ const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
  *  side-effect, the artifact is unreadable/oversized, or the plan is not classified an epic. */
 export function readEpicSubTicketsAtGate(def: LoopDefV2): EpicSubTicket[] | null {
   const approve = def.gate.find((g) => g.option === 'approve');
-  const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
+  const promote = approve?.sideEffects.find((se) => se.kind === PROMOTE_KIND);
   const artifactId = promote && typeof promote.args.artifact === 'string' ? promote.args.artifact : null;
   if (artifactId === null) return null;
   const binding = [...def.inputs, ...def.outputs].find((b) => b.id === artifactId);

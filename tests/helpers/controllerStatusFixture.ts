@@ -1,18 +1,30 @@
-import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
+import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkActivity, type ControllerWorkDetails, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
 
 export type WorkStatus = ControllerWorkStatus;
 
 export type StatusTerminal = ControllerTerminal & { work: WorkStatus };
 
-export function workStatus(overrides: Partial<WorkStatus> = {}): WorkStatus {
-  return {
+export type WorkStatusOverrides = Partial<ControllerWorkDetails> & (ControllerWorkActivity | { activity?: undefined; waiting?: undefined });
+
+export function workStatus(overrides: WorkStatusOverrides = {}): WorkStatus {
+  const details: ControllerWorkDetails = {
     flow: { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' },
     ticket: { availability: 'known', number: 219, title: { availability: 'known', text: 'Show live controller status' } },
-    activity: 'active', attention: null, error: null, ...overrides,
+    attention: null, error: null,
   };
+  if (overrides.activity === undefined) {
+    const { activity: _activity, waiting: _waiting, ...rest } = overrides;
+    return { ...details, ...rest, activity: 'active' };
+  }
+  return { ...details, ...overrides };
 }
 
-export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTerminal {
+export function withActivity(work: WorkStatus, activity: 'active' | 'quiet' | 'unavailable'): WorkStatus {
+  const { waiting: _waiting, ...details } = work;
+  return { ...details, activity };
+}
+
+export function statusTerminal(overrides: WorkStatusOverrides = {}): StatusTerminal {
   return { id: 'terminal-a', launchDirectory: '/fixed/worktree', repositoryRoot: '/fixed/repository', work: workStatus(overrides) };
 }
 
@@ -82,11 +94,50 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
   Object.entries(CASES).map(([key, [terminal, text, statusClass, summary]]) => [key, { terminal, text, statusClass, summary }]),
 ) as Record<StatusCaseKey, StatusCase>;
 
+export interface WaitingStatusCase extends StatusCase {
+  activity: string;
+}
+
+const node = { program: 'node', others: 0 } as const;
+const waitingOn = (overrides: Partial<ControllerWorkDetails> & { waiting?: { program: string; others: number } } = {}): WorkStatus => workStatus({ ...overrides, activity: 'waiting', waiting: overrides.waiting ?? node });
+
+const WAITING_CASES = {
+  waiting: [caseTerminal('waiting', waitingOn()), 'Waiting · node', 'working', 'working', 'Waiting · node'],
+  'waiting-with-others': [caseTerminal('waiting-with-others', waitingOn({ waiting: { program: 'pnpm', others: 1 } })), 'Waiting · pnpm +1', 'working', 'working', 'Waiting · pnpm +1'],
+  'waiting-needs-human': [caseTerminal('waiting-needs-human', waitingOn({ attention: human })), 'Needs a human · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-flow-error': [caseTerminal('waiting-flow-error', waitingOn({ error: failure })), 'Flow error · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-loop-error': [caseTerminal('waiting-loop-error', waitingOn({ loopMessage: loopError })), 'Loop error · Waiting', 'working', 'working', 'Waiting · node'],
+  'waiting-unassigned': [caseTerminal('waiting-unassigned', waitingOn({ flow: { ...running, assignment: 'unassigned' }, ticket: { availability: 'none' } })), 'Unassigned', 'idle', 'idle', 'Waiting · node'],
+  'waiting-completed': [caseTerminal('waiting-completed', waitingOn({ flow: { ...running, assignment: 'completed' } })), 'Completed', 'completed', 'idle', 'Waiting · node'],
+  'waiting-flow-loading': [caseTerminal('waiting-flow-loading', waitingOn({ flow: { availability: 'loading' } })), 'Status unknown', 'idle', 'idle', 'Waiting · node'],
+} as const satisfies Record<string, readonly [ControllerTerminal, string, Status, SummaryLabel, string]>;
+
+export type WaitingStatusCaseKey = keyof typeof WAITING_CASES;
+
+export const WAITING_STATUS_CASES: Readonly<Record<WaitingStatusCaseKey, WaitingStatusCase>> = Object.fromEntries(
+  Object.entries(WAITING_CASES).map(([key, [terminal, text, statusClass, summary, activity]]) => [key, { terminal, text, statusClass, summary, activity }]),
+) as Record<WaitingStatusCaseKey, WaitingStatusCase>;
+
+
+/** The two card orders, written here independently of the production vocabulary. */
+export const SORT_MODES = ['attention', 'recently-used'] as const;
+export type SortMode = (typeof SORT_MODES)[number];
+
+/** The sort-mode pair of the controller API this fake answers. */
+export interface SortModeApi {
+  getSortMode(): Promise<SortMode>;
+  setSortMode(sortMode: SortMode): Promise<void>;
+}
+
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
   options: {
     activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal'];
     theme?: Theme | 'unreadable';
+    /** The card order the controller fake holds as saved; `unreadable` makes reading it reject. */
+    sortMode?: SortMode | 'unreadable';
+    /** How main answers a save of the card order: it saves it, or the save rejects (still recorded as asked). */
+    sortModeSave?: 'saved' | 'rejected';
     alwaysOnTop?: boolean | 'unreadable';
     /** How main answers a request to change always-on-top: it applies it, refuses it (replying its unchanged value),
      *  or the request rejects. */
@@ -101,6 +152,9 @@ export function statusService(
   /** Each theme the controller was asked to save, in order. */
   const savedThemes: Theme[] = [];
   let theme = options.theme;
+  /** Each card order the controller was asked to save, in order. */
+  const savedSortModes: SortMode[] = [];
+  let sortMode = options.sortMode;
   /** Each always-on-top value the controller was asked to set, in order. */
   const requestedAlwaysOnTop: boolean[] = [];
   let alwaysOnTop = options.alwaysOnTop;
@@ -115,7 +169,7 @@ export function statusService(
     current = items;
     listeners.forEach(listener => listener(items));
   };
-  const api: ControllerApi = {
+  const api: ControllerApi & SortModeApi = {
     subscribeTerminals(listener) { listeners.add(listener); listener(current); return () => { listeners.delete(listener); }; },
     async activateTerminal(id) {
       activated.push(id);
@@ -140,6 +194,15 @@ export function statusService(
       savedThemes.push(next);
       theme = next;
     },
+    async getSortMode() {
+      if (sortMode === 'unreadable') throw new Error('sort mode unreadable');
+      return sortMode ?? 'attention';
+    },
+    async setSortMode(next) {
+      savedSortModes.push(next);
+      if (options.sortModeSave === 'rejected') throw new Error('sort store full');
+      sortMode = next;
+    },
     async getAlwaysOnTop() {
       if (alwaysOnTop === 'unreadable') throw new Error('always-on-top unreadable');
       return alwaysOnTop ?? CONTROLLER_DEFAULT_ALWAYS_ON_TOP;
@@ -157,7 +220,7 @@ export function statusService(
   };
   /** Whether the window still listens for always-on-top pushes. */
   const followingAlwaysOnTop = (): boolean => alwaysOnTopListeners.size > 0;
-  return { api, activated, dismissed, loopMessageDismissals, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
+  return { api, activated, dismissed, loopMessageDismissals, publish, savedThemes, savedSortModes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {

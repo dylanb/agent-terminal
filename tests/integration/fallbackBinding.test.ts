@@ -6,13 +6,14 @@ import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition } from '../../src/main/runDisposition';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) §18.7.3 T7 / AC15 — a run recovered onto the global fallback is bound to that one file: it keeps
 // loading it across a relaunch even after the pointer is rewritten and a local flow.yaml is added.
 
 type BoundSourceLoader = (worktree: string, binding: DispositionRead) => FlowLoad;
 
-const boundSourceLoader = (globalDir: string): BoundSourceLoader => createBoundSourceLoader(globalDir);
+const boundSourceLoader = (globalDir: string): BoundSourceLoader => createBoundSourceLoader(globalDir, repoOnlyDefTiers());
 
 const stepIds = (load: FlowLoad): string[] | string =>
   load.ok ? load.definition.steps.map((s) => s.id) : `<error: ${load.error}>`;
@@ -43,7 +44,7 @@ describe('the fallback run disposition (§18.7.3 T7)', () => {
 
     writeActiveFlow(wt, 'other');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l1', 'l2'] });
-    const relaunched = createRunResolver(home)(wt);
+    const relaunched = createRunResolver(home, repoOnlyDefTiers())(wt);
 
     expect(stepIds(relaunched.load)).toEqual(['g1', 'g2']);
     expect(relaunched.binding).toEqual({ source: 'fallback' });
@@ -60,7 +61,7 @@ describe('the fallback run disposition (§18.7.3 T7)', () => {
     writeActiveFlow(wt, 'other');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l1', 'l2'] });
 
-    expect(stepIds(createRunResolver(home)(wt).load)).toEqual(['p1', 'p2']);
+    expect(stepIds(createRunResolver(home, repoOnlyDefTiers())(wt).load)).toEqual(['p1', 'p2']);
   });
 
   it('the fallback loads the file hasFlowDefinition and the relaunch read, derived from one resolver', () => {

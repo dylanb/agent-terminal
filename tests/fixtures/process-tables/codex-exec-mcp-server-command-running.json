@@ -1,0 +1,24 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 37981,
+  "note": "Codex 0.167.0 (codex exec, started through its pnpm launcher, in a pty shell on macOS, default sandbox) with one stdio MCP server configured (node, which keeps a child fake-browser alive) running sleep 20 as its shell tool command; captured from outside the shell's tree once sleep was 3 s old",
+  "rows": [
+    "38340 38046 38340    0       00:03 sleep           ",
+    "37981 37978 37981 38046       00:10 zsh             ",
+    "38046 37981 38046 38046       00:08 codex           ",
+    "38099 38046 38099 38046       00:08 node            ",
+    "38104 38099 38099 38046       00:08 fake-browser    ",
+    "38339 38046 38339 38046       00:03 codex-code-mode-"
+  ],
+  "expected": {
+    "waiting": {
+      "program": "sleep",
+      "others": 0
+    }
+  }
+}

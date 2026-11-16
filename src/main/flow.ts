@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, ScreenWaiting, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
@@ -29,11 +29,12 @@ import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
  * passes through untouched. Pure — the input view is never mutated.
  */
-export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity: AgentState): FlowStateView {
+export function deriveFlowView(view: FlowStateView, todos: TodoItem[], screen: ScreenWaiting): FlowStateView {
   if (view.status !== 'in_progress') return view;
   const todosTotal = todos.length;
   const todosDone = todos.filter((t) => t.status === 'done').length;
-  return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
+  const live = screen.agentState === 'active' ? { activity: screen.agentState, waiting: null } : { activity: screen.agentState, waiting: screen.waiting };
+  return { ...view, derived: { ...live, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3). A `required` input must be resolved on step

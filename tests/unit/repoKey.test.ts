@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveRepoKey, currentRepoInfo } from '../../src/main/repoKey';
+import { findRepoRoot, resolveRepoKey, currentRepoInfo } from '../../src/main/repoKey';
 
 // §16.3: repoKey walks the real filesystem for `.git`. Real temp dirs, no mocks.
 describe('resolveRepoKey (§16.3 — git repo root / non-repo dir key)', () => {
@@ -39,6 +39,22 @@ describe('resolveRepoKey (§16.3 — git repo root / non-repo dir key)', () => {
     const root = tmp();
     writeFileSync(path.join(root, '.git'), 'gitdir: /elsewhere\n');
     expect(resolveRepoKey(path.join(root))).toBe(root);
+  });
+
+  it('finds the same root resolveRepoKey keys on, and null outside any repository', () => {
+    const root = tmp();
+    mkdirSync(path.join(root, '.git'));
+    const nested = path.join(root, 'src', 'deep');
+    mkdirSync(nested, { recursive: true });
+    const worktree = tmp();
+    writeFileSync(path.join(worktree, '.git'), 'gitdir: /elsewhere\n');
+    const plain = tmp();
+    expect({
+      root: findRepoRoot(root),
+      nested: findRepoRoot(nested),
+      worktree: findRepoRoot(worktree),
+      plain: findRepoRoot(plain),
+    }).toEqual({ root, nested: root, worktree, plain: null });
   });
 
   it('returns an absolute path even for a relative cwd', () => {
