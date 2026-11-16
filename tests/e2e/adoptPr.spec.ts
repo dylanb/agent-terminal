@@ -7,6 +7,7 @@ import { dump, load } from 'js-yaml';
 import { controllerOf, electron } from './registeredElectron';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { AGENT_LOGS_BRANCH_SH, agentCommitsFixSh, agentSwitchesBranchSh, exampleConfigDir, seedFakeAgentV2 } from './fakeTools';
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { createAdoptionWorld, type AdoptionWorld, type AdoptionWorldOptions } from '../helpers/adoptionWorld';
 import { forcePushes, outwardWrites } from '../helpers/outwardWrites';
 import { readPickupRecord } from '../../src/main/appLoopState';
@@ -74,7 +75,6 @@ function seedAdoptingConfig(gate: unknown[] = QUIET_GATE): string {
   def.pickup = { adopt: 'pr' };
   def.gate = gate;
   writeFileSync(defFile, dump(def));
-  cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
   return root;
 }
 
@@ -124,7 +124,10 @@ async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell, age
       ? {}
       : { extraShell: typeof agentTurnShell === 'string' ? { work: [agentTurnShell], review: [agentTurnShell], consolidate: [agentTurnShell] } : agentTurnShell }),
   });
-  if (options.relaunchOf === undefined) seedAdoptingFlow(w.repo);
+  if (options.relaunchOf === undefined) {
+    seedAdoptingFlow(w.repo);
+    installBundledRunReviewers(w.repo);
+  }
   const app = await electron.launch({
     args: ['out/main/index.js'],
     env: {

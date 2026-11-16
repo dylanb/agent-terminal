@@ -60,7 +60,7 @@ test('a real terminal that went idle and then needed a human lists the request a
     const readout = terminal.page.locator('#flow-strip .loopstat');
     if (await readout.getAttribute('aria-expanded') !== 'true') await readout.click();
     await approve.click();
-    await expect(terminal.page.locator('#flow-strip')).toContainText('verify');
+    await expect(terminal.page.locator('#flow-strip')).toContainText('Verify');
     await expect.poll(async () => {
       const { texts, kinds } = await read();
       const newest = texts.slice(0, 2).findIndex((text, index) => !kinds[index] && /verify/i.test(text));

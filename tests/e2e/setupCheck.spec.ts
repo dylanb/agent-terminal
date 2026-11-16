@@ -184,7 +184,7 @@ test('setup needed follows the terminal: absent where everything passes, shown i
   worktrees.writeFlowHome(passing, { name: 'passing-repo-flow', stepIds: ['passing-repo-step'] });
   await installExamplesThroughApp();
   const page = await launchIn(passing);
-  await expect(page.locator('#flow-strip')).toContainText('passing-repo-step');
+  await expect(page.locator('#flow-strip')).toContainText('Passing repo step');
   const soft = expect.configure({ soft: true });
   await soft(setupNeeded(page)).toHaveCount(0);
 
@@ -649,7 +649,7 @@ const AT_FIRST_GATE = {
   popupOpen: 0,
   setupNeeded: 1,
   firstTurnRan: true,
-  activeStation: [FX_SETUP],
+  activeStation: ['Fx setup'],
   settledAtGate: true,
   dialogsOpen: 0,
 };
