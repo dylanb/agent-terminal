@@ -23,6 +23,7 @@ const inWords = (names: readonly string[]): string =>
 export const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flow: 'Flow home',
   flowCatalog: 'Flow catalog',
+  stepLibrary: 'Step library',
   appLoops: 'App loop definitions',
   commands: 'Claude Code commands',
   agents: 'Claude Code reviewer agents',
@@ -33,10 +34,24 @@ export const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
 
 function retiredList(retired: RetiredExample[]): string {
   return INSTALL_DESTINATION_IDS.flatMap((id) => {
-    const rels = retired.filter((r) => r.destination === id).map((r) => r.rel);
-    return rels.length > 0 ? [`${DESTINATION_LABEL[id]}: ${rels.join(', ')}`] : [];
+    const here = retired.filter((r) => r.destination === id);
+    const named = here.filter((r) => r.kind !== 'moved-reviewer').map((r) => r.rel);
+    const reviewers = here.length - named.length;
+    const items = [...named, ...(reviewers > 0 ? [`${reviewers} old reviewer agent${reviewers === 1 ? '' : 's'}`] : [])];
+    return items.length > 0 ? [`${DESTINATION_LABEL[id]}: ${items.join(', ')}`] : [];
   }).join('; ');
 }
+
+export const MOVED_LOOPS_TEXT =
+  "Some loop definitions now ship once, in the shared folder. Older copies of them are still in a flow's own folder, where they are used instead of the shared copy.";
+export const MOVED_LOOPS_REMOVAL_TEXT = 'Removing an older copy makes its flow use the shared copy.';
+
+export const MOVED_REVIEWERS_TEXT =
+  'Reviewer agents are no longer installed in your Claude config directory (each run installs the ones it needs in its run folder), so these are unused and every Claude Code session loads them for nothing.';
+
+export const RETIRED_FLOW_STOPS_TEXT = 'A run using one of these flows stops until you choose another flow.';
+export const OLD_ITEM_WORD = 'old';
+export const RETIRED_ITEM_WORD = 'retired';
 
 const conflictsOf = (preview: InstallPreview): Conflict[] =>
   preview.destinations.flatMap((d) => (d.conflict ? [d] : []));
@@ -53,6 +68,10 @@ export interface InstallConsent {
 export function createInstallConsent(doc: Document, titleId: string, preview: InstallPreview): InstallConsent {
   const conflicts = conflictsOf(preview);
   const { retired, retiredFallback } = preview;
+  const hasRetiredFlow = retired.some((r) => r.kind === 'retired-flow');
+  const hasMovedLoop = retired.some((r) => r.kind === 'moved-loop');
+  const hasMovedReviewer = retired.some((r) => r.kind === 'moved-reviewer');
+  const hasOld = hasMovedLoop || hasMovedReviewer;
 
   const p = doc.createElement('p');
   p.className = 'ph';
@@ -62,7 +81,12 @@ export function createInstallConsent(doc: Document, titleId: string, preview: In
       ? ['Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.']
       : []),
     ...(retired.length > 0
-      ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind. They are kept unless you choose to remove them.`]
+      ? [
+          ...(hasRetiredFlow ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind.`] : []),
+          ...(hasMovedLoop ? [MOVED_LOOPS_TEXT] : []),
+          ...(hasMovedReviewer ? [MOVED_REVIEWERS_TEXT] : []),
+          'They are kept unless you choose to remove them.',
+        ]
       : []),
     ...(conflicts.length === 0 ? ['The bundled examples are installed either way; only the ticked option removes anything.'] : []),
   ].join(' ');
@@ -129,12 +153,14 @@ export function createInstallConsent(doc: Document, titleId: string, preview: In
   let retiredBox: HTMLInputElement | null = null;
   if (retired.length > 0) {
     retiredBox = option(
-      consentGroup('retired', 'Retired examples'),
+      consentGroup('retired', hasOld ? 'Old example files' : 'Retired examples'),
       'retired',
-      `Remove ${retired.length} retired item${retired.length === 1 ? '' : 's'}, whatever they hold`,
+      `Remove ${retired.length} ${hasOld ? OLD_ITEM_WORD : RETIRED_ITEM_WORD} item${retired.length === 1 ? '' : 's'}, whatever they hold`,
       [
-        `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
-        ...(retiredFallback !== null
+        `${retiredList(retired)}.`,
+        ...(hasRetiredFlow ? [RETIRED_FLOW_STOPS_TEXT] : []),
+        ...(hasMovedLoop ? [MOVED_LOOPS_REMOVAL_TEXT] : []),
+        ...(retiredFallback !== null && hasRetiredFlow
           ? [`Your fallback flow is still the retired ${retiredFallback}, which may use what these remove: replace ${DESTINATION_LABEL.flow} too.`]
           : []),
       ].join(' '),

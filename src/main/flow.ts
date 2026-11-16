@@ -3,13 +3,14 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
+import { isIssueNumber } from '../shared/issueNumber';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, ScreenWaiting, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
-import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { createFlowStateStore, type FlowStateStore, type PersistedDecision } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
@@ -19,11 +20,13 @@ import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
+import { createStepLibrary, runtimeStepTiers, type StepLibrary } from './stepLibrary';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import { stepRuns, type FlowDecision, type StepRun } from '../shared/flowBranch';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -69,6 +72,9 @@ export interface FlowStepDef {
    *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
    *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
   repeat?: { backTo: string; countInput: string };
+  decides?: string[];
+  haltOnDecision?: string[];
+  when?: { step: string; value: string };
 }
 
 /** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
@@ -142,14 +148,14 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 }
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
-export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), FLOW_REL);
+export function loadFlowDefinition(worktreeDir: string, steps: StepLibrary | null): FlowLoad {
+  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), steps, FLOW_REL);
 }
 
 /** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
  *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
  *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
-export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
+export function loadFlowDefinitionFromFile(file: string, steps: StepLibrary | null, relLabel: string = file): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
@@ -160,16 +166,16 @@ export function loadFlowDefinitionFromFile(file: string, relLabel: string = file
     if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
     return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
-  return parseFlowDefinition(raw, file);
+  return parseFlowDefinition(raw, file, steps);
 }
 
 export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
-export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+export function loadUntrustedFlowDefinition(file: string, steps: StepLibrary | null): FlowLoad {
   const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
-  if (read.ok) return parseFlowDefinition(read.text, file);
+  if (read.ok) return parseFlowDefinition(read.text, file, steps);
   switch (read.cause) {
     case 'absent':
       return { ok: false, error: `no flow.yaml found at ${file}` };
@@ -185,7 +191,158 @@ export function loadUntrustedFlowDefinition(file: string): FlowLoad {
   }
 }
 
-function parseFlowDefinition(raw: string, file: string): FlowLoad {
+interface StepLabels {
+  step: string;
+  loopStep: string;
+}
+
+const inlineLabels = (id: string): StepLabels => ({ step: `flow.yaml step "${id}"`, loopStep: `flow.yaml loop step "${id}"` });
+
+/** The §18.2 rules every step obeys, whether written inline or expanded from a step definition. */
+function parseStepBody(raw: Record<string, unknown>, id: string, earlier: FlowStepDef[], at: StepLabels): FlowStepDef | { error: string } {
+  if (raw.kind !== 'manual' && raw.kind !== 'loop')
+    return { error: `${at.step} has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+  if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
+    return { error: `${at.loopStep} is missing its loop: LoopDef name` };
+  // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
+  if (raw.kind !== 'loop' && raw.gate_authority !== undefined)
+    return { error: `${at.step} declares gate_authority, which only a loop step may carry` };
+  let gateAuthority: GateAuthority | undefined;
+  let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
+  if (raw.kind === 'loop') {
+    if (raw.gate_authority !== undefined) {
+      if (!isGateAuthority(raw.gate_authority))
+        return { error: `${at.loopStep} has unsupported gate_authority "${String(raw.gate_authority)}" (supports: ${GATE_AUTHORITIES.join(', ')})` };
+      gateAuthority = raw.gate_authority;
+    }
+    if (raw.loop_namespace !== undefined) {
+      if (!isRecognizedLoopBinding(raw.loop_namespace))
+        return { error: `${at.loopStep} names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
+      loopNamespace = raw.loop_namespace;
+    }
+    // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
+    //: an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
+    // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
+    // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
+    // per-step confinement is unchanged — only the file-level abort narrows.
+    if (raw.loop_namespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
+      return { error: `${at.loopStep} binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
+  }
+  if (raw.skill !== undefined && typeof raw.skill !== 'string') return { error: `${at.step} has a non-string skill` };
+  if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
+    return { error: `${at.step} has a non-string todo_template` };
+  if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
+    return { error: `${at.step} has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+  const inputs = parseInputs(raw.inputs);
+  if (inputs === 'invalid') return { error: `${at.step} has malformed inputs (each needs name + type)` };
+  const branch = parseBranch(raw, earlier, at);
+  if ('error' in branch) return branch;
+  // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
+  // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
+  let repeat: { backTo: string; countInput: string } | undefined;
+  if (raw.repeat !== undefined) {
+    if (
+      !isRecord(raw.repeat) ||
+      typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
+      typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
+    )
+      return { error: `${at.step} has a malformed repeat (needs back_to + count_input)` };
+    const backTo = raw.repeat.back_to;
+    if (!earlier.some((s) => s.id === backTo)) return { error: `${at.step} repeat.back_to "${backTo}" is not an earlier step` };
+    if (!sameWhen(earlier.find((s) => s.id === backTo)?.when, branch.when))
+      return { error: `${at.step} repeat.back_to "${backTo}" does not share this step's when` };
+    repeat = { backTo, countInput: raw.repeat.count_input };
+  }
+  return {
+    id,
+    kind: raw.kind,
+    ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
+    ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
+    ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
+    ...(gateAuthority !== undefined ? { gateAuthority } : {}),
+    ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+    ...(inputs.length > 0 ? { inputs } : {}),
+    ...(repeat ? { repeat } : {}),
+    ...branch,
+  };
+}
+
+const REFERENCE_KEYS: ReadonlySet<string> = new Set(['step', 'id', 'gate_authority', 'repeat', 'halt_on_decision', 'when']);
+const DEFINITION_KEYS: ReadonlySet<string> = new Set(['kind', 'loop', 'loop_namespace', 'skill', 'todo_template', 'bootstrap', 'inputs', 'decides']);
+
+type StepDefinitionRead = { def: Record<string, unknown> } | { error: string };
+
+/** §18.2. One read and one parse per name for the whole load, however often a flow references it (CWE-400). */
+function stepDefinitionReader(library: StepLibrary): (name: string) => StepDefinitionRead {
+  const cache = new Map<string, StepDefinitionRead>();
+  return (name) => {
+    const cached = cache.get(name);
+    if (cached !== undefined) return cached;
+    const read = readStepDefinition(library, name);
+    cache.set(name, read);
+    return read;
+  };
+}
+
+function readStepDefinition(library: StepLibrary, name: string): StepDefinitionRead {
+  const found = library(name);
+  if (!found.ok) return { error: found.error };
+  let def: unknown;
+  try {
+    def = yaml.load(found.raw);
+  } catch (e) {
+    return { error: `step definition "${name}" is not valid YAML: ${errMsg(e)}` };
+  }
+  if (!isRecord(def)) return { error: `step definition "${name}" must be a mapping` };
+  for (const key of Object.keys(def)) {
+    if (REFERENCE_KEYS.has(key)) return { error: `step definition "${name}" may not set ${key}` };
+    if (!DEFINITION_KEYS.has(key)) return { error: `step definition "${name}" has unknown field "${key}"` };
+  }
+  return { def };
+}
+
+/** §18.2: a step reference becomes the step its definition describes, under the reference's id, gate, repeat and branch. */
+function expandStepReference(
+  ref: Record<string, unknown>,
+  earlier: FlowStepDef[],
+  definitionOf: ((name: string) => StepDefinitionRead) | null,
+): FlowStepDef | { error: string } {
+  if (typeof ref.step !== 'string' || ref.step.length === 0) return { error: 'flow.yaml step reference has no step name' };
+  const name = ref.step;
+  const id = ref.id === undefined ? name : ref.id;
+  if (typeof id !== 'string' || id.length === 0) return { error: `flow.yaml reference to step definition "${name}" has an invalid id` };
+  for (const key of Object.keys(ref)) {
+    if (!REFERENCE_KEYS.has(key)) return { error: `flow.yaml step "${id}" sets ${key}, which belongs in step definition "${name}"` };
+  }
+  if (definitionOf === null)
+    return { error: `flow.yaml step "${id}" references step definition "${name}", but no step library is available` };
+  const read = definitionOf(name);
+  if ('error' in read) return { error: `flow.yaml step "${id}": ${read.error}` };
+  const label = `flow.yaml step "${id}" (step definition "${name}")`;
+  const flowSet = { gate_authority: ref.gate_authority, repeat: ref.repeat, halt_on_decision: ref.halt_on_decision, when: ref.when };
+  return parseStepBody({ ...read.def, ...flowSet }, id, earlier, { step: label, loopStep: label });
+}
+
+/** Bounds the steps one flow.yaml may declare, so references cannot multiply one load's work without limit (CWE-770). */
+export const MAX_FLOW_STEPS = 100;
+
+function flowNameOf(doc: Record<string, unknown>): string | null {
+  return typeof doc.name === 'string' && doc.name.length > 0 ? doc.name : null;
+}
+
+/** The `name` a flow.yaml declares, read without loading its steps, or null when the file has none. */
+export function readFlowDefinitionName(file: string): string | null {
+  let doc: unknown;
+  try {
+    doc = yaml.load(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  return isRecord(doc) ? flowNameOf(doc) : null;
+}
+
+/** `library` is null for a caller that accepts no step references; a reference then fails to load with a reason. */
+function parseFlowDefinition(raw: string, file: string, library: StepLibrary | null): FlowLoad {
   let doc: unknown;
   try {
     doc = yaml.load(raw);
@@ -194,81 +351,68 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
   }
 
   if (!isRecord(doc)) return { ok: false, error: 'flow.yaml must be a mapping with name + steps' };
-  if (typeof doc.name !== 'string' || doc.name.length === 0)
-    return { ok: false, error: 'flow.yaml is missing a name' };
+  const name = flowNameOf(doc);
+  if (name === null) return { ok: false, error: 'flow.yaml is missing a name' };
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
+  if (doc.steps.length > MAX_FLOW_STEPS)
+    return { ok: false, error: `flow.yaml has more than ${MAX_FLOW_STEPS} steps` };
+  const definitionOf = library === null ? null : stepDefinitionReader(library);
 
   // Only `manual` and `loop` kinds are in scope (§24.2.3 T1/T2); the `action` kind (§18.2) is rejected.
   const steps: FlowStepDef[] = [];
   for (const raw of doc.steps) {
-    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
+    let parsed: FlowStepDef | { error: string };
+    if (isRecord(raw) && raw.step !== undefined) parsed = expandStepReference(raw, steps, definitionOf);
+    else if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
       return { ok: false, error: 'flow.yaml step is missing an id' };
-    if (raw.kind !== 'manual' && raw.kind !== 'loop')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
-    if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
-      return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
-    // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
-    if (raw.kind !== 'loop' && raw.gate_authority !== undefined)
-      return { ok: false, error: `flow.yaml step "${raw.id}" declares gate_authority, which only a loop step may carry` };
-    let gateAuthority: GateAuthority | undefined;
-    let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
-    if (raw.kind === 'loop') {
-      if (raw.gate_authority !== undefined) {
-        if (!isGateAuthority(raw.gate_authority))
-          return { ok: false, error: `flow.yaml loop step "${raw.id}" has unsupported gate_authority "${String(raw.gate_authority)}" (supports: ${GATE_AUTHORITIES.join(', ')})` };
-        gateAuthority = raw.gate_authority;
-      }
-      if (raw.loop_namespace !== undefined) {
-        if (!isRecognizedLoopBinding(raw.loop_namespace))
-          return { ok: false, error: `flow.yaml loop step "${raw.id}" names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
-        loopNamespace = raw.loop_namespace;
-      }
-      // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
-      //: an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
-      // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
-      // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
-      // per-step confinement is unchanged — only the file-level abort narrows.
-      if (raw.loop_namespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
-        return { ok: false, error: `flow.yaml loop step "${raw.id}" binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
-    }
-    if (raw.skill !== undefined && typeof raw.skill !== 'string')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
-    if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
-    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
-    const inputs = parseInputs(raw.inputs);
-    if (inputs === 'invalid')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
-    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
-    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
-    let repeat: { backTo: string; countInput: string } | undefined;
-    if (raw.repeat !== undefined) {
-      if (
-        !isRecord(raw.repeat) ||
-        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
-        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
-      )
-        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
-      const backTo = raw.repeat.back_to;
-      if (!steps.some((s) => s.id === backTo))
-        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
-      repeat = { backTo, countInput: raw.repeat.count_input };
-    }
-    steps.push({
-      id: raw.id,
-      kind: raw.kind,
-      ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
-      ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
-      ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
-      ...(gateAuthority !== undefined ? { gateAuthority } : {}),
-      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
-      ...(inputs.length > 0 ? { inputs } : {}),
-      ...(repeat ? { repeat } : {}),
-    });
+    else parsed = parseStepBody(raw, raw.id, steps, inlineLabels(raw.id));
+    if ('error' in parsed) return { ok: false, error: parsed.error };
+    const { id } = parsed;
+    if (steps.some((s) => s.id === id)) return { ok: false, error: `flow.yaml has a duplicate step id "${id}"` };
+    steps.push(parsed);
   }
-  return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
+  return { ok: true, definition: { name, steps }, flowDir: path.dirname(file) };
+}
+
+type BranchFields = Pick<FlowStepDef, 'decides' | 'haltOnDecision' | 'when'>;
+
+function parseBranch(raw: Record<string, unknown>, earlier: readonly FlowStepDef[], at: StepLabels): BranchFields | { error: string } {
+  const fields: BranchFields = {};
+  if (raw.decides !== undefined) {
+    if (raw.kind !== 'loop') return { error: `${at.step} "decides" is only valid on a loop step` };
+    const decides = raw.decides;
+    if (
+      !Array.isArray(decides) || decides.length === 0 ||
+      !decides.every((v): v is string => typeof v === 'string' && isSafePathSegment(v)) ||
+      new Set(decides).size !== decides.length
+    )
+      return { error: `${at.step} decides must be a non-empty list of unique names` };
+    fields.decides = decides;
+  }
+  if (raw.halt_on_decision !== undefined) {
+    if (!Array.isArray(raw.halt_on_decision)) return { error: `${at.step} halt_on_decision must be a list of values from decides` };
+    const halts: string[] = [];
+    for (const v of raw.halt_on_decision) {
+      if (typeof v !== 'string' || !(fields.decides ?? []).includes(v)) return { error: `${at.step} halt_on_decision value "${String(v)}" is not in decides` };
+      halts.push(v);
+    }
+    fields.haltOnDecision = halts;
+  }
+  if (raw.when !== undefined) {
+    const entries = isRecord(raw.when) ? Object.entries(raw.when) : [];
+    const [step, value] = entries.length === 1 ? entries[0] : [];
+    if (step === undefined || typeof value !== 'string') return { error: `${at.step} when must name exactly one earlier step` };
+    const decider = earlier.find((s) => s.id === step);
+    if (decider?.decides === undefined) return { error: `${at.step} when step "${step}" is not an earlier step that decides` };
+    if (!decider.decides.includes(value)) return { error: `${at.step} when value "${value}" is not one "${step}" decides` };
+    fields.when = { step, value };
+  }
+  return fields;
+}
+
+function sameWhen(a: FlowStepDef['when'], b: FlowStepDef['when']): boolean {
+  return a?.step === b?.step && a?.value === b?.value;
 }
 
 /**
@@ -277,12 +421,13 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
  * masked by the global. (Flow STATE, by contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
+  const repoSteps = createStepLibrary(runtimeStepTiers(localDir, globalDir, 'repo'));
+  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir, repoSteps);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
   // exists do we report the local (absent) error, so a bad value is never reported as a missing flow.
-  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
-  return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
+  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir, createStepLibrary(runtimeStepTiers(localDir, globalDir, 'global')));
+  return loadFlowDefinition(localDir, repoSteps); // neither exists: report the local (absent) error
 }
 
 /** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
@@ -305,29 +450,43 @@ export interface FlowMachine {
   /** not_started → in_progress; throws on any other current status (inert in the error state). The run's
    *  identity (§27.9.1) takes `startedAt` (default: now) and this definition's name, kept until a reset. */
   start(at?: { startedAt: number }): MachineView;
-  /** in_progress → done; throws on any other current status (inert in the error state). */
+  /** Moves to the next step the recorded decisions do not rule out, or to done when none is left. Stays put
+   *  while that step is still undecided. Throws unless in_progress (inert in the error state). */
   advance(): MachineView;
+  /** The step whose missing decision keeps advance() from moving, or null when it would move. */
+  pendingDecision(): string | null;
+  /** Records the value the current step decided, returning what the step held before; null, recording nothing,
+   *  unless that step is current and declares the value. Recorded under `gateTurn`, it counts only while that
+   *  gate turn reads as accepted, until advance() takes it. */
+  recordDecision(stepId: string, decision: FlowDecision, gateTurn?: string): RecordedFlowDecision | null;
+  /** Takes back a decision recordDecision recorded, putting back what the step held before it. True once the step
+   *  no longer holds that decision, including when something else already cleared it; false while it still does. */
+  withdrawDecision(stepId: string, recorded: RecordedFlowDecision): boolean;
   /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
-   *  ones are re-requested, and re-runs entry actions. Throws on any other status (inert on error). */
+   *  ones are re-requested, clears every recorded decision, and re-runs entry actions. Throws on any
+   *  other status (inert on error). */
   restart(): MachineView;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
-   *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
+   *  (the inverse of advance, not a restart), keeping the landing step's decision and clearing later
+   *  ones (§18.2). Throws on any other status (inert on error). */
   undo(): MachineView;
-  /** Roll a half-entered bootstrap step back one step when its async bootstrap failed (§27): in_progress
-   *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
-   *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
-   *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
+  /** Roll a half-entered bootstrap step back when its async bootstrap failed (§27): in_progress at
+   *  `fromStepId` → in_progress at the previous step the decisions did not skip, re-running NO entry
+   *  actions, PRESERVING resolved inputs and that step's decision and clearing later decisions (§18.2), so
+   *  the operator can fix the cause and re-advance. With no earlier step that runs, it reverts to
+   *  not_started, a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
    *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
    *  or is not in_progress) returns the current view untouched rather than raising. */
   revertStep(fromStepId: string): MachineView;
   /** §28.4.2 in_progress → in_progress at the slice's RED step (the repeat step's `backTo`), re-running its
    *  entry actions and PRESERVING the slice count (`repeat_counts`) and resolved inputs — the human
-   *  "back to RED" move that redoes the current impl-slice without consuming or adding one. A NO-OP GUARD,
-   *  never a throw: inert unless in_progress with a repeat step whose target is at or before the current
-   *  step, so a stale gate click cannot crash or jump the flow forward. */
+   *  "back to RED" move that redoes the current impl-slice without consuming or adding one, clearing the
+   *  RED step's decision and every later one (§18.2). A NO-OP GUARD, never a throw: inert unless in_progress
+   *  with a repeat step whose target is at or before the current step and not skipped by the decisions, so
+   *  a stale gate click cannot crash or jump the flow forward. */
   reopenSlice(): MachineView;
-  /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
-   *  from not_started (inert on error). */
+  /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs and recorded
+   *  decisions. Throws from not_started (inert on error). */
   terminate(): MachineView;
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
@@ -350,6 +509,16 @@ export interface FlowMachine {
  *  transition. */
 export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) => { notice?: string; prompt?: FlowPrompt } | void;
 
+export interface RecordedFlowDecision {
+  recorded: PersistedDecision;
+  prior: PersistedDecision | undefined;
+}
+
+const sameDecision = (a: PersistedDecision | undefined, b: PersistedDecision): boolean =>
+  a !== undefined && a.value === b.value && a.note === b.note && a.gateTurn === b.gateTurn;
+
+export type FlowGateAccepted = (step: string, gateTurn: string) => boolean;
+
 /** The §27 loop-view provider: resolve the bound app-def by name and produce its whole loop view — a
  *  run-less view or a def-failure view (see loopViewV2). Selected for every surviving loop binding (§27.15);
  *  omitted in tests, where a loop step then renders no loop view. */
@@ -357,28 +526,38 @@ export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
+function errorView(error: string, userTitle: string | null): MachineView {
+  return {
+    stepName: '',
+    steps: [],
+    stepRuns: [],
+    decisions: {},
+    position: 0,
+    total: 0,
+    status: 'error',
+    // CWE-117/CWE-1007 (§16.3, §18.7.6): the message interpolates repo-authored content (a step id, a kind:, a
+    // js-yaml snippet, a recorded decision value), so it is made display-safe and bounded ONCE over the whole
+    // composed message at the single place MachineView.error is populated.
+    error: displaySafeEcho(error, MAX_ECHOED_LOAD_ERROR_LENGTH),
+    ...(userTitle !== null ? { userTitle } : {}),
+  };
+}
+
+function strandedRunReason(decider: string, droppedValue: string | undefined): string {
+  return droppedValue !== undefined
+    ? `This run cannot resume: flow.yaml no longer lets step "${decider}" decide "${droppedValue}", the value this run recorded before it moved past that step. Put "${droppedValue}" back in the step's decides, or Terminate the run.`
+    : `This run cannot resume: it is past step "${decider}", which has no recorded decision, and a step it has not finished waits on it. Terminate the run.`;
+}
+
 export function createFlowMachine(
   load: FlowLoad,
   store?: Omit<FlowStateStore, 'clearProgression'>,
   onEnter?: FlowEnterStep,
   readAppLoopView?: FlowReadAppLoopView,
+  gateAccepted: FlowGateAccepted = () => false,
 ): FlowMachine {
   if (!load.ok) {
-    const view = (): MachineView => {
-      const named = store?.readTitle() ?? null;
-      return {
-        stepName: '',
-        steps: [],
-        position: 0,
-        total: 0,
-        status: 'error',
-        // CWE-117/CWE-1007 (§16.3, §18.7.6): the load-error message interpolates repo-authored content (a step
-        // id, a kind:, a js-yaml snippet), so it is made display-safe and bounded ONCE over the whole composed
-        // message at the single place MachineView.error is populated.
-        error: displaySafeEcho(load.error, MAX_ECHOED_LOAD_ERROR_LENGTH),
-        ...(named !== null ? { userTitle: named } : {}),
-      };
-    };
+    const view = (): MachineView => errorView(load.error, store?.readTitle() ?? null);
     return {
       state: view,
       currentSlice: () => 1, // an error-state flow (no definition) has no slices
@@ -389,6 +568,12 @@ export function createFlowMachine(
       undo: view,
       revertStep: view,
       reopenSlice: view,
+      recordDecision: () => null,
+      withdrawDecision: (stepId, { recorded }) => {
+        const held = store?.read()?.decisions;
+        return held === undefined || !Object.prototype.hasOwnProperty.call(held, stepId) || !sameDecision(held[stepId], recorded);
+      },
+      pendingDecision: () => null,
       terminate: view,
       provideInput: view,
       resolveInputs: view,
@@ -423,9 +608,40 @@ export function createFlowMachine(
   // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
   // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
   let repeatCounts: Record<string, number> = Object.create(null);
+  let decisions: Record<string, PersistedDecision> = Object.create(null);
   // §22.3.1.
   let userTitle: string | null = null;
   let identity: RunIdentity | null = null;
+  let stranded: string | null = null;
+
+  const current = (): FlowStepDef => steps[index];
+
+  const counted = (): Record<string, FlowDecision> => {
+    const out: Record<string, FlowDecision> = Object.create(null);
+    for (const [id, { value, note, gateTurn }] of Object.entries(decisions)) {
+      if (gateTurn === undefined || gateAccepted(id, gateTurn)) out[id] = { value, ...(note !== undefined ? { note } : {}) };
+    }
+    return out;
+  };
+  const settleDecisions = (): void => {
+    for (const [id, decision] of Object.entries(counted())) decisions[id] = decision;
+  };
+
+  const rootDecider = (runs: readonly StepRun[], at: number): number => {
+    let step = steps[at];
+    while (step.when !== undefined && runs[names.indexOf(step.when.step)] !== 'runs') step = steps[names.indexOf(step.when.step)];
+    return names.indexOf(step.when?.step ?? step.id);
+  };
+  const strandedOn = (): string | null => {
+    if (status !== 'in_progress') return null;
+    const runs = stepRuns(steps, counted());
+    for (let at = index; at < steps.length; at++) {
+      if (runs[at] !== 'unresolved') continue;
+      const decider = rootDecider(runs, at);
+      if (decider < index) return names[decider];
+    }
+    return null;
+  };
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -437,12 +653,24 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     repeatCounts = Object.create(null);
+    decisions = Object.create(null);
     identity = null;
+    stranded = null;
     const persisted = store.read();
     if (persisted) {
       if (resumesAt(def, persisted.step)) {
         index = names.indexOf(persisted.step);
         status = persisted.status;
+        const dropped: Record<string, string> = Object.create(null);
+        for (const [k, v] of Object.entries(persisted.decisions ?? {})) {
+          if (steps.some((s) => s.id === k && (s.decides ?? []).includes(v.value))) decisions[k] = { ...v };
+          else dropped[k] = v.value;
+        }
+        const decider = strandedOn();
+        if (decider !== null) {
+          stranded = strandedRunReason(decider, dropped[decider]);
+          status = 'error';
+        }
       }
       if (persisted.startedAt !== undefined && persisted.flow !== undefined) identity = { startedAt: persisted.startedAt, flow: persisted.flow };
       if (persisted.inputs) inputs = { ...persisted.inputs };
@@ -452,7 +680,17 @@ export function createFlowMachine(
   };
   hydrate();
 
-  const current = (): FlowStepDef => steps[index];
+  const clearDecisionsFrom = (first: number): void => {
+    for (const id of names.slice(first)) delete decisions[id];
+  };
+  const enterAt = (target: number): void => {
+    index = target;
+    clearDecisionsFrom(target);
+  };
+  const returnTo = (target: number): void => {
+    index = target;
+    clearDecisionsFrom(target + 1);
+  };
 
   // Own-property lookup only (§24.2.3 T7): an input named `__proto__` must not resolve a ref off the
   // prototype chain.
@@ -472,7 +710,8 @@ export function createFlowMachine(
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
     // linkedIssues/pr went with the bridge.
-    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
+    const ticketRaw = ticketInput && gates.ticketStepEntered && Object.prototype.hasOwnProperty.call(inputs, ticketInput.name) ? inputs[ticketInput.name] : undefined;
+    const ticket = typeof ticketRaw === 'string' && isIssueNumber(ticketRaw.trim()) ? Number(ticketRaw.trim()) : undefined;
     const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
@@ -481,10 +720,15 @@ export function createFlowMachine(
   };
 
   const view = (): MachineView => {
+    if (stranded !== null) return errorView(stranded, userTitle);
     const step = current();
+    const taken = counted();
+    const runs = stepRuns(steps, taken);
     const base: MachineView = {
       stepName: step.id,
       steps: names,
+      stepRuns: runs,
+      decisions: { ...taken },
       position: index + 1,
       total: steps.length,
       status,
@@ -492,7 +736,7 @@ export function createFlowMachine(
       ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).
-    const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
+    const entered = status === 'not_started' ? [] : steps.slice(0, index + 1).filter((_, i) => runs[i] !== 'skipped');
     const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
     const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
     const refs = computeRefs({ ticketStepEntered, prStepEntered });
@@ -528,7 +772,7 @@ export function createFlowMachine(
     if (loopName === undefined) return withRefs;
     const appLoop = readAppLoopView?.(loopName);
     if (!appLoop) return withRefs;
-    const offersReopen = returnStep !== null && (appLoop.gateOptions ?? []).includes('back-to-red');
+    const offersReopen = returnStep !== null && runs[names.indexOf(returnStep)] !== 'skipped' && (appLoop.gateOptions ?? []).includes('back-to-red');
     return { ...withRefs, loop: offersReopen ? { ...appLoop, reopenStep: returnStep } : appLoop };
   };
 
@@ -541,8 +785,26 @@ export function createFlowMachine(
       ...(identity !== null ? { startedAt: identity.startedAt, flow: identity.flow } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
+      ...(Object.keys(decisions).length > 0 ? { decisions: { ...decisions } } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
+  };
+
+  const nextMove = (): { kind: 'loop-back' | 'enter'; to: number } | { kind: 'done' } | { kind: 'undecided'; awaits: string } => {
+    const step = current();
+    const taken = counted();
+    if (step.decides !== undefined && !Object.prototype.hasOwnProperty.call(taken, step.id)) return { kind: 'undecided', awaits: step.id };
+    // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
+    if (step.repeat) {
+      const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
+      const backIndex = names.indexOf(step.repeat.backTo);
+      if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) return { kind: 'loop-back', to: backIndex };
+    }
+    const runs = stepRuns(steps, taken);
+    const next = runs.findIndex((run, i) => i > index && run !== 'skipped');
+    if (next < 0) return { kind: 'done' };
+    if (runs[next] !== 'unresolved') return { kind: 'enter', to: next };
+    return { kind: 'undecided', awaits: names[rootDecider(runs, next)] };
   };
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
@@ -583,30 +845,48 @@ export function createFlowMachine(
     },
     advance: () => {
       requireStatus('in_progress', 'advance');
-      const step = current();
-      // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
-      if (step.repeat) {
-        const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
-        const backIndex = names.indexOf(step.repeat.backTo);
-        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
-          repeatCounts[step.id] = completed + 1;
-          index = backIndex;
-          persist();
-          return enter(view());
-        }
-      }
-      if (index < steps.length - 1) {
-        index += 1;
+      const move = nextMove();
+      if (move.kind === 'undecided') return view();
+      settleDecisions();
+      if (move.kind === 'done') {
+        status = 'done';
         persist();
-        return enter(view());
+        return view();
       }
-      status = 'done';
+      if (move.kind === 'loop-back') repeatCounts[current().id] = (repeatCounts[current().id] ?? 1) + 1;
+      enterAt(move.to);
       persist();
-      return view();
+      return enter(view());
+    },
+    pendingDecision: () => {
+      hydrate(); // §19.1
+      if (status !== 'in_progress') return null;
+      const move = nextMove();
+      return move.kind === 'undecided' ? move.awaits : null;
+    },
+    recordDecision: (stepId, decision, gateTurn) => {
+      hydrate(); // §19.1
+      const step = current();
+      if (status !== 'in_progress' || step.id !== stepId || !(step.decides ?? []).includes(decision.value)) return null;
+      const prior = Object.prototype.hasOwnProperty.call(decisions, stepId) ? { ...decisions[stepId] } : undefined;
+      const recorded: PersistedDecision = { value: decision.value, ...(decision.note !== undefined ? { note: decision.note } : {}), ...(gateTurn !== undefined ? { gateTurn } : {}) };
+      decisions[stepId] = recorded;
+      persist();
+      return { recorded: { ...recorded }, prior };
+    },
+    withdrawDecision: (stepId, { recorded, prior }) => {
+      hydrate();
+      const held = Object.prototype.hasOwnProperty.call(decisions, stepId) ? decisions[stepId] : undefined;
+      if (!sameDecision(held, recorded)) return true;
+      if (status !== 'in_progress' || current().id !== stepId) return false;
+      if (prior === undefined) delete decisions[stepId];
+      else decisions[stepId] = { ...prior };
+      persist();
+      return true;
     },
     restart: () => {
       requireStatus('done', 'restart');
-      index = 0;
+      enterAt(0);
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
       repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
@@ -616,6 +896,7 @@ export function createFlowMachine(
     undo: () => {
       requireStatus('done', 'undo');
       status = 'in_progress';
+      returnTo(index);
       persist();
       return view();
     },
@@ -623,12 +904,15 @@ export function createFlowMachine(
       // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
       // navigated, so a mismatch is inert rather than an unhandled rejection (§27).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
-      if (index > 0) index -= 1;
+      const runs = stepRuns(steps, counted());
+      const previous = runs.slice(0, index).findLastIndex((run) => run !== 'skipped');
+      if (previous >= 0) returnTo(previous);
       else {
         // §18.7.4
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
+        decisions = Object.create(null);
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -640,8 +924,8 @@ export function createFlowMachine(
       // the current step (a reopen is backward-or-self, never a skip).
       if (status !== 'in_progress') return view();
       const target = returnStep !== null ? names.indexOf(returnStep) : -1;
-      if (target < 0 || target > index) return view();
-      index = target;
+      if (target < 0 || target > index || stepRuns(steps, counted())[target] === 'skipped') return view();
+      enterAt(target);
       persist();
       return enter(view()); // re-enter RED so its work turn re-runs
     },
@@ -650,6 +934,7 @@ export function createFlowMachine(
         throw new Error(`illegal flow transition: cannot terminate from ${status}`);
       }
       index = 0;
+      decisions = Object.create(null);
       status = 'not_started';
       inputs = {};
       repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
@@ -692,6 +977,10 @@ export interface FlowManager {
   state(repoKey: string): FlowStateView;
   start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition }): FlowStateView;
   advance(repoKey: string): FlowStateView;
+  /** The step whose missing decision keeps a repo's Advance from moving, or null when it would move. */
+  pendingDecision(repoKey: string): string | null;
+  recordDecision(repoKey: string, stepId: string, gateTurn: string, decision: FlowDecision): RecordedFlowDecision | null;
+  withdrawDecision(repoKey: string, stepId: string, recorded: RecordedFlowDecision): boolean;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
   /** §28.4.2 — the manual back-to-RED transition: re-enter the current slice's RED step (the repeat step's
@@ -740,6 +1029,9 @@ export interface FlowManagerDeps {
    *  renders no loop view. A `legacy`-marked step never reaches this — its marked-binding error view (AC 4)
    *  is produced in the machine. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
+  /** Whether a repo's gate turn has its accept persisted; omitted, none has, so a decision recorded under a gate
+   *  turn never counts. */
+  gateAccepted?: (repoKey: string, step: string, gateTurn: string) => boolean;
 }
 
 function displaySafeHold(hold: HeldRunView): HeldRunView {
@@ -777,6 +1069,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       makeStore(repoKey),
       deps.onEnterStep,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
+      deps.gateAccepted ? (step, gateTurn) => deps.gateAccepted!(repoKey, step, gateTurn) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return { machine, binding: resolved.binding };
@@ -827,6 +1120,9 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       return withRunStarted(k, view);
     },
     advance: (k) => viewOf(k, (m) => m.advance()),
+    pendingDecision: (k) => machineFor(k).machine.pendingDecision(),
+    recordDecision: (k, stepId, gateTurn, decision) => machineFor(k).machine.recordDecision(stepId, decision, gateTurn),
+    withdrawDecision: (k, stepId, recorded) => machineFor(k).machine.withdrawDecision(stepId, recorded),
     restart: (k) => viewOf(k, (m) => m.restart()),
     undo: (k) => viewOf(k, (m) => m.undo()),
     reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),

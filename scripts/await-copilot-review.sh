@@ -26,6 +26,7 @@
 #     --check          validate the predicate against current reviews and exit (no wait)
 #     --timeout-min N  max minutes to wait      (default 30)
 #     --interval-sec N poll interval in seconds (default 20)
+#   GH_REPO=owner/name targets that repository instead of the checkout's default one.
 #
 # Exit: 0 when a new review is detected (or --check found ≥1 existing); 1 on timeout; 2 on bad args.
 
@@ -57,7 +58,7 @@ done
 [ -n "$PR" ] || { echo "usage: $0 <pr> [--request] [--check] [--timeout-min N] [--interval-sec N]" >&2; exit 2; }
 command -v gh >/dev/null 2>&1 || { echo "error: gh CLI not found on PATH" >&2; exit 127; }
 
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+REPO=${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
 
 # One line per matched review ("<id>\t<state>\t<submitted_at>"); per_page=100 avoids the
 # --paginate+--jq per-page counting pitfall (review rounds never approach 100).

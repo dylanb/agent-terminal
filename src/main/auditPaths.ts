@@ -27,3 +27,12 @@ export function auditFileName(flow: string, started: Date): string {
 export function auditFilePath(root: string, repoPath: string, flow: string, started: Date): string {
   return path.join(auditRepoDir(root, repoPath), auditFileName(flow, started));
 }
+
+const FILE_STAMP = /_(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2}\.\d{3})Z\.yaml$/;
+
+export function auditFileStartedAt(name: string): Date | null {
+  const m = FILE_STAMP.exec(name);
+  if (m === null || m.index === 0) return null;
+  const started = new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`);
+  return Number.isNaN(started.getTime()) ? null : started;
+}

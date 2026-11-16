@@ -1,0 +1,36 @@
+version: v2
+name: impl-approve-loop
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: impl-summary
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+    side_effects:
+      - kind: commit
+        label: approve
+      - kind: gh
+        action: publish-pr-body
+        artifact: plan
+  - option: redo
+  - option: back-to-red
+inputs:
+  - id: groom-intent
+    path: groom-intent.md
+  - id: plan
+    path: plan.md
+  - id: impl-report
+    path: impl-report.md
+    sections_dir: impl-report
+outputs:
+  - id: impl-summary
+    path: impl-summary.md
+  - id: impl-report
+    path: impl-report.md
+    sections_dir: impl-report

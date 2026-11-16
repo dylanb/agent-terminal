@@ -27,7 +27,7 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 
 1. **Launch the controller and Agent Terminal.** The shell starts in `$HOME`; set `APP_LAUNCH_DIR` to start in a repo. Run your agent (`claude`, `codex`, …) exactly as you would in any terminal.
 2. **Install the `agent-terminal` launcher.** Open **Settings → Command line → Install**, then open a new shell. From then on, `agent-terminal [dir]` opens a terminal rooted at `dir` (default: the current directory), and `agent-terminal --controller` starts the controller. On Linux with AppImages, read [The `agent-terminal` command](#the-agent-terminal-command) first.
-3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands and reviewer sub-agents into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops.
+3. **Install the examples.** Open **Settings** and choose **Install examples**. This copies the bundled flows, step definitions and loop definitions into `~/.agent-terminal/`, the Claude Code slash commands into `~/.claude/` (or `$CLAUDE_CONFIG_DIR`), and the Codex reviewer agents and skills into `~/.codex/` (or `$CODEX_HOME`, and skipped if that directory doesn't exist). You'll see a preview, and it asks before replacing any file you've changed. Run it again after upgrading to pick up updated loops. Claude Code reviewer sub-agents aren't installed here: each run installs its own in its run folder when you start it, so start your agent session after pressing Start, or restart it when the app asks.
 4. **Pick a flow and start it.** Open a terminal in your repo (`agent-terminal ~/path/to/repo`), choose a flow from the picker in the rail, give it a GitHub issue, and press **Start**. The ticket steps use the [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`.
 5. **Steer.** Open the quick-send overlay to send todos to the agent or capture its latest report. Watch the status bar to see what the engine is doing. It turns red when a gate needs your decision.
 
@@ -62,7 +62,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 
 ### Review and quality gates
 
-- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as `<loop>--<reviewer>` sub-agents.
+- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as `<loop>--<reviewer>` sub-agents. For Claude Code, each run installs its flow's reviewers in its own run folder (`<run>/.claude/agents`, kept out of git through the repository's `info/exclude`) at Start and Restart, so sessions that run no loop don't load them; Codex reviewers go to `~/.codex/agents`.
   - **Security** reviewers in plan, infra, green and integration-slice.
   - **Taint** reviewers in infra, green and integration-slice.
   - **Accessibility** reviewers in green and integration-slice.
@@ -115,7 +115,7 @@ A separate tray app (see [docs/controller.md](docs/controller.md)):
 ### Configuration
 
 - **Flow locations.** Flows are discovered at `~/.agent-terminal/flows/<id>/flow.yaml` (global) and `<repo>/.agent-terminal/flows/` (per repo; the repo wins a name clash).
-- **Install examples.** **Settings → Install examples** copies the example flows, loops, reviewer sub-agents, slash commands and skills into place. It previews first and asks before replacing any file you've changed. See [Getting started](#getting-started) step 2 for where each goes.
+- **Install examples.** **Settings → Install examples** copies the example flows, step definitions, loops, slash commands, Codex reviewer agents and skills into place, and offers to remove the Claude Code reviewer sub-agents older builds installed in `~/.claude/agents`. It previews first and asks before replacing any file you've changed. See [Getting started](#getting-started) step 2 for where each goes.
 - **`loop-capabilities.yaml`** tells the loops about your project:
   - `test_globs`: which files are tests (also used by the frozen-tests check).
   - `test_command`, `build_command`: guidance strings for the agent, never executed by the engine.
@@ -230,7 +230,7 @@ A *flow* is a chain of steps the app runs against a GitHub issue. Most steps are
 - **`human`**: a person decides. A loop step with no `gate_authority` in its flow file is `human`.
 - **`manual`**: not a loop. A person does the step and marks it done ([spec §18](docs/spec/18-flow-definitions-flow-yaml.md)).
 
-Merging is always left to a person. The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2).
+Merging is always left to a person. The definitions live in [`example/flows/`](example/flows), [`example/steps/`](example/steps) and [`example/loops-v2/`](example/loops-v2). `feature-dev-v3` and `simple-dev-v1` share their `preparation`, `plan-approve`, `impl-approve` and `finalize` steps through the `dev-` step definitions in `example/steps/`. [`docs/flows/`](docs/flows/README.md) has a page for each flow with a diagram of its steps, gates and loop-backs and what each step's loop does, plus a page on how the engine runs each kind of loop.
 
 ### Choosing a flow
 
@@ -240,6 +240,7 @@ Merging is always left to a person. The definitions live in [`example/flows/`](e
 | A multi-slice feature, or an epic to split into sub-tickets | `feature-dev-v3` |
 | "Plan this, don't build it" | `plan-only` |
 | Get a repository ready for agent loops (no ticket) | `repo-setup` (build from source until a release ships it) |
+| See the smallest flow built from reusable step definitions | `two-step-example-v1` (build from source until a release ships it) |
 
 `simple-dev-v1` runs fewer reviews. Its plan approval warns you when the ticket looks too big for it, and the way out is to terminate that run and start the ticket again under `feature-dev-v3`.
 
@@ -374,6 +375,23 @@ Legend: neither step has reviewers.
 - `publish` (approve or redo): approve completes the run. Merging the PR is yours.
 
 **When:** a new repository, or one the setup-check popup says is missing its ignore rule or capabilities file.
+
+### `two-step-example-v1`
+
+Not yet in a published release; available when built from source.
+
+**What:** The smallest flow built from reusable step definitions: two manual steps (`basic-first`, `basic-second`) from the step library in `example/steps/`, each advanced by you.
+
+**How:** press **Advance** to complete each step.
+
+```mermaid
+flowchart TD
+  first["basic-first<br/>manual"] --> second["basic-second<br/>manual"]
+```
+
+Legend: `manual` means a person completes the step. Neither step has reviewers.
+
+**When:** you want a starting point for writing your own flow from step definitions.
 
 ### Your own flows
 

@@ -1,7 +1,7 @@
 import type { TransitionKind } from '../shared/audit';
 import type { AppLoopEntry } from './appLoopEngine';
 
-export function appLoopEntryFor(kind: TransitionKind): AppLoopEntry {
+export function appLoopEntryFor(kind: Exclude<TransitionKind, 'rollback'>): AppLoopEntry {
   switch (kind) {
     case 'advance':
       return 'chain-advance';

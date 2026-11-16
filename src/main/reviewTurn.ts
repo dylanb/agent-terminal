@@ -5,7 +5,7 @@
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
 import type { LoopDefV2, PolishPolicy, ReviewerTools } from './loopDefV2';
-import { boundaryCommand, flowDocumentLines, designCheckLines, sliceBriefLines } from './appWorkTurn';
+import { boundaryCommand, decisionLines, flowDocumentLines, designCheckLines, sliceBriefLines, type DecisionPrompt } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
 import type { SliceBriefDelivery } from './sliceBriefReader';
 import { validFeedback } from './appLoopState';
@@ -17,7 +17,7 @@ import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
-import type { AgentKind } from './agentKind';
+import type { AgentKind } from '../shared/agentKind';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
  *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
@@ -107,6 +107,7 @@ export interface ReviewAndFixPromptReq {
   loopBrief?: string;
   /** §28.4 */
   slice?: number;
+  decision?: DecisionPrompt;
   /** §27.4 */
   agentKind: AgentKind;
 }
@@ -384,6 +385,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       feedback,
     );
   }
+  if (req.decision !== undefined) lines.push(...decisionLines(req.decision));
   lines.push('', `Then write the round report to ${req.reportRel}, a JSON object with:`, ...reportFormatLines(req.sections, 'EVERY reviewer above', req.agentKind));
   // §28.5.3 — a refactor round writes a phase-result file the round gate reads (softer than GREEN: {passed},
   // no build), via the shared writer so this instruction stays single-sourced with the parse predicate. The

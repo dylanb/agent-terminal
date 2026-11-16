@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   resolveExampleFlowsDir,
+  resolveExampleStepsDir,
   resolveFeatureDevFlowDir,
   resolveExampleCommandsDir,
   resolveExampleLoopsV2Dir,
@@ -83,6 +84,7 @@ describe('extraResources packaged-path coupling', () => {
     ['commands', resolveExampleCommandsDir],
     ['loops-v2', resolveExampleLoopsV2Dir],
     ['codex-skills', resolveExampleCodexSkillsDir],
+    ['steps', resolveExampleStepsDir],
   ] as const) {
     it(`ships example/${tree} under the exact path its packaged resolver reads back`, () => {
       const to = path.relative(RESOURCES, resolve(packaged));

@@ -9,34 +9,43 @@ import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUB
 
 describe('resolveLaunchInvocation (§23.4 / #25)', () => {
   it('execs the app binary with no extra args for a packaged build', () => {
-    expect(resolveLaunchInvocation('/Applications/AgentTerminal', false, undefined, '/work')).toEqual({
-      kind: 'binary',
+    expect(resolveLaunchInvocation('/Applications/AgentTerminal', false, undefined, '/work', '/bundle/main')).toEqual({
+      kind: 'packaged',
       execPath: '/Applications/AgentTerminal',
-      appArgs: [],
     });
   });
 
-  it('execs Electron with the dev main script, absolutized against the launch cwd', () => {
-    expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work')).toEqual({
-      kind: 'binary',
+  it('execs Electron with the dev start path, absolutized against the launch cwd', () => {
+    expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work', '/work/out/main')).toEqual({
+      kind: 'development',
       execPath: '/apps/Electron',
-      appArgs: ['/work/out/main/index.js'],
+      startPath: '/work/out/main/index.js',
+      mainDir: '/work/out/main',
     });
   });
 
-  it('passes an already-absolute dev main script through unchanged', () => {
-    expect(resolveLaunchInvocation('/apps/Electron', true, '/abs/out/main/index.js', '/work')).toEqual({
-      kind: 'binary',
+  it('passes an already-absolute dev start path through unchanged', () => {
+    expect(resolveLaunchInvocation('/apps/Electron', true, '/abs/out/main/index.js', '/work', '/abs/out/main')).toEqual({
+      kind: 'development',
       execPath: '/apps/Electron',
-      appArgs: ['/abs/out/main/index.js'],
+      startPath: '/abs/out/main/index.js',
+      mainDir: '/abs/out/main',
     });
   });
 
-  it('omits args when a dev build has no main script', () => {
-    expect(resolveLaunchInvocation('/apps/Electron', true, undefined, '/work')).toEqual({
-      kind: 'binary',
+  it('carries the running main bundle dir when electron-vite dev starts Electron on the app root', () => {
+    expect(resolveLaunchInvocation('/apps/Electron', true, '.', '/clone', '/clone/out/main')).toEqual({
+      kind: 'development',
       execPath: '/apps/Electron',
-      appArgs: [],
+      startPath: '/clone',
+      mainDir: '/clone/out/main',
+    });
+  });
+
+  it('launches like a packaged build when a dev build has no start path', () => {
+    expect(resolveLaunchInvocation('/apps/Electron', true, undefined, '/work', '/work/out/main')).toEqual({
+      kind: 'packaged',
+      execPath: '/apps/Electron',
     });
   });
 });
@@ -47,60 +56,59 @@ describe('resolveLaunchInvocation inside an AppImage mount (#306)', () => {
   const facts = { appImage, mountDir };
 
   it('launches the AppImage file when the running binary lives under its mount', () => {
-    expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', facts)).toEqual({
+    expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', '/work/out/main', facts)).toEqual({
       kind: 'appImage',
       appImage,
     });
   });
 
   it('launches the AppImage file for a dev-build call inside the mount, with no app args', () => {
-    expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', true, 'out/main/index.js', '/work', facts)).toEqual({
+    expect(resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', true, 'out/main/index.js', '/work', '/work/out/main', facts)).toEqual({
       kind: 'appImage',
       appImage,
     });
   });
 
   it('keeps the packaged result when the binary is outside the mount (the mount facts were inherited)', () => {
-    expect(resolveLaunchInvocation('/opt/agent-terminal/agent-terminal-app', false, undefined, '/work', facts)).toEqual({
-      kind: 'binary',
+    expect(resolveLaunchInvocation('/opt/agent-terminal/agent-terminal-app', false, undefined, '/work', '/work/out/main', facts)).toEqual({
+      kind: 'packaged',
       execPath: '/opt/agent-terminal/agent-terminal-app',
-      appArgs: [],
     });
   });
 
   it('keeps the dev result when a dev build runs outside the mount', () => {
-    expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work', facts)).toEqual({
-      kind: 'binary',
+    expect(resolveLaunchInvocation('/apps/Electron', true, 'out/main/index.js', '/work', '/work/out/main', facts)).toEqual({
+      kind: 'development',
       execPath: '/apps/Electron',
-      appArgs: ['/work/out/main/index.js'],
+      startPath: '/work/out/main/index.js',
+      mainDir: '/work/out/main',
     });
   });
 
   it('does not treat a sibling folder sharing the mount name as a prefix as inside the mount', () => {
-    expect(resolveLaunchInvocation('/tmp/.mount_AbCD/x', false, undefined, '/work', facts)).toEqual({
-      kind: 'binary',
+    expect(resolveLaunchInvocation('/tmp/.mount_AbCD/x', false, undefined, '/work', '/work/out/main', facts)).toEqual({
+      kind: 'packaged',
       execPath: '/tmp/.mount_AbCD/x',
-      appArgs: [],
     });
   });
 
   it('keeps the packaged result when the AppImage path is relative', () => {
     expect(
-      resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', {
+      resolveLaunchInvocation('/tmp/.mount_AbC/agent-terminal-app', false, undefined, '/work', '/work/out/main', {
         appImage: 'Apps/agent-terminal.AppImage',
         mountDir,
       }),
-    ).toEqual({ kind: 'binary', execPath: '/tmp/.mount_AbC/agent-terminal-app', appArgs: [] });
+    ).toEqual({ kind: 'packaged', execPath: '/tmp/.mount_AbC/agent-terminal-app' });
   });
 
   it('keeps the packaged result when the mount path is relative, even one that resolves around the binary', () => {
     const insideRelativeMount = path.resolve('.mount_AbC', 'agent-terminal-app');
     expect(
-      resolveLaunchInvocation(insideRelativeMount, false, undefined, '/work', {
+      resolveLaunchInvocation(insideRelativeMount, false, undefined, '/work', '/work/out/main', {
         appImage,
         mountDir: '.mount_AbC',
       }),
-    ).toEqual({ kind: 'binary', execPath: insideRelativeMount, appArgs: [] });
+    ).toEqual({ kind: 'packaged', execPath: insideRelativeMount });
   });
 });
 

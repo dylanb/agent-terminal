@@ -1,5 +1,6 @@
 // §18.7.2 / §18.7.4 / §25
 
+import type { FlowLike } from '../shared/audit';
 import type { FlowStateView, RebindChoice, RebindResult, StepMissingConsent } from '../shared/ipc';
 import type { FlowManager } from './flow';
 import type { HeldRunRecovery } from './heldRunRecovery';
@@ -24,6 +25,7 @@ export interface FlowLifecycleDeps {
   /** §27.9.1 — end the engine-held run: called on every reset of the run to not_started. */
   endRun(repoKey: string): void;
   recordTerminate(repoKey: string): void;
+  recordRollback(repoKey: string, before: FlowLike, after: FlowLike): void;
   clearTodos(repoKey: string): void;
   clearSliceBrief(repoKey: string): void;
   clearMonitor(): void;
@@ -96,16 +98,21 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
       return result;
     },
     rollbackStep(repoKey, stepId) {
-      let locked: LockedResult<FlowStateView>;
+      let locked: LockedResult<{ before: FlowStateView; after: FlowStateView }>;
       try {
-        locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.revertStep(repoKey, stepId));
+        locked = deps.lock.withWorktreeLock(repoKey, () => {
+          const before = deps.flow.state(repoKey);
+          return { before, after: deps.flow.revertStep(repoKey, stepId) };
+        });
       } catch (e) {
         bestEffort(() => deps.flowChanged());
         throw new Error(`${errMsg(e)} ${ROLLBACK_FAILED_REMEDY}`);
       }
       if (!locked.ok) throw new Error(`${locked.reason} ${ROLLBACK_FAILED_REMEDY}`);
-      if (locked.value.status === 'not_started') bestEffort(() => deps.endRun(repoKey));
-      return locked.value;
+      const { before, after } = locked.value;
+      bestEffort(() => deps.recordRollback(repoKey, before, after));
+      if (after.status === 'not_started') bestEffort(() => deps.endRun(repoKey));
+      return after;
     },
     rebind(repoKey, choice, ifStepMissing) {
       if (deps.loopTurnActive(repoKey)) return { ok: false, reason: ACTIVE_TURN_REASON };

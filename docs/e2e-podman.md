@@ -13,6 +13,9 @@ clipboard works.
 ```sh
 ./scripts/e2e-podman.sh              # whole suite
 ./scripts/e2e-podman.sh "Terminate"  # filter (-g) passed to playwright
+./scripts/e2e-podman.sh 'flowPicker\.spec\.ts|autoGate\.spec\.ts'
+                                     # only those spec files: -g matches the full test title,
+                                     # which includes the spec's path
 E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
                                      # red-check run (§28.5.2): runs the tests listed in
                                      # <dir>/select.txt, writes a JSON report to <dir>/report.json

@@ -3,13 +3,15 @@
 import type { ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import type { FlowAutoGateView } from '../shared/ipc';
 import type { FlowLike } from '../shared/audit';
+import { decisionProblemText, stepRuns, type FlowDecision } from '../shared/flowBranch';
 import { autoHaltAuditCmd } from '../shared/audit';
 import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 import { composeGateQuestion, type GateStop, type StalledTurn } from '../shared/gateQuestion';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
-import type { FlowDefinition } from './flow';
+import type { FlowDefinition, FlowStepDef } from './flow';
 import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGateDecision';
+import type { StepDecisionRead } from './stepDecision';
 import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
@@ -31,6 +33,7 @@ export interface StartRun {
 
 export type GateCause = 'verdict' | 'interrupt' | 'arm-unreadable';
 export type LoopRunEvent = 'error' | { resumableStall: { doneRelPath: string } } | 'retried' | 'accepted' | { roundReport: string | null };
+export type FlowTransitionAfter = FlowLike & { decisions: Readonly<Record<string, FlowDecision>> };
 export type EngineApprove = (repoDir: string, step: string, turnKey: string, decider: ApproveDecider) => Promise<GateApproveOutcome>;
 export interface AutoGateTimer {
   readonly id: number;
@@ -53,6 +56,8 @@ export interface AutoGateDeps {
   /** §27.9.1 N9b.10 */
   withdrawAgentQuestion: () => void;
   currentSlice: (repoDir: string) => number;
+  /** The decision `step` of `steps` wrote through `loop`'s decision output (§18.2). */
+  readStepDecision: (repoDir: string, steps: readonly FlowStepDef[], step: string, loop: string) => StepDecisionRead;
 }
 
 export interface AutoGate {
@@ -69,7 +74,7 @@ export interface AutoGate {
   consumeInterrupt(repoDir: string): void;
   /** §27.9.1 N9b.5(d)/(e) — a human decision attempt or manual Advance at `step`; call the result with whether it landed. */
   humanDecision(repoKey: string, step: string, turnKey: string | null): (landed: boolean) => void;
-  flowTransitioned(repoKey: string, after: FlowLike): void;
+  flowTransitioned(repoKey: string, after: FlowTransitionAfter): void;
   attachApprove(approve: EngineApprove): void;
   isAutoRun(repoKey: string): boolean;
   autoGateViewFor: AutoGateViewFor;
@@ -236,15 +241,36 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'failed-effect' : 'engine-input-missing', detail: marker.detail }]), 0));
   };
 
-  /** §27.9.1 N9b.5(d) — `done`, or a step after which the run has no loop step left. */
-  const reachedRunEnd = (run: AutoRun, after: FlowLike): boolean => {
+  /** §27.9.1 N9b.5(d) — `done`, or a step after which the run has no loop step left to run. */
+  const reachedRunEnd = (run: AutoRun, after: FlowTransitionAfter): boolean => {
     if (after.status === 'done') return true;
     if (after.status !== 'in_progress') return false;
     const at = run.steps.findIndex((s) => s.id === after.stepName);
-    return at >= 0 && run.steps.slice(at).every((s) => s.kind !== 'loop');
+    const runs = stepRuns(run.steps, after.decisions);
+    return at >= 0 && run.steps.every((s, i) => i < at || s.kind !== 'loop' || runs[i] === 'skipped');
   };
 
-  /** §27.9.1 N9b.6(a)–(c), (h)–(i) */
+  /** §27.9.1 N9b.6(m)–(n) */
+  const decisionReasons = (repoDir: string, run: AutoRun, step: string): Reason[] => {
+    const loop = run.bound.get(step)?.loop;
+    if (loop === undefined) return [];
+    let read: StepDecisionRead;
+    try {
+      read = deps.readStepDecision(repoDir, run.steps, step, loop);
+    } catch {
+      return [{ reason: 'decision-invalid', detail: decisionProblemText('unreadable') }];
+    }
+    switch (read.kind) {
+      case 'none':
+        return [];
+      case 'ok':
+        return read.haltsAuto ? [{ reason: 'decision-held', detail: read.decision.value }] : [];
+      case 'invalid':
+        return [{ reason: 'decision-invalid', detail: decisionProblemText(read.problem) }];
+    }
+  };
+
+  /** §27.9.1 N9b.6(a)–(c), (h)–(i), (m)–(n) */
   const evaluate = (repoDir: string, run: AutoRun, step: string, cause: GateCause): Reason[] => {
     const reasons: Reason[] = [];
     const lr = run.loopRun !== null && run.loopRun.step === step ? run.loopRun : null;
@@ -258,6 +284,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     else if (arm === 'unreadable' || cause === 'arm-unreadable') reasons.push({ reason: 'engine-input-missing', detail: ARM_UNREADABLE });
     else if (lr === null) reasons.push({ reason: 'engine-input-missing' });
     if (marker?.state === 'set') reasons.push({ reason: 'failed-effect' });
+    reasons.push(...decisionReasons(repoDir, run, step));
     return reasons;
   };
 
@@ -335,6 +362,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         return;
       case 'refused-late':
         halt(repoDir, run, d, [...outcome.reasons.map((reason) => ({ reason })), { reason: 'approve-not-persisted', detail: 'the gate changed while the engine decided' }]);
+        return;
+      case 'decision-held':
+        halt(repoDir, run, d, [{ reason: 'decision-held', detail: outcome.value }]);
+        return;
+      case 'decision-invalid':
+        halt(repoDir, run, d, [{ reason: 'decision-invalid', detail: decisionProblemText(outcome.problem) }]);
         return;
       case 'run-ended':
       case 'stood-down':

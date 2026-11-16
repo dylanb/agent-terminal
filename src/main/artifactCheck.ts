@@ -13,16 +13,20 @@ import { isPhaseOutcome } from '../shared/phaseOutcome';
 import { isBuildOutcome, type BuildOutcome } from '../shared/buildOutcome';
 import { LOOP_CAPABILITIES_FILENAME } from '../shared/loopCapabilities';
 import type { LoopCapabilitiesLoad } from './loopCapabilities';
+import { decisionProblemText } from '../shared/flowBranch';
+import { readDecisionFile } from './stepDecision';
 
 /** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, a
  *  goal session's progress file against the leg it is on (§27.3), a phase result against what completes its
- *  phase (§28.5.3), or the repository's `loop-capabilities.yaml` against the app's reader (§29). */
+ *  phase (§28.5.3), the repository's `loop-capabilities.yaml` against the app's reader (§29), or a decision
+ *  file against the values its step declares (§18.2). */
 export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
   | { kind: 'verdict'; rel: string; catalog: string[] }
   | { kind: 'progress'; rel: string; leg: number; legs: boolean }
   | ({ kind: 'result'; rel: string } & PhaseResultWant)
-  | { kind: 'capabilities' };
+  | { kind: 'capabilities' }
+  | { kind: 'decision'; rel: string; values: string[] };
 
 /** What a check reads: a file by its repo-relative path (null = missing), and the repository's capabilities
  *  through the app's own reader. */
@@ -73,6 +77,8 @@ function checkArgv(check: ArtifactCheck): string[] {
       return ['result', check.rel, check.outcome, check.build ?? NO_BUILD, ...(check.acceptsVerificationOnly ? [VERIFICATION_ONLY] : [])];
     case 'capabilities':
       return [CAPABILITIES];
+    case 'decision':
+      return ['decision', check.rel, csv(check.values)];
   }
 }
 
@@ -101,10 +107,11 @@ export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: Artif
   return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
 }
 
-const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}] | ${CAPABILITIES}\n`;
+const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}] | decision <file> <values,...> | ${CAPABILITIES}\n`;
 
 /** Run the check `argv` describes against the file `read` returns (null = missing), or — `capabilities` — the
- *  repository's capabilities through the app's reader. Exit 0 prints
+ *  repository's capabilities through the app's reader; a decision file is read through the approve's own reader
+ *  instead, so the check and the approve cannot disagree. Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
 export function runArtifactCheck(argv: string[], { read, loadCapabilities }: ArtifactCheckInputs): { exitCode: 0 | 1 | 2; output: string } {
   const [kind, rel, ...rest] = argv;
@@ -130,6 +137,9 @@ export function runArtifactCheck(argv: string[], { read, loadCapabilities }: Art
     const found = content === null ? [`${rel} does not exist`] : resultProblems(rel, content, read(phaseOutputRel(rel)), rest);
     if (found === null) return { exitCode: 2, output: USAGE };
     problems = found;
+  } else if (kind === 'decision' && rel !== undefined && rest.length === 1) {
+    const parsed = readDecisionFile(rel, fromCsv(rest[0]));
+    problems = parsed.ok ? [] : [decisionProblemText(parsed.problem)];
   } else {
     return { exitCode: 2, output: USAGE };
   }

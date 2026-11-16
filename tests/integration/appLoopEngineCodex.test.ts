@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentKind } from '../../src/main/agentKind';
+import type { AgentKind } from '../../src/shared/agentKind';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { createAppLoopEngineHarness } from '../helpers/appLoopEngineHarness';
 
@@ -18,7 +18,7 @@ const goalDef = (): LoopDefV2 => {
 const engineFor = (kind: AgentKind, problem: (agent: string) => string | null = () => null) =>
   makeEngine(undefined, undefined, undefined, {
     hostedAgentKind: () => kind,
-    reviewerAgentProblem: (r, k) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`),
+    ensureReviewersRunnable: (_repo, rs, k) => rs.map((r) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`)).filter((p): p is string => p !== null),
   });
 const goalPrompt = (): string => {
   const cmd = h.injected.find((p) => p.startsWith('/goal '));
@@ -68,7 +68,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     const kinds: AgentKind[] = ['claude-code', 'codex', 'codex', 'codex'];
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgentKind: () => kinds.shift() ?? 'codex',
-      reviewerAgentProblem: (r, k) => (k === 'codex' ? `no Codex agent for ${r.persona} is installed` : null),
+      ensureReviewersRunnable: (_repo, rs, k) => (k === 'codex' ? rs.map((r) => `no Codex agent for ${r.persona} is installed`) : []),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
@@ -94,7 +94,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
   it('with no agent at the prompt it says so, not that reviewers are missing', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgent: () => 'absent',
-      reviewerAgentProblem: (r) => `no sub-agent ${r.persona} is installed`,
+      ensureReviewersRunnable: (_repo, rs) => rs.map((r) => `no sub-agent ${r.persona} is installed`),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);

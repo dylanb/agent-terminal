@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
+import { DECISION_NOTE_MAX } from '../../src/shared/flowBranch';
 
 // §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml.
 // A missing/corrupt file degrades to null (never a throw), mirroring the todoStore (§16.3). The
@@ -129,6 +130,81 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: refactor\nstatus: in_progress\nrepeat_counts:\n  refactor: 0\n');
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'refactor', status: 'in_progress' });
+  });
+
+  it('round-trips recorded decisions, a note included, and survives a fresh store', () => {
+    createFlowStateStore(dir).write({ step: 'y', status: 'in_progress', decisions: { d: { value: 'b', note: 'x' }, e: { value: 'p' } } });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'y', status: 'in_progress', decisions: { d: { value: 'b', note: 'x' }, e: { value: 'p' } } });
+  });
+
+  it('reads a malformed decisions value as no decisions, never a throw', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    for (const decisions of ['nope', '[b]', '{ d: b }', '{ d: { value: 3 } }', '{ d: { note: x } }']) {
+      writeFileSync(file, `step: y\nstatus: in_progress\ndecisions: ${decisions}\n`);
+      expect(createFlowStateStore(dir).read(), decisions).toEqual({ step: 'y', status: 'in_progress' });
+    }
+  });
+
+  it('keeps the valid decisions of a partly malformed map and drops a non-string note', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    writeFileSync(
+      join(dir, '.agent-terminal', 'flow-state.yaml'),
+      'step: y\nstatus: in_progress\ndecisions:\n  d: { value: b, note: 7 }\n  e: oops\n  __proto__: { value: a }\n',
+    );
+    const state = createFlowStateStore(dir).read();
+    expect(state?.decisions?.d).toEqual({ value: 'b' });
+    expect(Object.keys(state?.decisions ?? {}).sort()).toEqual(['__proto__', 'd']);
+    expect(({} as Record<string, unknown>).value).toBeUndefined();
+  });
+
+  it('reads a recorded note by the decision file note rule: stripped, bounded, and dropped when empty', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const decisions = {
+      s: { value: 'b', note: '\u001b[31mfeature request\u202e\u001b[0m' },
+      l: { value: 'b', note: 'x'.repeat(DECISION_NOTE_MAX + 1) },
+      e: { value: 'b', note: ' \u202e ' },
+    };
+    writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: y\nstatus: in_progress\ndecisions: ${JSON.stringify(decisions)}\n`);
+    expect(createFlowStateStore(dir).read()?.decisions).toEqual({ s: { value: 'b', note: 'feature request' }, l: { value: 'b' }, e: { value: 'b' } });
+  });
+
+  it('refuses to rename over decisions the lenient read would drop, and leaves the file intact', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    for (const decisions of ['nope', '{ d: { value: 3 } }', '{ d: { value: b, note: 7 } }', '{ d: { value: b, extra: x } }', `{ d: { value: b, note: ${'x'.repeat(DECISION_NOTE_MAX + 1)} } }`, '{ d: { value: b, note: "\\u202e" } }']) {
+      const before = `step: y\nstatus: in_progress\ndecisions: ${decisions}\n`;
+      writeFileSync(file, before);
+      expect(() => createFlowStateStore(dir).writeTitle('Named'), decisions).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    }
+  });
+
+  it('round-trips the gate turn a decision was recorded at, and keeps it through a rename', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'd', status: 'in_progress', decisions: { d: { value: 'b', note: 'x', gateTurn: 'consolidate-d' } } });
+    expect(createFlowStateStore(dir).read()?.decisions).toEqual({ d: { value: 'b', note: 'x', gateTurn: 'consolidate-d' } });
+    store.writeTitle('Named');
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'd', status: 'in_progress', decisions: { d: { value: 'b', note: 'x', gateTurn: 'consolidate-d' } }, title: 'Named' });
+  });
+
+  it('drops a decision whose gate turn is malformed, so it never counts, and refuses to rename over it', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    for (const gateTurn of ['3', '""', '[t]', '{ t: 1 }']) {
+      const before = `step: d\nstatus: in_progress\ndecisions: { d: { value: b, gate_turn: ${gateTurn} } }\n`;
+      writeFileSync(file, before);
+      expect(createFlowStateStore(dir).read(), gateTurn).toEqual({ step: 'd', status: 'in_progress' });
+      expect(() => createFlowStateStore(dir).writeTitle('Named'), gateTurn).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    }
+  });
+
+  it('names the worktree without dropping its recorded decisions', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'y', status: 'in_progress', decisions: { d: { value: 'b' } } });
+    store.writeTitle('Named');
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'y', status: 'in_progress', decisions: { d: { value: 'b' } }, title: 'Named' });
   });
 
   describe('the worktree name, independent of the flow progression', () => {

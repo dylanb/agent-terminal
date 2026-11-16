@@ -30,6 +30,9 @@ extraResources:
   # The Codex skills (§18.1 v2.199), read back by resolveExampleCodexSkillsDir.
   - from: example/codex-skills
     to: example/codex-skills
+  # The step library (§18.2), read back by resolveExampleStepsDir.
+  - from: example/steps
+    to: example/steps
 mac:
   # Release signing is chosen on the command line by .github/workflows/release.yml (ad-hoc today; see
   # docs/releasing.md § macOS signing). Do not pin an identity here; development bundle signing belongs

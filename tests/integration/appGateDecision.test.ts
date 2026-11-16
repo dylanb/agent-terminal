@@ -1,19 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   resolveGateSideEffectBodyFile,
   runAppApprove,
   runAppGateDecision,
+  recordOnFlow,
   stepScopedAdvance,
   type AppGateDecisionDeps,
   type ApproveDecider,
+  HUMAN_DECIDER,
 } from '../../src/main/appGateDecision';
 import { gateDecisionAuditCmd } from '../../src/shared/audit';
-import type { AppLoopBootstrap, AppLoopRunState } from '../../src/main/appLoopState';
+import { decisionProblemText } from '../../src/shared/flowBranch';
+import { readStepDecision, type StepDecisionRead } from '../../src/main/stepDecision';
+import { isGateAccepted, readAppLoopState, writeAppLoopState, type AppLoopBootstrap, type AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { FlowStateView, GateDecisionOption } from '../../src/shared/ipc';
 import { createEpicPromotionCoordinator } from '../../src/main/epicPromotion';
-import { createFlowManager } from '../../src/main/flow';
+import { createFlowMachine, createFlowManager, type FlowLoad, type FlowStepDef } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
+import { linkDecisionFile, resolveDecidingLoop } from '../helpers/linkedDecisionLoop';
 import type { AppGateCommitCtx } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
@@ -158,6 +166,9 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     reopenStep: () => null,
     sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => ({ undo: () => true }),
+    auditDecision: () => undefined,
     ...over,
   };
   return { deps, rec };
@@ -1017,6 +1028,71 @@ describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9
 
 // §27.9.1 N9b.5(e) — the approve's advance is scoped to the step it decided: a manual Advance that lands while its
 // effects run has already moved the flow on, and the approve must not advance it a second time.
+describe('runAppApprove: a decision output that is a link, through the real loop definition', () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('refuses the approve with the problem shown, and leaves the link and its target as they were', async () => {
+    root = mkdtempSync(join(tmpdir(), 'linked-decision-approve-'));
+    const repo = join(root, 'repo');
+    const linked = linkDecisionFile(repo, 'b');
+    const r = resolveDecidingLoop(join(root, 'loops-v2'), repo);
+    if (!r.ok) throw new Error(r.reason);
+    const steps: FlowStepDef[] = [{ id: 'plan', kind: 'loop', loop: 'plan-loop', decides: ['a', 'b'] }];
+    const decisionAudits: unknown[] = [];
+    const { deps, rec } = mkDeps({
+      resolveDef: () => r,
+      readStepDecision: (_r, step, def) => readStepDecision(steps, step, def),
+      auditDecision: (_r, step, value) => void decisionAudits.push({ step, value }),
+    });
+    const outcome = await runAppApprove(repo, 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+    expect(outcome).toEqual({ kind: 'refused', reason: decisionProblemText('unreadable') });
+    expect(rec.errors).toEqual([decisionProblemText('unreadable')]);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(decisionAudits).toEqual([]);
+    expect(lstatSync(linked.link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(linked.target, 'utf8')).toBe(linked.targetText);
+  });
+});
+
+describe('recordOnFlow: the decision port over the real flow manager', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+
+  const branchedRepo = (name: string): { wt: string; flow: ReturnType<typeof createFlowManager> } => {
+    const wt = fx.makeWorktree(name);
+    const flowFile = fx.writeFlowHome(wt, { name: 'branched', stepIds: ['plan'] });
+    writeFileSync(
+      flowFile,
+      ['name: branched', 'steps:', '  - { id: plan, kind: loop, loop: plan-loop, decides: [a, b] }', '  - { id: x, kind: manual, when: { plan: a } }', '  - { id: y, kind: manual, when: { plan: b } }', ''].join('\n'),
+    );
+    const flow = createFlowManager({ globalDir: fx.outsideDir(`${name}-global`), onEnterStep: () => {}, gateAccepted: () => true });
+    expect(flow.start(wt).stepName).toBe('plan');
+    return { wt, flow };
+  };
+
+  it('records the decision, and undoing it puts back what the step held before', () => {
+    const { wt, flow } = branchedRepo('record-on-flow');
+    const record = recordOnFlow(flow);
+    const first = record(wt, 'plan', 'turn-1', { value: 'a' });
+    expect(flow.state(wt).decisions).toEqual({ plan: { value: 'a' } });
+    const second = record(wt, 'plan', 'turn-2', { value: 'b', note: 'second look' });
+    expect(flow.state(wt).decisions).toEqual({ plan: { value: 'b', note: 'second look' } });
+    expect(second?.undo()).toBe(true);
+    expect(flow.state(wt).decisions).toEqual({ plan: { value: 'a' } });
+    expect(first?.undo()).toBe(true);
+    expect(flow.state(wt).decisions).toEqual({});
+  });
+
+  it('reports a decision the flow does not take', () => {
+    const { wt, flow } = branchedRepo('record-on-flow-refused');
+    expect(recordOnFlow(flow)(wt, 'plan', 'turn-1', { value: 'c' })).toBeNull();
+    expect(recordOnFlow(flow)(wt, 'x', 'turn-1', { value: 'a' })).toBeNull();
+    expect(flow.state(wt).decisions).toEqual({});
+  });
+});
+
 describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
@@ -1042,6 +1118,414 @@ describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
     await runAppApprove(wt, 'plan', 'consolidate-plan', deps, decider());
     expect(flow.state(wt).stepName).toBe('next');
     expect(entered).toEqual(['next']);
+  });
+});
+
+describe('runAppApprove: a deciding step takes the chosen path', () => {
+  const steps: FlowStepDef[] = [
+    { id: 'plan', kind: 'loop', loop: 'plan-loop', decides: ['a', 'b'] },
+    { id: 'x', kind: 'manual', when: { step: 'plan', value: 'a' } },
+    { id: 'y', kind: 'manual', when: { step: 'plan', value: 'b' } },
+  ];
+  const accepted = new Set<string>();
+  const machineFlow = (load: FlowLoad): ReturnType<typeof createFlowMachine> => {
+    accepted.clear();
+    const flow = createFlowMachine(load, undefined, undefined, undefined, (step, turn) => accepted.has(JSON.stringify([step, turn])));
+    flow.start();
+    return flow;
+  };
+  const branchedFlow = () => machineFlow({ ok: true, definition: { name: 'f', steps }, flowDir: '/tmp/f' });
+  const recordOnMachine = (flow: ReturnType<typeof createFlowMachine>): AppGateDecisionDeps['recordDecision'] => (_r, step, turnKey, decision) => {
+    const recorded = flow.recordDecision(step, decision, turnKey);
+    return recorded === null ? null : { undo: () => flow.withdrawDecision(step, recorded) };
+  };
+  const flowDeps = (flow: ReturnType<typeof createFlowMachine>, decisionAudits: unknown[]): Partial<AppGateDecisionDeps> => ({
+    recordDecision: recordOnMachine(flow),
+    persistAccept: (_r, state) => void accepted.add(JSON.stringify([state.step, state.turnKey])),
+    auditDecision: (_r, step, value) => void decisionAudits.push({ type: 'decision', step, value }),
+    advanceFlow: () => void flow.advance(),
+  });
+
+  it('approving a deciding step records its decision before the flow advances', async () => {
+    const flow = branchedFlow();
+    const decisionAudits: unknown[] = [];
+    const { deps } = mkDeps({
+      ...flowDeps(flow, decisionAudits),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+    });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(flow.state().decisions).toEqual({ plan: { value: 'b' } });
+    expect(flow.state().stepName).toBe('y');
+    expect(decisionAudits).toEqual([{ type: 'decision', step: 'plan', value: 'b' }]);
+  });
+
+  it('an engine approve of a deciding step whose next step runs on every path records the decision and advances', async () => {
+    const flow = machineFlow({
+      ok: true,
+      definition: { name: 'f', steps: [steps[0], { id: 'z', kind: 'manual' }, steps[1]] },
+      flowDir: '/tmp/f',
+    });
+    const engine: ApproveDecider = { kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) };
+    const { deps } = mkDeps({ ...flowDeps(flow, []), readStepDecision: () => ({ kind: 'ok', decision: { value: 'a' }, haltsAuto: false }) });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, engine)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(flow.state().stepName).toBe('z');
+    expect(flow.advance().stepName).toBe('x');
+  });
+
+  it('an invalid decision refuses the approve and records nothing; the engine is told it is an invalid decision', async () => {
+    const abandonIfClaimed: ApproveDecider = { kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: false, abandoned: true }) };
+    for (const [decider, refused] of [
+      [HUMAN_DECIDER, { kind: 'refused', reason: decisionProblemText('undeclared-value') }],
+      [abandonIfClaimed, { kind: 'decision-invalid', problem: 'undeclared-value' }],
+    ] as const) {
+      const flow = branchedFlow();
+      const decisionAudits: unknown[] = [];
+      const { deps, rec } = mkDeps({ ...flowDeps(flow, decisionAudits), readStepDecision: () => ({ kind: 'invalid', problem: 'undeclared-value' }) });
+      await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, decider)).resolves.toEqual(refused);
+      expect(flow.state().stepName).toBe('plan');
+      expect(flow.state().decisions).toEqual({});
+      expect(rec.accepts).toEqual([]);
+      expect(rec.sideEffects).toEqual([]);
+      expect(decisionAudits).toEqual([]);
+    }
+  });
+
+  it('a human approve with an invalid decision shows the operator the problem and leaves the gate open', async () => {
+    const flow = branchedFlow();
+    const { deps, rec } = mkDeps({ ...flowDeps(flow, []), readStepDecision: () => ({ kind: 'invalid', problem: 'missing' }) });
+    await expect(approve(deps)).resolves.toBe(false);
+    expect(rec.errors).toEqual([decisionProblemText('missing')]);
+    expect(flow.state().stepName).toBe('plan');
+  });
+
+  it('the engine never approves a value the step holds for a human, even one that passed the gate check; a human may', async () => {
+    const engine: ApproveDecider = { kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) };
+    const held = (): StepDecisionRead => ({ kind: 'ok', decision: { value: 'a' }, haltsAuto: true });
+
+    const refused = branchedFlow();
+    const refusedAudits: unknown[] = [];
+    const { deps, rec } = mkDeps({ ...flowDeps(refused, refusedAudits), readStepDecision: held });
+    const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, engine);
+    expect(outcome).toEqual({ kind: 'decision-held', value: 'a' });
+    expect(rec.accepts).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+    expect(refused.state().stepName).toBe('plan');
+    expect(refused.state().decisions).toEqual({});
+    expect(refusedAudits).toEqual([]);
+
+    const approved = branchedFlow();
+    const approvedAudits: unknown[] = [];
+    const human = mkDeps({ ...flowDeps(approved, approvedAudits), readStepDecision: held });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', human.deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(approved.state().decisions).toEqual({ plan: { value: 'a' } });
+    expect(approved.state().stepName).toBe('x');
+    expect(approvedAudits).toEqual([{ type: 'decision', step: 'plan', value: 'a' }]);
+  });
+
+  it('approving a step that decides nothing records nothing', async () => {
+    const flow = branchedFlow();
+    const decisionAudits: unknown[] = [];
+    const { deps } = mkDeps({ ...flowDeps(flow, decisionAudits), readStepDecision: () => ({ kind: 'none' }) });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(flow.state().decisions).toEqual({});
+    expect(decisionAudits).toEqual([]);
+  });
+
+  const unrecorded: [string, AppGateDecisionDeps['recordDecision']][] = [
+    ['cannot save', () => {
+      throw new Error('EACCES: flow-state.yaml');
+    }],
+    ['does not take', () => null],
+  ];
+
+  it.each(unrecorded)('a human approve whose decision the flow %s is refused before anything is accepted, shows why, and can be retried', async (_name, recordDecision) => {
+    const flow = branchedFlow();
+    const decisionAudits: unknown[] = [];
+    const failing = mkDeps({
+      ...flowDeps(flow, decisionAudits),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      recordDecision,
+    });
+    const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', failing.deps, HUMAN_DECIDER);
+    expect(outcome.kind).toBe('refused');
+    expect(failing.rec.errors).toEqual([outcome.kind === 'refused' ? outcome.reason : '']);
+    expect(failing.rec.accepts).toEqual([]);
+    expect(failing.rec.sideEffects).toEqual([]);
+    expect(failing.rec.advances).toEqual([]);
+    expect(decisionAudits).toEqual([]);
+    expect(flow.state().stepName).toBe('plan');
+
+    const retry = mkDeps({ ...flowDeps(flow, decisionAudits), readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }) });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', retry.deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(flow.state().stepName).toBe('y');
+    expect(decisionAudits).toEqual([{ type: 'decision', step: 'plan', value: 'b' }]);
+  });
+
+  it.each(unrecorded)('an engine approve whose decision the flow %s is refused before anything is accepted', async (_name, recordDecision) => {
+    const engine: ApproveDecider = { kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) };
+    const decisionAudits: unknown[] = [];
+    const { deps, rec } = mkDeps({
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      recordDecision,
+      auditDecision: (_r, step, value) => void decisionAudits.push({ step, value }),
+    });
+    const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, engine);
+    expect(outcome.kind).toBe('refused');
+    expect(rec.accepts).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(decisionAudits).toEqual([]);
+  });
+
+  it('the flow already holds the decision while the side effects after the accept run', async () => {
+    const flow = branchedFlow();
+    const decisionAudits: unknown[] = [];
+    const seenDuringEffect: unknown[] = [];
+    const { deps } = mkDeps({
+      ...flowDeps(flow, decisionAudits),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      runSideEffect: async () => {
+        seenDuringEffect.push(flow.state().decisions, [...decisionAudits]);
+        throw new Error('the app quit mid-push');
+      },
+    });
+    await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+    expect(seenDuringEffect).toEqual([{ plan: { value: 'b' } }, [{ type: 'decision', step: 'plan', value: 'b' }]]);
+    expect(flow.state().decisions).toEqual({ plan: { value: 'b' } });
+  });
+
+  it('puts back the decision the step held before when the accept cannot persist or a held gate keeps it', async () => {
+    for (const [over, kind] of [
+      [{ persistAccept: () => { throw new Error('EACCES'); } }, 'accept-failed'],
+      [{ holds: true, sideEffectThrows: 'gh down' }, 'held'],
+    ] satisfies [Parameters<typeof mkDeps>[0], string][]) {
+      const flow = branchedFlow();
+      flow.recordDecision('plan', { value: 'a', note: 'kept by an undo' });
+      const decisionAudits: unknown[] = [];
+      const { deps } = mkDeps({
+        ...flowDeps(flow, decisionAudits),
+        readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+        ...over,
+      });
+      const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+      expect(outcome.kind).toBe(kind);
+      expect(flow.state().decisions).toEqual({ plan: { value: 'a', note: 'kept by an undo' } });
+      expect(decisionAudits).toEqual([]);
+    }
+  });
+
+  it('records no decision when the accept cannot persist or a held gate keeps it', async () => {
+    for (const [over, kind] of [
+      [{ persistAccept: () => { throw new Error('EACCES'); } }, 'accept-failed'],
+      [{ holds: true, sideEffectThrows: 'gh down' }, 'held'],
+    ] satisfies [Parameters<typeof mkDeps>[0], string][]) {
+      const flow = branchedFlow();
+      const decisionAudits: unknown[] = [];
+      const { deps } = mkDeps({
+        ...flowDeps(flow, decisionAudits),
+        readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+        ...over,
+      });
+      const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+      expect(outcome.kind).toBe(kind);
+      expect(flow.state().decisions).toEqual({});
+      expect(decisionAudits).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['the refs', { refs: () => { throw new Error('refs unreadable'); } }],
+    ['the gate hold check', { failureHoldsGate: () => { throw new Error('hold unreadable'); } }],
+  ] satisfies [string, Parameters<typeof mkDeps>[0]][])('a throw from %s after the decision is recorded puts back what the step held before', async (_name, over) => {
+    const flow = branchedFlow();
+    flow.recordDecision('plan', { value: 'a', note: 'kept by an undo' });
+    const decisionAudits: unknown[] = [];
+    const { deps, rec } = mkDeps({
+      ...flowDeps(flow, decisionAudits),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      ...over,
+    });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).rejects.toThrow();
+    expect(flow.state().decisions).toEqual({ plan: { value: 'a', note: 'kept by an undo' } });
+    expect(flow.state().stepName).toBe('plan');
+    expect(rec.accepts).toEqual([]);
+    expect(decisionAudits).toEqual([]);
+  });
+
+  it('when the decision cannot be put back on a held or failed accept, the outcome stands, the operator sees why, and no decision is logged', async () => {
+    for (const [over, kind] of [
+      [{ persistAccept: () => { throw new Error('EACCES'); } }, 'accept-failed'],
+      [{ holds: true, sideEffectThrows: 'gh down' }, 'held'],
+    ] satisfies [Parameters<typeof mkDeps>[0], string][]) {
+      const flow = branchedFlow();
+      const decisionAudits: unknown[] = [];
+      const { deps, rec } = mkDeps({
+        ...flowDeps(flow, decisionAudits),
+        recordDecision: (_r, step, turnKey, decision) => {
+          flow.recordDecision(step, decision, turnKey);
+          return {
+            undo: () => {
+              throw new Error('flow-state.yaml is read-only');
+            },
+          };
+        },
+        readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+        ...over,
+      });
+      const outcome = await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+      expect(outcome.kind).toBe(kind);
+      expect(rec.errors.some((e) => e.includes('flow-state.yaml is read-only'))).toBe(true);
+      expect(decisionAudits).toEqual([]);
+    }
+  });
+
+  it('records no decision when the epic intercept holds the gate', async () => {
+    const flow = branchedFlow();
+    const decisionAudits: unknown[] = [];
+    const { deps } = mkDeps({
+      ...flowDeps(flow, decisionAudits),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      maybeBeginEpicPromotion: () => ({ kind: 'blocked' }),
+    });
+    await runAppApprove('/repo', 'plan', 'consolidate-plan', deps, HUMAN_DECIDER);
+    expect(flow.state().decisions).toEqual({});
+    expect(decisionAudits).toEqual([]);
+  });
+});
+
+describe('runAppApprove: a decision counts only once the gate accept has persisted', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+  const PICKUP: AppLoopBootstrap = { kind: 'opened', pr: 41, branch: 'plan-loop/issue-7', issue: 7, initialStatus: 'planning' };
+  const ENGINE: ApproveDecider = { kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) };
+
+  const branchedRepo = (name: string): { wt: string; flowFile: string; manager: () => ReturnType<typeof createFlowManager> } => {
+    const wt = fx.makeWorktree(name);
+    const flowFile = fx.writeFlowHome(wt, { name: 'branched', stepIds: ['plan'] });
+    writeFileSync(
+      flowFile,
+      ['name: branched', 'steps:', '  - { id: plan, kind: loop, loop: plan-loop, decides: [a, b] }', '  - { id: x, kind: manual, when: { plan: a } }', '  - { id: y, kind: manual, when: { plan: b } }', ''].join('\n'),
+    );
+    const globalDir = fx.outsideDir(`${name}-global`);
+    const manager = (): ReturnType<typeof createFlowManager> => createFlowManager({ globalDir, onEnterStep: () => {}, gateAccepted: isGateAccepted });
+    expect(manager().start(wt).stepName).toBe('plan');
+    writeAppLoopState(wt, GATE_RUN);
+    return { wt, flowFile, manager };
+  };
+
+  const onFlow = (flow: ReturnType<typeof createFlowManager>, over: Parameters<typeof mkDeps>[0] = {}): ReturnType<typeof mkDeps> =>
+    mkDeps({
+      gate: APPROVE_COMMIT('approve'),
+      bootstrap: PICKUP,
+      readRunState: (repoDir) => readAppLoopState(repoDir),
+      persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+      readStepDecision: () => ({ kind: 'ok', decision: { value: 'b' }, haltsAuto: false }),
+      recordDecision: recordOnFlow(flow),
+      advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => void flow.advance(repoDir)),
+      ...over,
+    });
+
+  it('a held approve whose push fails leaves Advance refusing and the decision not taken, even when Advance was pressed while the push ran', async () => {
+    const { wt, manager } = branchedRepo('held-push');
+    const flow = manager();
+    const duringPush: unknown[] = [];
+    const { deps } = onFlow(flow, {
+      holds: true,
+      pushThrows: () => {
+        duringPush.push(flow.pendingDecision(wt), flow.advance(wt).stepName, flow.state(wt).decisions);
+        return 'could not reach origin';
+      },
+    });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'held' });
+    expect(duringPush).toEqual(['plan', 'plan', {}]);
+    expect(flow.pendingDecision(wt)).toBe('plan');
+    expect(flow.advance(wt).stepName).toBe('plan');
+    expect(flow.state(wt).decisions).toEqual({});
+    expect(readAppLoopState(wt)?.status).toBe('complete');
+  });
+
+  it('a reload of the run saved mid-approve does not follow the decision, and the gate can still be approved', async () => {
+    const { wt, manager } = branchedRepo('reload-mid-approve');
+    const crashed: unknown[] = [];
+    const first = onFlow(manager(), {
+      holds: true,
+      runPushSideEffect: () => {
+        const relaunched = manager();
+        crashed.push(relaunched.pendingDecision(wt), relaunched.advance(wt).stepName, relaunched.state(wt).decisions);
+        return new Promise<void>(() => {});
+      },
+    });
+    void runAppApprove(wt, 'plan', 'consolidate-plan', first.deps, HUMAN_DECIDER);
+    await vi.waitFor(() => expect(crashed).toHaveLength(3));
+    expect(crashed).toEqual(['plan', 'plan', {}]);
+
+    const relaunched = manager();
+    expect(relaunched.pendingDecision(wt)).toBe('plan');
+    const again = onFlow(relaunched, { holds: true });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', again.deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(relaunched.state(wt).stepName).toBe('y');
+  });
+
+  it.each([
+    ['human', HUMAN_DECIDER, true],
+    ['engine', ENGINE, false],
+  ] as const)('a %s approve records the decision and advances along its path', async (_name, decider, holds) => {
+    const { wt, manager } = branchedRepo(`approve-advances-${_name}`);
+    const flow = manager();
+    const { deps } = onFlow(flow, { holds });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', deps, decider)).resolves.toEqual({ kind: 'advanced', effectFailures: [] });
+    expect(flow.state(wt).stepName).toBe('y');
+    expect(flow.state(wt).decisions).toEqual({ plan: { value: 'b' } });
+    expect(manager().state(wt).stepName).toBe('y');
+  });
+
+  it('a held approve whose run was terminated during its effects shows only the effect failure, since no decision is left to withdraw', async () => {
+    const { wt, manager } = branchedRepo('terminated-mid-push');
+    const flow = manager();
+    const pushReason = 'could not reach origin';
+    const { deps, rec } = onFlow(flow, {
+      holds: true,
+      pushThrows: () => {
+        expect(flow.terminate(wt).outcome).toBe('reset');
+        return pushReason;
+      },
+    });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'held' });
+    expect(rec.errors.length).toBeGreaterThan(0);
+    expect(rec.errors.every((e) => e.includes(pushReason))).toBe(true);
+    expect(flow.state(wt).decisions).toEqual({});
+  });
+
+  it('a held approve whose decision is still saved and cannot be removed shows the operator why', async () => {
+    const { wt, flowFile, manager } = branchedRepo('withdraw-blocked');
+    const flow = manager();
+    const pushReason = 'could not reach origin';
+    const { deps, rec } = onFlow(flow, {
+      holds: true,
+      pushThrows: () => {
+        writeFileSync(flowFile, 'name: branched\nsteps: [ unclosed\n');
+        return pushReason;
+      },
+    });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'held' });
+    expect(rec.errors.some((e) => !e.includes(pushReason))).toBe(true);
+  });
+
+  it('a withdraw that cannot take the decision back is shown to the operator', async () => {
+    const { wt, manager } = branchedRepo('withdraw-nothing');
+    const flow = manager();
+    const pushReason = 'could not reach origin';
+    const { deps, rec } = onFlow(flow, {
+      holds: true,
+      recordDecision: (repoDir, step, turnKey, decision) => {
+        const recorded = recordOnFlow(flow)(repoDir, step, turnKey, decision);
+        return recorded === null ? null : { undo: () => false };
+      },
+      pushThrows: () => pushReason,
+    });
+    await expect(runAppApprove(wt, 'plan', 'consolidate-plan', deps, HUMAN_DECIDER)).resolves.toEqual({ kind: 'held' });
+    expect(rec.errors.some((e) => !e.includes(pushReason))).toBe(true);
+    expect(flow.advance(wt).stepName).toBe('plan');
   });
 });
 

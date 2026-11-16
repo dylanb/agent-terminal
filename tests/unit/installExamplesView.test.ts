@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createInstallExamples, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
+import { createInstallExamples, MOVED_LOOPS_TEXT, MOVED_LOOPS_REMOVAL_TEXT, MOVED_REVIEWERS_TEXT, RETIRED_FLOW_STOPS_TEXT, OLD_ITEM_WORD, RETIRED_ITEM_WORD, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
 import { assertRendersFromHostDocument } from './relocatable';
 import type {
   DestRelativePath,
@@ -50,8 +50,8 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     retiredFallback: null,
   });
   const RETIRED: RetiredExample[] = [
-    { destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath },
-    { destination: 'agents', rel: 'plan-polish-loop--review-plan-intent.md' as DestRelativePath },
+    { destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath, kind: 'retired-flow' },
+    { destination: 'agents', rel: 'plan-polish-loop--review-plan-intent.md' as DestRelativePath, kind: 'retired-flow' },
   ];
   const withRetired = (preview: InstallExamplesPreview): InstallExamplesPreview =>
     preview.ok ? { ...preview, retired: RETIRED } : preview;
@@ -315,6 +315,98 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     it('gives no fallback warning when the fallback flow is not a retired one', async () => {
       await openWithRetired(['flow'], vi.fn(async () => okResult()));
       expect(prompt()?.textContent).not.toContain('fallback flow');
+    });
+
+    describe('old copies of shared loop definitions', () => {
+      const MOVED: RetiredExample[] = [
+        { destination: 'appLoops', rel: 'simple-dev-v1/simple-dev-loop-v1' as DestRelativePath, kind: 'moved-loop' },
+      ];
+      async function openWith(retired: RetiredExample[], apply: InstallExamplesDeps['apply'] = vi.fn(async () => okResult())): Promise<void> {
+        createInstallExamples(host, deps({ preview: vi.fn(async () => ({ ...clean, retired }) as InstallExamplesPreview), apply }));
+        button().click();
+        await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      }
+      const described = (): string | null | undefined =>
+        host.querySelector(`#${(retiredBox() as HTMLInputElement).getAttribute('aria-describedby')}`)?.textContent;
+
+      it('offers the removal for old copies of shared loops, and sends it when checked', async () => {
+        const apply = vi.fn(async () => okResult());
+        await openWith(MOVED, apply);
+        expect(retiredBox()).not.toBeNull();
+        expect(described()).toContain('simple-dev-v1/simple-dev-loop-v1');
+        (retiredBox() as HTMLInputElement).click();
+        confirmBtn().click();
+        await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], true));
+      });
+
+      it('explains old copies of shared loops only when there are some', async () => {
+        await openWith(MOVED);
+        expect(prompt()?.textContent).toContain(MOVED_LOOPS_TEXT);
+        expect(described()).toContain(MOVED_LOOPS_REMOVAL_TEXT);
+        for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).not.toContain(id);
+      });
+
+      it('leaves the shared loop text out when only retired flows are found', async () => {
+        await openWith(RETIRED);
+        expect(prompt()?.textContent).not.toContain(MOVED_LOOPS_TEXT);
+        expect(prompt()?.textContent).not.toContain(MOVED_LOOPS_REMOVAL_TEXT);
+        for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
+      });
+
+      it('warns that a run stops only for a retired flow', async () => {
+        await openWith(MOVED);
+        expect(described()).not.toContain(RETIRED_FLOW_STOPS_TEXT);
+        host.replaceChildren();
+        await openWith(RETIRED);
+        expect(described()).toContain(RETIRED_FLOW_STOPS_TEXT);
+      });
+
+      it('names the checkbox for old items when old copies are present, and for retired items otherwise', async () => {
+        await openWith(MOVED);
+        expect((retiredBox() as HTMLInputElement).closest('label')?.textContent).toContain(`${OLD_ITEM_WORD} item`);
+        host.replaceChildren();
+        await openWith(RETIRED);
+        expect((retiredBox() as HTMLInputElement).closest('label')?.textContent).toContain(`${RETIRED_ITEM_WORD} item`);
+      });
+
+      it('shows the fallback flow warning only when a retired flow is among the items', async () => {
+        const withFallback = (retired: RetiredExample[]) =>
+          createInstallExamples(host, deps({ preview: vi.fn(async () => ({ ...clean, retired, retiredFallback: 'feature-dev-v2' }) as InstallExamplesPreview) }));
+        withFallback(MOVED);
+        button().click();
+        await vi.waitFor(() => expect(prompt()).not.toBeNull());
+        expect(described()).not.toContain('fallback flow');
+        host.replaceChildren();
+        withFallback(RETIRED);
+        button().click();
+        await vi.waitFor(() => expect(prompt()).not.toBeNull());
+        expect(described()).toContain('Your fallback flow is still the retired feature-dev-v2');
+      });
+
+      it('explains reviewer copies that each run now installs only when there are some, and names them old items', async () => {
+        const REVIEWERS: RetiredExample[] = [{ destination: 'agents', rel: 'green-loop--impl-review-principal.md' as DestRelativePath, kind: 'moved-reviewer' }];
+        await openWith(REVIEWERS);
+        expect(prompt()?.textContent).toContain(MOVED_REVIEWERS_TEXT);
+        expect((retiredBox() as HTMLInputElement).closest('label')?.textContent).toContain(`${OLD_ITEM_WORD} item`);
+        host.replaceChildren();
+        await openWith(MOVED);
+        expect(prompt()?.textContent).not.toContain(MOVED_REVIEWERS_TEXT);
+      });
+
+      it('counts reviewer copies in the checkbox description instead of naming each one', async () => {
+        const many: RetiredExample[] = Array.from({ length: 50 }, (_, i) => ({ destination: 'agents', rel: `loop-${i}--review.md` as DestRelativePath, kind: 'moved-reviewer' }));
+        await openWith(many);
+        expect(described()).toContain('50 old reviewer agents');
+        expect(described()).not.toContain('loop-7--review.md');
+      });
+
+      it('says both when old copies and retired flows are found together', async () => {
+        await openWith([...RETIRED, ...MOVED]);
+        expect(prompt()?.textContent).toContain(MOVED_LOOPS_TEXT);
+        for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
+        expect(described()).toContain(RETIRED_FLOW_STOPS_TEXT);
+        expect(described()).toContain(MOVED_LOOPS_REMOVAL_TEXT);
+      });
     });
 
     it('offers no removal when nothing retired was found', async () => {

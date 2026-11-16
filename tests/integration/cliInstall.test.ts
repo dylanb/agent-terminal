@@ -15,7 +15,7 @@ import { SESSION_ID, type CliInstallResult } from '../../src/shared/ipc';
 // "does the command resolve from a new shell", never by asserting an intermediate target shape.
 
 let root: string;
-const inv = (execPath: string): LaunchInvocation => resolveLaunchInvocation(execPath, false, undefined, '/');
+const inv = (execPath: string): LaunchInvocation => ({ kind: 'packaged', execPath });
 const binOf = (home: string): string => join(home, '.agent-terminal', 'bin');
 const cmdOf = (home: string): string => join(binOf(home), CLI_COMMAND_NAME);
 const isExecutable = (p: string): boolean => (statSync(p).mode & 0o111) !== 0;
@@ -493,7 +493,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
     standIn(appImagePath, 'appimage');
     standIn(mountBinary, 'mount');
-    return resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: appImagePath, mountDir });
+    return resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage: appImagePath, mountDir });
   };
 
   const mkdir = (dir: string, mode: number): string => {
@@ -569,7 +569,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     standIn(mountBinary, 'mount');
     chmodSync(target, 0o775);
     symlinkSync(target, link);
-    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage: link, mountDir });
     expectRefusal(installCliShim(runtime({ invocation })), [link, target]);
   });
 
@@ -598,7 +598,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     standIn(target, 'appimage');
     standIn(mountBinary, 'mount');
     symlinkSync(target, link);
-    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage: link, mountDir });
     expectRefusal(installCliShim(runtime({ invocation })), [link, target]);
   });
 
@@ -612,7 +612,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     standIn(target, 'appimage');
     standIn(mountBinary, 'mount');
     symlinkSync(target, link);
-    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage: link, mountDir });
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage: link, mountDir });
     expectRefusal(installCliShim(runtime({ invocation })), [shared]);
   });
 
@@ -622,7 +622,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     const mountDir = join(base, 'mnt', '.mount_agentX');
     const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
     standIn(mountBinary, 'mount');
-    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage, mountDir });
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage, mountDir });
     const res = installCliShim(runtime({ invocation }));
     expect.soft(res.ok).toBe(false);
     const err = res.ok ? '' : res.error ?? '';
@@ -638,7 +638,7 @@ describe('installCliShim from an AppImage (#306)', () => {
     const mountDir = join(base, 'mnt', '.mount_agentX');
     const mountBinary = join(mountDir, 'usr', 'bin', 'agent-terminal');
     standIn(mountBinary, 'mount');
-    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, { appImage, mountDir });
+    const invocation = resolveLaunchInvocation(mountBinary, false, undefined, base, base, { appImage, mountDir });
     const res = installCliShim(runtime({ invocation }));
     expect.soft(res.ok).toBe(false);
     const err = res.ok ? '' : res.error ?? '';

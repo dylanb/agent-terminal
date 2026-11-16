@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills } from '../../src/main/exampleAssetsBuild';
+import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills, copyExampleSteps } from '../../src/main/exampleAssetsBuild';
 import {
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
   resolveExampleCodexSkillsDir,
+  resolveExampleStepsDir,
 } from '../../src/main/exampleAssets';
 
 // The unpackaged runtime resolvers read <app.getAppPath()>/example/<tree>, and app.getAppPath() is the
@@ -38,6 +39,10 @@ beforeEach(() => {
   const skillDir = path.join(root, 'example', 'codex-skills', 'agent-terminal-loops');
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: agent-terminal-loops\n---\n');
+
+  const stepsDir = path.join(root, 'example', 'steps');
+  mkdirSync(stepsDir, { recursive: true });
+  writeFileSync(path.join(stepsDir, 'basic-first.yaml'), 'kind: manual\n');
 });
 
 afterEach(() => {
@@ -56,6 +61,14 @@ describe('copyExampleFlows — places the catalog bundle where the unpackaged re
     expect(existsSync(path.join(out, 'example', 'flows'))).toBe(false);
     copyExampleFlows(root, out);
     expect(readFileSync(path.join(out, 'example', 'flows', 'feature-dev', 'todo-templates', 'a.md'), 'utf8')).toContain('# A');
+  });
+});
+
+describe('copyExampleSteps: places the bundled step library where the unpackaged resolver reads it', () => {
+  it('copies example/steps to the path resolveExampleStepsDir reads for that out dir', () => {
+    const dest = copyExampleSteps(root, out);
+    expect(dest).toBe(resolveExampleStepsDir({ packaged: false, appPath: out }));
+    expect(readFileSync(path.join(dest, 'basic-first.yaml'), 'utf8')).toBe('kind: manual\n');
   });
 });
 

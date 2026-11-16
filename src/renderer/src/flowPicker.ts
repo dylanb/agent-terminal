@@ -14,6 +14,7 @@ import type {
 } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
+import { stepLabel } from '../../shared/stepLabel';
 import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
@@ -498,7 +499,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     const p = doc.createElement('p');
     p.id = `${uid}-held`;
     p.className = 'flow-picker-held';
-    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow that has step ${run.step} resumes it (${STATUS_TEXT[run.status]}); choosing one without that step ends the run as Terminate does: a catalog flow becomes the selection, while this worktree's flow.yaml or the global fallback clears the selection so the default runs.`;
+    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow that has step ${stepLabel(run.step)} resumes it (${STATUS_TEXT[run.status]}); choosing one without that step ends the run as Terminate does: a catalog flow becomes the selection, while this worktree's flow.yaml or the global fallback clears the selection so the default runs.`;
     return p;
   }
 

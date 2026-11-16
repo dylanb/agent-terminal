@@ -3,6 +3,7 @@ import path from 'node:path';
 import { dump } from 'js-yaml';
 import {
   auditFileStamp,
+  auditEventTimestamp,
   auditTimestamp,
   chainedTransitionAuditCmd,
   appBootstrapAuditCmd,
@@ -28,14 +29,18 @@ import {
   type AuditHeader,
   type TodoLike,
 } from '../../src/shared/audit';
-import { auditFileName, auditFilePath, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
+import { auditFileName, auditFilePath, auditFileStartedAt, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { GATE_DECISION_OPTIONS } from '../../src/shared/ipc';
+import type { StepTokens } from '../../src/shared/tokenCounts';
 
 const D = new Date('2026-06-23T10:00:01.500Z');
 
 describe('audit timestamps (§25.2/§25.3)', () => {
-  it('renders an ISO-8601 UTC second-precision ts for events', () => {
+  it('renders an ISO-8601 UTC second-precision header start', () => {
     expect(auditTimestamp(D)).toBe('2026-06-23T10:00:01Z');
+  });
+  it('renders an ISO-8601 UTC millisecond-precision ts for events', () => {
+    expect(auditEventTimestamp(D)).toBe('2026-06-23T10:00:01.500Z');
   });
   it('renders a filesystem-safe millisecond stamp (colons → dashes) for the file name', () => {
     expect(auditFileStamp(D)).toBe('2026-06-23T10-00-01.500Z');
@@ -68,6 +73,16 @@ describe('audit path derivation (§25.2)', () => {
     const second = auditFilePath('/root', '/a/b/repo', 'feature-dev', new Date('2026-06-23T10:00:02.100Z'));
     expect(first).not.toBe(second);
   });
+  it.each(['feature-dev', 'plan_and_build', 'a_b_c'])('reads the start back out of a %s file name to the millisecond', (flow) => {
+    const started = new Date('2026-06-23T10:00:01.437Z');
+    expect(auditFileStartedAt(auditFileName(flow, started))?.toISOString()).toBe('2026-06-23T10:00:01.437Z');
+  });
+  it.each(['notes.yaml', 'feature-dev_2026-06-23.yaml', 'feature-dev_2026-06-23T10-00-01.437Z.yml', '2026-06-23T10-00-01.437Z.yaml'])(
+    'reads no start out of %s, which no run file is named',
+    (name) => {
+      expect(auditFileStartedAt(name)).toBeNull();
+    },
+  );
 });
 
 describe('audit stream serialize ↔ parse (§25.3)', () => {
@@ -93,6 +108,13 @@ describe('audit stream serialize ↔ parse (§25.3)', () => {
     const ev: AuditEvent = { ts: '2026-06-23T10:00:01Z', type: 'todo.created', id: 'a1', text: 'fix: a #b "c" {d}' };
     const stream = serializeDoc(header) + serializeDoc(ev);
     expect(parseAuditStream(stream).events).toEqual([ev]);
+  });
+
+  it('round-trips a recorded decision as a complete stream', () => {
+    const ev: AuditEvent = { ts: '2026-06-23T10:00:01Z', type: 'decision', step: 'triage', value: 'b' };
+    const parsed = parseAuditStream(serializeDoc(header) + serializeDoc(ev));
+    expect(parsed.events).toEqual([ev]);
+    expect(parsed.incomplete).toBe(false);
   });
 
   it('tolerates a trailing partial document from a crash mid-append (discards it)', () => {
@@ -245,6 +267,10 @@ describe('inputEvents — resolved flow inputs and ticket association (§25.5)',
     ]);
   });
 
+  it.each(['1e2', '0x10', '042', '4.0'])('does not associate %j, which is not an issue number', (value) => {
+    expect(inputEvents({ ticket: value }, { ticket: 'github-ticket' }, T).map((e) => e.type)).toEqual(['input.resolved']);
+  });
+
   it('also associates the ticket when a github-ticket input resolves to a number', () => {
     expect(inputEvents({ ticket: '176' }, { ticket: 'github-ticket' }, T)).toEqual([
       { ts: T, type: 'input.resolved', name: 'ticket', value: '176' },
@@ -301,6 +327,7 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     expect(tl.snapshots).toEqual([{ pr: 42, files: [{ path: '.agent-loop/plan.md', bytes: 10 }] }]);
     // a1 ended done; a2 was deleted → only a1 survives.
     expect(tl.todos).toEqual([{ id: 'a1', text: 'Wire audit IPC', status: 'done' }]);
+    expect(tl.tokens).toBeNull();
   });
 
   it('tolerates a trailing partial document (crash mid-append) and replays what survived', () => {
@@ -359,6 +386,199 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     const parsed = parseAuditStream(headerless);
     expect(parsed.header).toBeNull();
     expect(parsed.events).toEqual([{ ts: '2026-06-23T10:30:00Z', type: 'step.entered', step: 'build' }]);
+  });
+});
+
+describe('step.tokens — each step\'s counts at its windows\' closes (§25.5/§25.6)', () => {
+  const header: AuditHeader = { flow: 'token-flow', repo: 'r', repoPath: '/r', started: '2026-06-23T10:00:01Z' };
+  const T = (s: string): string => `2026-06-23T10:${s}Z`;
+  const counted = (cacheRead: number, cacheWrite: number, input: number, output: number): Extract<StepTokens, { state: 'counted' }> => ({
+    state: 'counted',
+    billed: true,
+    kinds: {
+      cacheRead: { reported: 'all', n: cacheRead },
+      cacheWrite: { reported: 'all', n: cacheWrite },
+      input: { reported: 'all', n: input },
+      output: { reported: 'all', n: output },
+    },
+  });
+  const unbilled: StepTokens = { ...counted(0, 0, 0, 0), billed: false };
+  const tokens = (step: string, ts: string, counts: StepTokens): AuditEvent => ({ ts, type: 'step.tokens', step, counts });
+  const record = (events: AuditEvent[]): string => [header, ...events].map(serializeDoc).join('');
+
+  // one: 12,000 / 340 / 56 / 78; two: 3,000 / 210 / 9 / 40; three billed nothing.
+  const run: AuditEvent[] = [
+    { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+    { ts: T('05:00.120'), type: 'step.entered', step: 'two' },
+    tokens('one', T('05:00.120'), counted(12_000, 340, 56, 78)),
+    { ts: T('09:30.009'), type: 'step.entered', step: 'three' },
+    { ts: T('10:00.700'), type: 'flow.terminated' },
+    tokens('two', T('09:30.009'), counted(3_000, 210, 9, 40)),
+    tokens('three', T('10:00.700'), unbilled),
+  ];
+
+  it('round-trips a billed and an unbilled step\'s counts through serialize and parse', () => {
+    expect(parseAuditStream(record(run))).toEqual({ header, events: run, incomplete: false });
+  });
+
+  it('reconstructs each entered step\'s counts and their sum as the run total, whatever order the entries landed in', () => {
+    expect(reconstructTimeline(record(run)).tokens).toEqual({
+      steps: [
+        { step: 'one', counts: counted(12_000, 340, 56, 78) },
+        { step: 'two', counts: counted(3_000, 210, 9, 40) },
+        { step: 'three', counts: unbilled },
+      ],
+      run: { state: 'counted', someStepsUnavailable: false, kinds: counted(15_000, 550, 65, 118).kinds },
+    });
+  });
+
+  it('a step entered twice reads the entry its last window\'s close wrote, not an earlier window\'s', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      tokens('one', T('02:00.001'), counted(1_000, 10, 1, 2)),
+      { ts: T('03:00.002'), type: 'step.entered', step: 'one' },
+      tokens('two', T('03:00.002'), counted(500, 5, 3, 4)),
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+      tokens('one', T('04:00.003'), counted(1_700, 17, 6, 9)),
+    ];
+
+    expect(reconstructTimeline(record(events)).tokens?.steps).toEqual([
+      { step: 'one', counts: counted(1_700, 17, 6, 9) },
+      { step: 'two', counts: counted(500, 5, 3, 4) },
+    ]);
+  });
+
+  it('a step whose last close wrote no entry reads unavailable, even with a stale entry for an earlier window appended last', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      { ts: T('03:00.002'), type: 'step.entered', step: 'one' },
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+      tokens('one', T('02:00.001'), counted(1_000, 10, 1, 2)),
+    ];
+
+    expect(reconstructTimeline(record(events)).tokens?.steps).toEqual([
+      { step: 'one', counts: { state: 'unavailable' } },
+      { step: 'two', counts: { state: 'unavailable' } },
+    ]);
+  });
+
+  it('leaves out a step whose only window is still open', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      tokens('one', T('02:00.001'), counted(1_000, 10, 1, 2)),
+    ];
+
+    expect(reconstructTimeline(record(events)).tokens?.steps).toEqual([{ step: 'one', counts: counted(1_000, 10, 1, 2) }]);
+  });
+
+  it('a run whose windows closed with no step.tokens entry at all reconstructs with no counts', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+    ];
+
+    expect(reconstructTimeline(record(events)).tokens).toBeNull();
+  });
+
+  it('round-trips partly reported and not reported cells, and reconstructs the run total\'s cell partly reported', () => {
+    const notReported: StepTokens = { ...counted(9_000, 0, 140, 260), kinds: { ...counted(9_000, 0, 140, 260).kinds, cacheWrite: { reported: 'none' } } };
+    const partly: StepTokens = { ...counted(8_000, 0, 85, 150), kinds: { ...counted(8_000, 0, 85, 150).kinds, cacheWrite: { reported: 'some', n: 400 } } };
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      tokens('one', T('02:00.001'), notReported),
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+      tokens('two', T('04:00.003'), partly),
+    ];
+
+    expect({ parsed: parseAuditStream(record(events)).events, tokens: reconstructTimeline(record(events)).tokens }).toEqual({
+      parsed: events,
+      tokens: {
+        steps: [
+          { step: 'one', counts: notReported },
+          { step: 'two', counts: partly },
+        ],
+        run: { state: 'counted', someStepsUnavailable: false, kinds: { ...counted(17_000, 0, 225, 410).kinds, cacheWrite: { reported: 'some', n: 400 } } },
+      },
+    });
+  });
+
+  it('round-trips an unavailable step, and reconstructs the run total from the counted steps marked incomplete', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+      tokens('one', T('02:00.001'), counted(12_000, 340, 56, 78)),
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+      tokens('two', T('04:00.003'), { state: 'unavailable' }),
+    ];
+
+    expect({ parsed: parseAuditStream(record(events)).events, tokens: reconstructTimeline(record(events)).tokens }).toEqual({
+      parsed: events,
+      tokens: {
+        steps: [
+          { step: 'one', counts: counted(12_000, 340, 56, 78) },
+          { step: 'two', counts: { state: 'unavailable' } },
+        ],
+        run: { state: 'counted', someStepsUnavailable: true, kinds: counted(12_000, 340, 56, 78).kinds },
+      },
+    });
+  });
+
+  it('reconstructs the run total unavailable when every closed step was unavailable', () => {
+    const events: AuditEvent[] = [
+      { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+      { ts: T('04:00.003'), type: 'flow.terminated' },
+      tokens('one', T('04:00.003'), { state: 'unavailable' }),
+    ];
+
+    expect(reconstructTimeline(record(events)).tokens).toEqual({ steps: [{ step: 'one', counts: { state: 'unavailable' } }], run: { state: 'unavailable' } });
+  });
+
+  it('a step.tokens entry missing a kind ends the parse as a malformed append does', () => {
+    const { input: _input, ...threeKinds } = counted(1_000, 10, 1, 2).kinds;
+    const malformed = serializeDoc(header) + serializeDoc(run[0]) + `---\nts: ${T('02:00.001')}\ntype: step.tokens\nstep: one\ncounts:\n  state: counted\n  billed: true\n  kinds: ${JSON.stringify(threeKinds)}\n`;
+
+    expect(parseAuditStream(malformed)).toMatchObject({ events: [run[0]], incomplete: true });
+  });
+});
+
+describe('agent.hosted — the agents that ran in a run (Scope 9)', () => {
+  const header: AuditHeader = { flow: 'token-flow', repo: 'r', repoPath: '/r', started: '2026-06-23T10:00:01Z' };
+  const T = (s: string): string => `2026-06-23T10:${s}Z`;
+  const record = (events: AuditEvent[]): string => [header, ...events].map(serializeDoc).join('');
+  const run: AuditEvent[] = [
+    { ts: T('00:01.437'), type: 'flow.started', step: 'one' },
+    { ts: T('00:01.502'), type: 'agent.hosted', agent: 'codex' },
+    { ts: T('02:00.001'), type: 'step.entered', step: 'two' },
+    { ts: T('02:10.250'), type: 'agent.hosted', agent: 'claude-code' },
+    { ts: T('03:00.040'), type: 'agent.hosted', agent: 'codex' },
+  ];
+
+  it('round-trips each agent recorded as hosted, and reconstructs each once, in the order first recorded', () => {
+    expect({ parsed: parseAuditStream(record(run)), agents: reconstructTimeline(record(run)).agents }).toEqual({
+      parsed: { header, events: run, incomplete: false },
+      agents: ['codex', 'claude-code'],
+    });
+  });
+
+  it('leaves the step windows as they were', () => {
+    expect(reconstructTimeline(record(run)).visits.map((v) => [v.step, v.entered, v.exited])).toEqual([
+      ['one', T('00:01.437'), T('02:00.001')],
+      ['two', T('02:00.001'), null],
+    ]);
+  });
+
+  it('a record with no agent.hosted entry reconstructs with no agents', () => {
+    expect(reconstructTimeline(record([run[0], run[2]])).agents).toEqual([]);
+  });
+
+  it('an agent.hosted entry naming an agent the app does not know ends the parse as a malformed append does', () => {
+    const malformed = serializeDoc(header) + serializeDoc(run[0]) + `---\nts: ${T('00:02.000')}\ntype: agent.hosted\nagent: aider\n`;
+    expect(parseAuditStream(malformed)).toMatchObject({ events: [run[0]], incomplete: true });
   });
 });
 
@@ -742,10 +962,10 @@ describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
 });
 
 describe('auto-halt entries name every reason that holds (N9b.9)', () => {
-  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'stop-for-a-human'] as const;
+  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'decision-held', 'decision-invalid', 'stop-for-a-human'] as const;
   const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
 
-  it('round-trips a halt naming all 11 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
+  it('round-trips a halt naming all 13 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
     const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason })));
     const event: AuditEvent = { ts: 'T1', type: 'command', source: 'gate', cmd, exit: 0 };
     const [read] = reconstructTimeline([header, event].map(serializeDoc).join('')).commands;
@@ -757,7 +977,7 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
 
   it('writes the N9b.6 letters, in N9b.6 order, into the halt slot', () => {
     expect(autoHaltAuditCmd(ALL.map((reason) => ({ reason })))).toMatch(
-      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
+      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, m, n, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
     );
   });
 

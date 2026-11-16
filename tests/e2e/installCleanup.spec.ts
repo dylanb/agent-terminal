@@ -59,7 +59,10 @@ function seed(): { home: string; configDir: string; remnants: string[]; keeper: 
   const remnants = [
     plant(join(home, '.agent-terminal', 'flows', 'feature-dev-v2', 'flow.yaml')),
     plant(join(configDir, 'loops-v2', 'feature-dev-v2', 'green-loop', 'green-loop.yaml')),
-    plant(join(configDir, 'agents', 'plan-polish-loop--review-plan-intent.md')),
+    plant(
+      join(configDir, 'agents', 'plan-polish-loop--review-plan-intent.md'),
+      "---\nname: plan-polish-loop--review-plan-intent\ndescription: The review-plan-intent reviewer of the plan-polish-loop loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed with the example loops.\n---\nold\n",
+    ),
   ];
   const keeper = plant(join(configDir, 'agents', 'my-agent.md'), 'mine\n');
   return { home, configDir, remnants, keeper };
@@ -67,8 +70,7 @@ function seed(): { home: string; configDir: string; remnants: string[]; keeper: 
 
 /** The fallback flow.yaml an older build seeded: a valid flow still named for a retired one. */
 function seedRetiredFallback(home: string): void {
-  const shipped = readFileSync(join('example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8');
-  plant(join(home, '.agent-terminal', 'flow.yaml'), shipped.replace(/^name: .*$/m, 'name: feature-dev-v2'));
+  plant(join(home, '.agent-terminal', 'flow.yaml'), 'name: feature-dev-v2\nsteps:\n  - id: preparation\n    kind: manual\n');
 }
 
 test('ticking the removal deletes what the retired flows left, reports it, and keeps the operator’s own files', { tag: '@ownapp' }, async () => {
@@ -78,7 +80,7 @@ test('ticking the removal deletes what the retired flows left, reports it, and k
 
   await expect(retiredBox()).not.toBeChecked();
   await expect(view().locator('.flow-modal')).toContainText('Your fallback flow is still the retired feature-dev-v2, which may use what these remove');
-  await expect(view().locator('.flow-modal')).toContainText('plan-polish-loop--review-plan-intent.md');
+  await expect(view().locator('.flow-modal')).toContainText('1 old reviewer agent');
   await retiredBox().check();
   await view().locator('.flow-modal button.confirm').click();
 
@@ -100,4 +102,23 @@ test('installing without ticking the removal keeps every leftover', { tag: '@own
   await expect(view().locator('[role="status"]')).toContainText('created', { timeout: 15_000 });
   await expect(view().locator('[role="status"]')).not.toContainText('removed');
   for (const r of remnants) expect(existsSync(r), r).toBe(true);
+});
+
+test('§27.4 — Install examples offers to remove the reviewer agents an older build installed, and removes them when ticked', { tag: '@ownapp' }, async () => {
+  const home = tmp('agent-term-e2e-moved-reviewers-home-');
+  const configDir = tmp('agent-term-e2e-moved-reviewers-cfg-');
+  const copy = plant(
+    join(configDir, 'agents', 'green-loop--impl-review-principal.md'),
+    "---\nname: green-loop--impl-review-principal\ndescription: The impl-review-principal reviewer of the green-loop loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed with the example loops.\n---\nAn older charter.\n",
+  );
+  const keeper = plant(join(configDir, 'agents', 'my-agent.md'), 'mine\n');
+  await openInstall(home, configDir);
+
+  await expect(view().locator('.flow-modal')).toContainText('1 old reviewer agent');
+  await retiredBox().check();
+  await view().locator('.flow-modal button.confirm').click();
+
+  await expect(view().locator('.install-report [data-destination="agents"]')).toContainText('removed 1: green-loop--impl-review-principal.md', { timeout: 15_000 });
+  expect(existsSync(copy)).toBe(false);
+  expect(readFileSync(keeper, 'utf8')).toBe('mine\n');
 });

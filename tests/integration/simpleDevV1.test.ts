@@ -1,15 +1,17 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadFlowDefinitionFromFile, type FlowStepDef } from '../../src/main/flow';
-import { resolveExampleFlowsDir } from '../../src/main/exampleAssets';
+import { resolveExampleFlowsDir, resolveExampleStepsDir } from '../../src/main/exampleAssets';
+import { createStepLibrary } from '../../src/main/stepLibrary';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, REPO_DIR } from '../helpers/bundledLoops';
 
 const FLOW = 'simple-dev-v1';
+const bundledSteps = createStepLibrary([{ name: 'bundled', dir: resolveExampleStepsDir({ packaged: false, appPath: REPO_DIR }) }]);
 
 function steps(): FlowStepDef[] {
   const file = path.join(resolveExampleFlowsDir({ packaged: false, appPath: REPO_DIR }), FLOW, 'flow.yaml');
-  const load = loadFlowDefinitionFromFile(file);
+  const load = loadFlowDefinitionFromFile(file, bundledSteps);
   if (!load.ok) throw new Error(load.error);
   return load.definition.steps;
 }

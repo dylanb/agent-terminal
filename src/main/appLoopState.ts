@@ -318,6 +318,11 @@ export function readAppLoopState(repoDir: string): AppLoopRunState | null {
   return parseAppLoopState(text);
 }
 
+export function isGateAccepted(repoDir: string, step: string, turnKey: string): boolean {
+  const state = readAppLoopState(repoDir);
+  return state !== null && state.step === step && state.turnKey === turnKey && state.status === 'accepted';
+}
+
 /** The repo-relative round-report path the fixer is instructed to write (§27.5) — the WRITE-target half of
  *  the one resolver whose READ-source half is `roundReportFile`, so the two cannot drift (CLAUDE.md
  *  writer↔reader-location). */

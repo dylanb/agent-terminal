@@ -6,6 +6,7 @@ import { applyInstallExamples, exampleInstallDirs } from '../../src/main/install
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { FLOW_DEF_FILE, loadFlowDefinitionFromFile } from '../../src/main/flow';
 import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
+import { createStepLibrary, runtimeStepTiers } from '../../src/main/stepLibrary';
 
 // The repo-setup flow the setup popup's Run setup loop starts ships in the bundle: after the app's own install,
 // its catalog id resolves and its flow.yaml passes the app's loader. Load-validity only, never its configured
@@ -35,7 +36,10 @@ describe('the bundled repo-setup flow, after Install examples', () => {
     const entry = resolveCatalogEntry({ worktreeDir: repo, globalRoot: home }, REPO_SETUP_FLOW_ID);
     expect(entry).toMatchObject({ ok: true, tier: 'global' });
     if (!entry.ok) return;
-    const load = loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE));
+    const load = loadFlowDefinitionFromFile(
+      path.join(entry.flowDir, FLOW_DEF_FILE),
+      createStepLibrary(runtimeStepTiers(repo, home, 'global')),
+    );
     expect(load.ok, load.ok ? '' : load.error).toBe(true);
   });
 });

@@ -6,6 +6,7 @@
 // mid-turn / gate raced out / a polish stand-down) never discards the operator's instruction. Composes
 // createModalShell and supplies the instruction-field body; the caller decides WHEN to open/close it.
 
+import { stepLabel } from '../../shared/stepLabel';
 import { createModalShell } from './modalShell';
 
 /** The gate identity the composer is opened for — the `step` names the dialog; the caller holds the full
@@ -36,7 +37,7 @@ export function createRedoComposer(host: HTMLElement, opts?: { onFocusLost?: () 
         const h3 = doc.createElement('h3');
         h3.className = 'serif';
         h3.id = titleId;
-        h3.textContent = `Redo ${ctx.step}`;
+        h3.textContent = `Redo ${stepLabel(ctx.step)}`;
         const ph = doc.createElement('p');
         ph.className = 'ph';
         ph.id = describedById;

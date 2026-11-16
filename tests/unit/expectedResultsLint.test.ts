@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ESLint } from 'eslint';
 import { resolve } from 'node:path';
 
@@ -13,15 +13,19 @@ async function ruleErrors(code: string, filePath = FIXTURE): Promise<number> {
 }
 
 describe('an expected-results fixture never imports the code it checks', () => {
-  it('flags an import or re-export of production code other than the IPC contract', async () => {
-    expect({
-      renderer: await ruleErrors("import { cardStatus } from '../../src/renderer/src/controllerCardConditions';\n"),
-      shared: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n"),
-      reExport: await ruleErrors("export { cardStatus } from '../../src/shared/controllerCardClassification';\n"),
-      inCardHelper: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCards.ts'),
-      inProcessTable: await ruleErrors("import { commandsIn } from '../../src/main/waitingRule';\n", 'tests/helpers/processTable.ts'),
-      inCardOrderFixture: await ruleErrors("import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCardOrderFixture.ts'),
-    }).toEqual({ renderer: 1, shared: 1, reExport: 1, inCardHelper: 1, inProcessTable: 1, inCardOrderFixture: 1 });
+  beforeAll(() => ruleErrors(''));
+
+  it.each([
+    ['an import from the renderer', "import { cardStatus } from '../../src/renderer/src/controllerCardConditions';\n", FIXTURE],
+    ['an import from shared code', "import { cardStatus } from '../../src/shared/controllerCardClassification';\n", FIXTURE],
+    ['a re-export of shared code', "export { cardStatus } from '../../src/shared/controllerCardClassification';\n", FIXTURE],
+    ['an import in the card helper', "import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCards.ts'],
+    ['an import in the process table', "import { commandsIn } from '../../src/main/waitingRule';\n", 'tests/helpers/processTable.ts'],
+    ['an import in the card order fixture', "import { cardStatus } from '../../src/shared/controllerCardClassification';\n", 'tests/helpers/controllerCardOrderFixture.ts'],
+    ['an import in the token helper', "import type { TokenKind } from '../../src/shared/tokenCounts';\n", 'tests/helpers/tokenCountsUi.ts'],
+    ['an import in the token format fixture', "import { abbreviatedTokens } from '../../src/renderer/src/tokenFormat';\n", 'tests/helpers/tokenFormatFixture.ts'],
+  ])('flags %s, production code other than the IPC contract', async (_case, code, filePath) => {
+    expect(await ruleErrors(code, filePath)).toBe(1);
   });
 
   it('allows the IPC contract and other test helpers, and leaves other files alone', async () => {
@@ -34,7 +38,14 @@ describe('an expected-results fixture never imports the code it checks', () => {
   });
 
   it('the expected-results fixtures in the tree follow the rule', async () => {
-    const results = await eslint.lintFiles([FIXTURE, 'tests/helpers/controllerCards.ts', 'tests/helpers/processTable.ts', 'tests/helpers/controllerCardOrderFixture.ts']);
+    const results = await eslint.lintFiles([
+      FIXTURE,
+      'tests/helpers/controllerCards.ts',
+      'tests/helpers/processTable.ts',
+      'tests/helpers/controllerCardOrderFixture.ts',
+      'tests/helpers/tokenCountsUi.ts',
+      'tests/helpers/tokenFormatFixture.ts',
+    ]);
     const offenders = results.flatMap((r) =>
       r.messages.filter((m) => INDEPENDENT.test(m.message)).map((m) => `${r.filePath.slice(root.length + 1)}:${m.line}`),
     );

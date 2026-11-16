@@ -1,27 +1,17 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { auditTimestamp, reconstructTimeline, type RunTimeline } from '../shared/audit';
-import { auditFilePath, auditRootDir } from './auditPaths';
-import { createFlowStateStore } from './flowState';
-import { confinedRealPath, resolveJail, resolveOwnedDirJail } from './confinedPath';
+import { reconstructTimeline, type RunTimeline } from '../shared/audit';
+import { auditRootDir } from './auditPaths';
+import { readCurrentAuditRun } from './auditRun';
+import { confinedRealPath, resolveJail } from './confinedPath';
 import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { publishFlowAudit } from './flowAuditPublication';
 import { resolveAppHome } from './launchRoot';
 
 export function readCurrentAudit(repoDir: string): RunTimeline {
   try {
-    const repo = realpathSync(repoDir);
-    const state = createFlowStateStore(repo).read();
-    if (!state?.flow || state.startedAt === undefined) return reconstructTimeline('');
-    const started = new Date(state.startedAt);
-    const root = auditRootDir(resolveAppHome(process.env, homedir()));
-    const jail = resolveOwnedDirJail(root);
-    const file = jail && confinedRealPath(jail, auditFilePath(root, repo, state.flow, started));
-    if (!file) return reconstructTimeline('');
-    return reconstructTimeline(readFileSync(file, 'utf8'), {
-      repoPath: repo, flow: state.flow, started: auditTimestamp(started),
-    });
+    return readCurrentAuditRun(auditRootDir(resolveAppHome(process.env, homedir())), realpathSync(repoDir));
   } catch {
     return reconstructTimeline('');
   }

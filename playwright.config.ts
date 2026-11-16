@@ -16,5 +16,7 @@ export default defineConfig({
   // Retry on CI (GitHub and Podman both set CI) to absorb load-class flakes; a bare local run keeps
   // a failure a failure so it is not silently masked during debugging.
   retries: process.env.CI ? 2 : 0,
+  // A committed test.only would narrow a CI run to the focused tests and still pass.
+  forbidOnly: !!process.env.CI,
   expect: { timeout: 10_000 },
 });

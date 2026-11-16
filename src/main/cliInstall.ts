@@ -130,7 +130,8 @@ function appImageRefusal(appImage: string, uid: number): string | undefined {
 
 function launchTargetRefusal(invocation: LaunchInvocation, uid: number): string | undefined {
   switch (invocation.kind) {
-    case 'binary':
+    case 'packaged':
+    case 'development':
       return undefined;
     case 'appImage':
       return appImageRefusal(invocation.appImage, uid);

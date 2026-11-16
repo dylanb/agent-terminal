@@ -30,7 +30,7 @@ Preserve unrelated operator work and changes.
 Do not force-push.
 Do not reset away operator changes.
 
-Apply repository-required RED-first fixes and run all required local tests, checks and verification.
+Apply repository-required RED-first fixes and run all required local tests, checks and verification, including the full end-to-end suite.
 There is no new waiver for local verification or CI in this recipe; identify the source of any existing waiver.
 Commit relevant reconciliation changes and CI fixes.
 Push to the associated PR head branch in its head repository using a non-forced push.

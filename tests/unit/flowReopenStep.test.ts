@@ -62,3 +62,37 @@ describe('the loop view names the step a back-to-red decision returns to', () =>
     expect(flow.state().loop?.reopenStep).toBeUndefined();
   });
 });
+
+describe('the back-to-red control follows the recorded decision', () => {
+  const branchedLoad: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'triage', kind: 'loop', loop: 'groom-loop', decides: ['fix', 'close'] },
+        { id: 'red', kind: 'loop', loop: 'dev-loop', when: { step: 'triage', value: 'fix' } },
+        { id: 'integration', kind: 'loop', loop: 'integration-loop', when: { step: 'triage', value: 'fix' }, repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'wrap', kind: 'loop', loop: 'wrap-loop' },
+      ],
+    },
+    flowDir: '',
+  };
+
+  it('names no target when the decision rules out the step it would return to', () => {
+    const flow = createFlowMachine(branchedLoad, undefined, undefined, () => gateView(['approve', 'back-to-red']));
+    flow.start();
+    flow.recordDecision('triage', { value: 'close' });
+    expect(flow.advance().stepName).toBe('wrap');
+    expect(flow.state().loop).toBeDefined();
+    expect(flow.state().loop?.reopenStep).toBeUndefined();
+  });
+
+  it('names the target when the decision takes the path through it', () => {
+    const flow = createFlowMachine(branchedLoad, undefined, undefined, () => gateView(['approve', 'back-to-red']));
+    flow.start();
+    flow.recordDecision('triage', { value: 'fix' });
+    flow.advance();
+    expect(flow.advance().stepName).toBe('integration');
+    expect(flow.state().loop?.reopenStep).toBe('red');
+  });
+});

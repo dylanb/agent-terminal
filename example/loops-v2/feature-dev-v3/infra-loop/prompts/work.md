@@ -37,8 +37,12 @@ settled it. Write `None.` under an empty heading.
 ## Review until clean
 
 1. Do the work above.
-2. Run the tests the repository requires before a pull request and confirm they pass. Record the commands and their results under `### Test evidence` before any review, so every
-   reviewer reads results that match the change.
+2. Run the tests the repository requires before a pull request, except the full end-to-end suite: of the end-to-end
+   tests, run only those that cover the files this step changed, counting a test that uses a changed harness, fixture
+   or fake as covering it. The full end-to-end suite runs at the integration-slice step and at finalization. Confirm
+   they pass. Record the commands and their results, and which end-to-end tests you chose for which changed files (or
+   why none covers a change), under `### Test evidence` before any review, so every reviewer reads results that match
+   the change.
 3. Review it with the reviewers below, as the review rules in these instructions say.
 4. Fix or dismiss every finding, and log each in the report. When a fix changes code or tests, run the tests again and
    update `### Test evidence` before the next pass.

@@ -22,7 +22,7 @@ describe('install consent molecule', () => {
     retired,
     retiredFallback: null,
   });
-  const RETIRED: RetiredExample[] = [{ destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath }];
+  const RETIRED: RetiredExample[] = [{ destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath, kind: 'retired-flow' }];
 
   const TITLE_ID = 'ic-title';
   const mount = (p: InstallPreview) => {

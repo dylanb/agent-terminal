@@ -2,6 +2,7 @@ import { activityLine, cardStatus } from '../../shared/controllerCardClassificat
 import { workConditions, type WorkCondition } from './controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerClearTarget, ControllerWorkStatus } from '../../shared/ipc';
+import { stepLabel } from '../../shared/stepLabel';
 import type { ControllerDirectoryCard } from '../../shared/controllerCards';
 import { createClampedReason, type ClampedReason } from './clampedReason';
 import { content, reconcileChildren, type Content } from './dom';
@@ -172,7 +173,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   }
 
   function workLines(work: ControllerWorkStatus): HTMLElement[] {
-    const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
+    const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${stepLabel(work.flow.step)}` : FLOW_TEXT[work.flow.availability];
     return [ticketLine(work), element('p', 'controller-card-line', flow), element('p', 'controller-card-line', activityLine(work))];
   }
 

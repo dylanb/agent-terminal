@@ -81,7 +81,7 @@ export const retiredPreview = (id: string): InstallExamplesPreview => ({
   ok: true,
   previewId: id as InstallPreviewId,
   destinations: [{ destination: 'flow', conflict: false }],
-  retired: [{ destination: 'flow', rel: 'old-flow' as DestRelativePath } satisfies RetiredExample],
+  retired: [{ destination: 'flow', rel: 'old-flow' as DestRelativePath, kind: 'retired-flow' } satisfies RetiredExample],
   retiredFallback: null,
 });
 

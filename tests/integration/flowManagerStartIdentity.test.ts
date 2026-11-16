@@ -95,6 +95,7 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
       askAgentWhy: () => {},
       withdrawAgentQuestion: () => {},
       currentSlice: () => 1,
+      readStepDecision: () => ({ kind: 'none' }),
     });
     const flowStart = composeStartTransition({
       autoGate: gate,

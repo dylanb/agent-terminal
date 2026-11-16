@@ -14,6 +14,15 @@ import { captureFocusReturn } from './dom';
 import { createPressGroup } from './pressable';
 import { DESTINATION_LABEL, asksBeforeInstall, createInstallConsent, type InstallPreview } from './installConsent';
 
+export {
+  MOVED_LOOPS_REMOVAL_TEXT,
+  MOVED_LOOPS_TEXT,
+  MOVED_REVIEWERS_TEXT,
+  OLD_ITEM_WORD,
+  RETIRED_FLOW_STOPS_TEXT,
+  RETIRED_ITEM_WORD,
+} from './installConsent';
+
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
   apply(
@@ -72,7 +81,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'kp-help',
-      'Copies the flow to ~/.agent-terminal, the app loop definitions and commands to your Claude config directory, and the loop definitions, reviewer agents and a skill for running them to your Codex home if Codex is installed. Files you already have are left untouched unless you choose to replace them.',
+      'Copies the flow to ~/.agent-terminal, the app loop definitions and commands to your Claude config directory, and the loop definitions, reviewer agents and a skill for running them to your Codex home if Codex is installed. Each run installs its own Claude Code reviewer agents in its run folder. Files you already have are left untouched unless you choose to replace them.',
     ),
   );
   const btn = el('button', 'pill signal', 'Install examples');

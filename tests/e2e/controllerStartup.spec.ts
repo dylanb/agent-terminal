@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import type WebSocket from 'ws';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { setTimeout as delay } from 'node:timers/promises';
+import { spawnSync } from 'node:child_process';
 import { createControllerHarness } from './controllerHarness';
 import { load } from 'js-yaml';
 import { seedTrustedFlow, autoGateFlowYaml } from './autoGateHarness';
@@ -107,6 +107,40 @@ test('the installed agent-terminal command launches the AppImage the app runs fr
     try { await h.dispose(); } catch (e) { cleanupErrors.push(e); }
     if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'cleanup failed');
   }
+});
+
+test('a launcher installed from a dev build started on the app root launches the built controller', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  try {
+    const home = join(h.fixture.root, 'user-home');
+    const userBin = join(home, '.local', 'bin');
+    mkdirSync(userBin, { recursive: true, mode: 0o755 });
+    const terminal = await h.launch({ kind: 'development', entry: resolve('.') }, h.fixture.nonGit, {
+      env: { HOME: home, PATH: `${userBin}:${h.fixture.env.PATH}` },
+    });
+    const card = terminal.page.locator('#startup-waiting');
+    await card.getByRole('button', { name: 'Install the agent-terminal command-line launcher' }).click();
+    const launcher = join(userBin, 'agent-terminal');
+    await expect(card.getByRole('status').filter({ hasText: launcher })).toContainText(`Installed agent-terminal at ${launcher}`);
+    const electron = await terminal.app.evaluate(() => process.execPath);
+
+    const fakeBin = join(h.fixture.root, 'recording-bin');
+    const recorded = join(h.fixture.root, 'nohup-args');
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(
+      join(fakeBin, 'nohup'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${recorded}.tmp" && mv "${recorded}.tmp" "${recorded}"\n`,
+      { mode: 0o755 },
+    );
+    const run = spawnSync(launcher, ['--controller'], {
+      env: { ...h.fixture.env, HOME: home, PATH: `${fakeBin}:${h.fixture.env.PATH}` },
+      encoding: 'utf8',
+    });
+    expect(run.stderr).toBe('');
+    await expect
+      .poll(() => (existsSync(recorded) ? readFileSync(recorded, 'utf8').trimEnd().split('\n') : []))
+      .toEqual([electron, resolve('out/main/controller.js')]);
+  } finally { await h.dispose(); }
 });
 
 test('startup automatically registers after controller launch and starts exactly once', { tag: '@ownapp' }, async () => {

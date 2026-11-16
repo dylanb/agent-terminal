@@ -7,6 +7,7 @@ build/*
 !build/*.svg.sha256
 test-results/
 playwright-report/
+blob-report/
 .vitest-attachments/
 *.log
 *.tsbuildinfo
