@@ -1,9 +1,11 @@
 # simple-integration-slice-loop-v1 — work turn
 
-Wire the slices together end-to-end per `CLAUDE.md` and author the integration `_electron` e2e that fires
-the feature from an existing UI control on a real PTY. Run the full suite — the repo's `test_command` and
-`build_command` from `loop-capabilities.yaml`, then the Playwright e2e — and confirm it is green before the
-gate. This turn produces commits; the gate publishes the PR body.
+Wire the slices together end-to-end per the repository's agent context, guidance, standards, and rules files,
+and author the integration end-to-end test that exercises the feature from an existing user- or caller-facing
+entry point through the real code the slices wire together, faking only what the repository's end-to-end tests
+normally fake. Run the full suite — the repo's `test_command` and `build_command` from `loop-capabilities.yaml`,
+then every end-to-end suite the repository's conventions prescribe — and confirm it is green before the gate.
+This turn produces commits; the gate publishes the PR body.
 
 ## Review until clean
 

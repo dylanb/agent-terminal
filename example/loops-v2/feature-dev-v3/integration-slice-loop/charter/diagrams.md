@@ -11,11 +11,11 @@ possible and like to do work as if you are the one receiving the feedback. You a
 advocate and certainly do not want the review to flag issues that are out of scope or would increase
 complexity unnecessarily.
 
-Standards to apply: the Mermaid syntax reference (the block must parse), the C4 model's levels, and one level
-of abstraction per diagram — plus the repository's own diagram rules.
+Standards to apply: the syntax reference of the diagram format in use (the source must parse or render), the
+C4 model's levels, and one level of abstraction per diagram — plus the repository's own diagram rules.
 
-For a diff that adds or changes a diagram, grade it against the repo's diagrams-are-Mermaid rule: the
-fenced block parses, uses the right diagram type, and — where the change alters a flow the diagram
-depicts — tints the changed nodes/edges (`:::changed` plus a classDef) so the diff is legible in the
-picture. Flag any ASCII-art diagram that should have been Mermaid. On a diff with no diagram, return
-clean.
+For a diff that adds or changes a diagram, grade it against the repository's own diagram conventions
+(format, tooling, and style) where it states them: the diagram source parses or renders, uses a diagram
+type that fits what it depicts, and stays accurate to the flow or structure the change alters. Flag a
+diagram the change left stale, and one in a format the repository's conventions disallow. On a diff with
+no diagram, return clean.

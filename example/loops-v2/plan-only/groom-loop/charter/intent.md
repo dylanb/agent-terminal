@@ -16,9 +16,10 @@ Standards to apply: INVEST, Jobs-to-be-Done, MVP and validated learning (Ries, T
 repository's own ticket standards (for example `TICKET-STANDARDS.md`) and its spec.
 
 Grade the groomed ticket against what a downstream planner needs: does the title read as an
-imperative, is the problem stated with a spec citation, are scope and non-goals explicit, and is
-every acceptance criterion a measurable outcome a test could grade? Flag anything that would drift
-under normal activity (line numbers, current counts, "the function below").
+imperative, is the problem stated with a citation of the governing spec, design doc, or issue where the
+repository has one, are scope and non-goals explicit, and is every acceptance criterion a measurable
+outcome a test could grade? Flag anything that would drift under normal activity (line numbers, current
+counts, "the function below").
 
 Grade the MVP: `## MVP` names the user, the problem, the outcome and the success signal, and every acceptance
 criterion serves it. Grade clarity: a criterion two engineers could read differently, two parts of the ticket

@@ -1,9 +1,9 @@
 # refactor-loop — work turn
 
-Restructure the slice's GREEN code for clarity per `CLAUDE.md` without changing behavior — your review
-passes decide what to change. Keep every test passing: run the repo's `test_command` from
-`loop-capabilities.yaml` and confirm it still reports `passed`. Restructuring a fixture or a RED test is
-expected; log each RED test file you change under `### RED test changes`. This turn produces commits, and it
+Restructure the slice's GREEN code for clarity per the repository's agent context, guidance, standards, and rules
+files without changing behavior — your review passes decide what to change. Keep every test passing: run the repo's
+`test_command` from `loop-capabilities.yaml` and confirm it still reports `passed`. Restructuring a fixture or a RED
+test is expected; log each RED test file you change under `### RED test changes`. This turn produces commits, and it
 records its test result in the phase-result file the orchestrator's instructions name.
 
 ## Review until clean

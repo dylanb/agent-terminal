@@ -14,9 +14,11 @@ complexity unnecessarily.
 Standards to apply: WCAG 2.2 AA, the WAI-ARIA Authoring Practices Guide patterns, and "no ARIA is better than
 bad ARIA" — plus the repository's own UI standards (for example `UI-STANDARDS.md`).
 
-For a diff that touches renderer UI, grade against WCAG 2.2 AA: name, role, and value are programmatically
-exposed (SC 4.1.2), the change is keyboard-operable (SC 2.1.1), focus is visible (SC 2.4.7) and ordered (SC 2.4.3),
-text contrast holds (SC 1.4.3), any new pointer gesture has a single-pointer equivalent (SC 2.5.1), and new
-pointer targets meet the minimum size (SC 2.5.8).
-Exercise the change by narrating it as a screen-reader user would hear it. On a non-UI diff, return clean.
-Cite the SC number.
+For a diff that touches a user interface (web, desktop, mobile, or terminal), grade against WCAG 2.2 AA, or
+the platform's equivalent accessibility guidelines where WCAG does not apply: name, role, and value are
+programmatically exposed (SC 4.1.2), the change is keyboard-operable (SC 2.1.1), focus is visible (SC 2.4.7)
+and ordered (SC 2.4.3), text contrast holds (SC 1.4.3), any new pointer gesture has a single-pointer
+equivalent (SC 2.5.1), and new pointer targets meet the minimum size (SC 2.5.8). Exercise the change by
+narrating it as a screen-reader user would hear it. In a terminal UI, which exposes only text to assistive
+technology, each control's name, role, state, and value must come through in the text a screen reader reads.
+On a diff with no user interface, return clean. Cite the success criterion or guideline.

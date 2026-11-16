@@ -20,8 +20,8 @@ unrepresentable.
 Grade failure handling: at each callsite the diff adds or touches, name three ways it can fail — throw,
 reject, return an error sentinel — and confirm each is either handled or provably impossible, that a
 best-effort or cosmetic side effect never aborts the critical path it sits on, and that no path leaves
-the user in a state they cannot recover from through the UI. Cite CWE-703/754/755/459/460/400/367/59 as
-they apply.
+the user or caller in a state they cannot recover from through the product's own interface. Cite
+CWE-703/754/755/459/460/400/367/59 as they apply.
 
 Deterministic capabilities. This loop's brief includes the deterministic capabilities the ticket's
 implementation would benefit from, so a proportionate one is not work beyond the ticket. In your lens, look

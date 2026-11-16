@@ -1,6 +1,7 @@
 # simple-dev-loop-v1 — work turn
 
-Build every increment of the approved plan test-first, per `CLAUDE.md`, then clean up, then review until clean.
+Build every increment of the approved plan test-first, per the repository's agent context, guidance, standards,
+and rules files, then clean up, then review until clean.
 
 Read the `plan` and `groom-intent` inputs, the ticket, and the repository's agent instructions for the commands it
 runs its tests and build with and the environment each test type must run in. When this step runs again after a

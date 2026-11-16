@@ -31,8 +31,8 @@ wrong implementation would still pass it, and what correct implementation would 
 that passes means the check is too weak: check inside the element that owns the fact, give the fixture values
 that tell the cases apart, add the boundary case and the opposite direction. A correct implementation that fails
 means the test pins one way of building it: check the behaviour its acceptance criterion names, not a DOM shape,
-an update strategy or the moment a measurement lands. For renderer UI, the repository's `UI-STANDARDS.md` §3.4
-(UI §3.4), where it has one, lists the rules these questions most often turn up.
+an update strategy or the moment a measurement lands. For a user interface, the repository's own UI testing
+standards, where it has them, list the rules these questions most often turn up.
 
 No acceptance criterion may be deferred or left without an authored failing test. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the

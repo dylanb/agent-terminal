@@ -24,7 +24,7 @@ guarantees hard-to-follow code.
 
 Raise a finding only where a future reader pays for its absence. When the artifact is spec or plan prose,
 density a human cannot scan is itself the maintainability defect — never push the text toward more
-cross-references or finer precision no reader needs; an equal-quality wording is not a finding (§27.6).
+cross-references or finer precision no reader needs; an equal-quality wording is not a finding.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

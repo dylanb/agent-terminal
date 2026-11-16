@@ -13,7 +13,7 @@ transport, a service the slice has yet to build — those are two increments: gi
 ordered by that dependency. Never plan RED/GREEN increments inside one impl-slice; the chain runs one RED, one
 GREEN and one refactor per impl-slice, so increments inside one cannot run.
 This split overrides every sizing rule above except the limit of 10. A ticket that needs more than 10
-dependency-ordered slices is an epic (§28.7), or a decision for the operator when it cannot be split into
+dependency-ordered slices is an epic, or a decision for the operator when it cannot be split into
 sub-tickets.
 
 No acceptance criterion may be deferred, narrowed, or dropped from the plan. Every AC must be assigned to a
@@ -27,12 +27,13 @@ reviewers. Know the ui reviewer's standards before you start and meet them the f
 
 - **ui:** WCAG 2.2 AA, the WAI-ARIA Authoring Practices Guide patterns, design tokens as the single source of a
   design system's values, and atomic design (atoms, molecules and organisms) — plus the repository's own UI
-  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches renderer UI.
+  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches a user interface.
 
-When the ticket touches renderer UI, the plan carries a `## Design system` section that lists every
+When the ticket touches a user interface, the plan carries a `## Design system` section that lists every
 design-system change the work needs — new or changed tokens, new or changed shared components (atoms and
-molecules, per `UI-STANDARDS.md`), and the contrast pairings they introduce — or states `None.` when it needs
-none. A ticket that does not touch renderer UI omits the section.
+molecules), and the contrast pairings they introduce — or states `None.` when it needs none, as it does in a
+repository with no design system of tokens and shared components. A ticket that does not touch a user
+interface omits the section.
 
 Schedule each listed change in the earliest slice or slices, ahead of every slice that uses it, each applied to a
 surface the operator can already see (the tracer-bullet rule's design-system note, for example in
