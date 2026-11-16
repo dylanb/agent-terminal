@@ -117,8 +117,8 @@ for the **agent-terminal plan-loop**; adapt for others):
   plan's title, or a `closes #<N>`. If ambiguous, pick the best-supported candidate, proceed, and name the
   assumption in the report; if none is discoverable, harden against the plan's own stated goals and say so.
 - **Standards corpus** — the repo's own convention/standards files, read so passes 5–6 reference instead of
-  re-derive. Default: `CLAUDE.md`, `CODE-STANDARDS.md`, `TICKET-STANDARDS.md`, `TRACER-BULLET.md`, and any
-  spec the plan cites. In another repo, use whatever `CLAUDE.md`/CONTRIBUTING/docs it has.
+  re-derive: its agent context, guidance, standards, and rules files (for example `CLAUDE.md`, `AGENTS.md`,
+  `CONTRIBUTING.md`), and any spec the plan cites.
 - **Plan turn/completion marker** — a trailing sentinel the loop relies on that must stay the last line, if
   the repo uses one. Default `<!-- agent-terminal:work-turn-complete:plan -->`. If the plan has no such
   marker, skip that invariant.
@@ -233,8 +233,8 @@ behavior change. → autonomous.
 ### 6. Create missing context — but VERIFY against the code first
 Find gaps where the implementer needs a fact the corpus doesn't provide (a store/function's exact contract, a
 fixture recipe, whether a test helper already exists).
-- **Verify before you write. Never speculate.** Spawn a read-only agent (`Explore`) to establish the facts
-  from the actual code with `file:line` evidence, then act on what it finds:
+- **Verify before you write. Never speculate.** Spawn a read-only agent (such as Claude Code's `Explore`) to
+  establish the facts from the actual code with `file:line` evidence, then act on what it finds:
   - **Confirmed correct** → pin the fact so the implementer wires it right and no reviewer demands needless
     defense.
   - **Latent defect uncovered** → fix it if small (and flag re-review); **recommend (don't apply)** if the fix

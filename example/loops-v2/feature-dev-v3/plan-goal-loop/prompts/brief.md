@@ -36,7 +36,7 @@ before you start and meet them the first time:
   example `TRACER-BULLET.md`).
 - **ui:** WCAG 2.2 AA, the WAI-ARIA Authoring Practices Guide patterns, design tokens as the single source of a
   design system's values, and atomic design (atoms, molecules and organisms) — plus the repository's own UI
-  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches renderer UI.
+  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches a user interface.
 
 Write the plan at the altitude of contracts and intent: the files and modules touched, the seams, the
 contracts two surfaces read (shapes, names, persisted formats), and the behavior each slice must produce.
@@ -57,7 +57,7 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
   its own `### Impl-slice`, ordered by that dependency. Never plan RED/GREEN increments inside one impl-slice;
   the chain runs one RED, one GREEN and one refactor per impl-slice, so increments inside one cannot run.
   This split overrides every sizing rule below except the limit of 10. A ticket that needs more than 10
-  dependency-ordered slices is an epic (§28.7), or a decision for the operator when it cannot be split into
+  dependency-ordered slices is an epic, or a decision for the operator when it cannot be split into
   sub-tickets.
 - Target **no more than 5 impl-slices** per ticket; only the dependency split above may take a ticket past 5,
   and never past **10**. A small ticket is one slice.
@@ -73,10 +73,10 @@ slice count or size. The dependency split is not sizing: the tracer-slicer grade
 
 ### Design system first
 
-When the ticket touches renderer UI, the plan carries a `## Design system` section that lists every
+When the ticket touches a user interface, the plan carries a `## Design system` section that lists every
 design-system change the work needs — new or changed tokens, new or changed shared components (atoms and
-molecules, per `UI-STANDARDS.md`), and the contrast pairings they introduce — or states `None.` when it needs
-none. A ticket that does not touch renderer UI omits the section.
+molecules), and the contrast pairings they introduce — or states `None.` when it needs none. A ticket that
+does not touch a user interface omits the section.
 
 Schedule each listed change in the earliest slice or slices, ahead of every slice that uses it, each applied to a
 surface the operator can already see (the tracer-bullet rule's design-system note, for example in
@@ -89,7 +89,7 @@ design-system section instead.
 The plan and plan-approve gates read these blocks out of the plan (see "Machine-read plan tokens are binding").
 
 Enumerate the impl-slices in a `## Impl-slices` block so each plan gate can source their COUNT into the
-`slices` flow input that drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
+`slices` flow input that drives the impl-slice×N loop: each `### Impl-slice N — <title>` carries that slice's
 `Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs once after the loop and
 is NOT an `### Impl-slice` entry. Emit the block in this shape:
 
@@ -107,7 +107,7 @@ Acceptance criteria: acceptance criterion 2 is observably satisfied
 Plan for impl-slice 2: the thin RED/GREEN vertical that delivers criterion 2 end to end.
 ```
 
-For an epic (§28.7), each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
+For an epic, each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
 the preceding slice it depends on, and the approved plan for that slice **verbatim** (it becomes the created
 sub-ticket's body), in this shape:
 

@@ -20,8 +20,8 @@ before you start and meet them the first time:
   ("would this test fail if the line were deleted?") — plus the repository's own testing standards and
   test-run conventions. For deterministic capabilities: fitness functions (Building Evolutionary
   Architectures), poka-yoke (mistake-proofing), and making illegal states unrepresentable.
-- **security:** OWASP ASVS v4, the CWE Top 25, the Electron security checklist (context isolation, no node
-  integration in the renderer, validated IPC), and least privilege — plus the repository's own security and
+- **security:** OWASP ASVS v4, the CWE Top 25, the security checklist of the platform or
+  framework the code runs on, and least privilege — plus the repository's own security and
   code standards (for example `CLAUDE.md`, `CODE-STANDARDS.md`) and the trust boundaries its spec draws. For
   deterministic capabilities: fitness functions (Building Evolutionary Architectures), poka-yoke
   (mistake-proofing), and making illegal states unrepresentable.
@@ -61,11 +61,11 @@ and its cost: size, upkeep, false positives and CI time. One whose value lies on
 follow-up proposal, never built here. Do not over-engineer: a capability that costs more than the judgment it
 replaces is not worth building.
 
-**Renderer UI.** When this ticket's slices test renderer UI, the harness includes the shared test helper the
-tests read the screen through, and the fixture builders they mount, both built to the repository's
-`UI-STANDARDS.md` §3.4 (UI §3.4) where it has one: every control, heading and status is found by role and
-accessible name through one matcher that every query in the helper shares, and each fixture builder gives
-every count and value it sets a different value, so no two cases a test tells apart can be swapped.
+**User interface.** When this ticket's slices test a user interface, the harness includes the shared test
+helper the tests read the screen through, and the fixture builders they mount, both built to the repository's
+own UI testing standards where it has them: every control, heading and status is found by role and accessible
+name through one matcher that every query in the helper shares, and each fixture builder gives every count
+and value it sets a different value, so no two cases a test tells apart can be swapped.
 
 **Size.** A capability is small when it uses the repository's existing tooling, adds no dependency or CI job,
 changes no production code outside the files the ticket touches, and needs no rewrite of existing code to

@@ -17,7 +17,7 @@ without it, and there is no excuse for deferring a valid AC that would ever be a
 Raise a finding only where acting on it changes an observable outcome — an AC left uncovered, deferred, or
 silently narrowed. A citation already correct where a more-precise one would not change the meaning, or an
 equal-quality rewording of an already-faithful clause, is not a finding; flagging it only manufactures the
-next round's work (§27.6).
+next round's work.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure is justified only by what the acceptance criteria require or what

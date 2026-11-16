@@ -18,9 +18,9 @@ TDD rules.
 Grade the authenticity of each RED test. Fails for the right reason — it fails by an assertion whose message
 describes the intended behavior, not by a missing import, a compile or type error, or a collection error that
 never ran the test. Confirm the outcome classification is honest: a run that errored (never compiled) or passed is not
-a valid RED, only one that ran and had an expectation go unmet (§28.5.2); and confirm no RED test asserts private
+a valid RED, only one that ran and had an expectation go unmet; and confirm no RED test asserts private
 calls, call order or internal data structures instead of the behavior it is meant to protect. This is the human backstop that keeps the
-agent's own outcome classification (§28.5.2c) bounded.
+agent's own outcome classification bounded.
 
 In this step RED and GREEN run in one session, so the working tree you review is already GREEN. Grade each
 increment's RED at its `RED:` commit: check the commit out in a scratch worktree, never this one, run the tests it

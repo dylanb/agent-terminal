@@ -1,12 +1,12 @@
 # red-loop — work turn
 
-Write the failing test(s) for the slice's acceptance criterion per `CLAUDE.md`, RED-first, asserting
-observable behavior — never the implementation. Run the repo's `test_command` from `loop-capabilities.yaml`
-against the paths in `test_globs`, and confirm the run fails by assertion: this turn is a valid RED only
-when a test you added reports `failed-assertion`, or, for a slice whose behavior is already built, when every
-test you added passes and you record it as verification-only, as your instructions say. A compile or import
-error, a passing test you do not record that way, or no test selected does not complete it. The orchestrator
-appends the result-file instruction; classify the run and write the result it asks for.
+Write the failing test(s) for the slice's acceptance criterion per the repository's agent context, guidance,
+standards, and rules files, RED-first, asserting observable behavior — never the implementation. Run the repo's
+`test_command` from `loop-capabilities.yaml` against the paths in `test_globs`, and confirm the run fails by
+assertion: this turn is a valid RED only when a test you added reports `failed-assertion`, or, for a slice whose
+behavior is already built, when every test you added passes and you record it as verification-only, as your
+instructions say. A compile or import error, a passing test you do not record that way, or no test selected does not
+complete it. The orchestrator appends the result-file instruction; classify the run and write the result it asks for.
 
 ## Review until clean
 

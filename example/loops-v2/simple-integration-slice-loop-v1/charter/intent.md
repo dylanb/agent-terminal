@@ -35,4 +35,4 @@ prior-slice AC that is unfinished or regressed blocks this change too. Trace eac
 Raise a finding only where acting on it changes an observable outcome — a deferred, missing, or unwired AC,
 an AC with no failing-without-the-change test, or scope that rode along. An equal-quality rewording of an
 already-faithful, complete implementation is not a finding; flagging it only manufactures the next round's
-work (§27.6).
+work.

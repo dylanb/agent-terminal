@@ -22,8 +22,8 @@ before you start and meet them the first time:
   timely), Meszaros's xUnit Test Patterns (test-double kinds and test smells), and mutation-testing reasoning
   ("would this test fail if the line were deleted?") — plus the repository's own testing standards and
   test-run conventions.
-- **security:** OWASP ASVS v4, the CWE Top 25, the Electron security checklist (context isolation, no node
-  integration in the renderer, validated IPC), and least privilege — plus the repository's own security and
+- **security:** OWASP ASVS v4, the CWE Top 25, the security checklist of the platform or
+  framework the code runs on, and least privilege — plus the repository's own security and
   code standards (for example `CLAUDE.md`, `CODE-STANDARDS.md`) and the trust boundaries its spec draws.
 - **taint:** source→sink taint analysis, CWE-78 (OS command injection), CWE-22 (path traversal), CWE-20
   (improper input validation) and CWE-116 (improper output encoding) — plus the repository's own sanitizer and
