@@ -31,8 +31,9 @@ reviewers. Know the ui reviewer's standards before you start and meet them the f
 
 When the ticket touches a user interface, the plan carries a `## Design system` section that lists every
 design-system change the work needs — new or changed tokens, new or changed shared components (atoms and
-molecules), and the contrast pairings they introduce — or states `None.` when it needs none. A ticket that
-does not touch a user interface omits the section.
+molecules), and the contrast pairings they introduce — or states `None.` when it needs none, as it does in a
+repository with no design system of tokens and shared components. A ticket that does not touch a user
+interface omits the section.
 
 Schedule each listed change in the earliest slice or slices, ahead of every slice that uses it, each applied to a
 surface the operator can already see (the tracer-bullet rule's design-system note, for example in

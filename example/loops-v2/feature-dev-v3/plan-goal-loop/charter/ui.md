@@ -29,6 +29,9 @@ where WCAG does not apply:
 - where a slice adds or changes UI, the plan accounts for contrast (SC 1.4.3, SC 1.4.11), keyboard operation
   (SC 2.1.1), focus order and visibility (SC 2.4.3, SC 2.4.7), and name, role and value (SC 4.1.2).
 
+Grade tokens, shared components and tiers in the terms of the repository's own design system. In a repository
+without one, the section states `None.` and only the last item applies.
+
 Do not grade the visual design itself: taste and layout choices are not findings. Cite the success criterion
 or guideline, or the section of the repository's UI standards. For a plan that does not touch a user
 interface, return clean.

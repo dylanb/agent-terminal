@@ -48,9 +48,9 @@ before you start and meet them the first time:
   example `TRACER-BULLET.md`).
 
 This is the integration gate for the whole plan: every acceptance criterion of every slice must be fully
-implemented AND wired into production — reachable and exercised from the real UI/product surface, not only in
-tests — before this turn signals done, UNLESS the plan explicitly records that AC or that wiring as a
-non-goal. A partially-wired or engine-only AC is not done here.
+implemented AND wired into production — reachable and exercised from a real user- or caller-facing entry
+point, not only in tests — before this turn signals done, UNLESS the plan explicitly records that AC or that
+wiring as a non-goal. A partially-wired or engine-only AC is not done here.
 
 No acceptance criterion may be deferred, partially implemented, or left unwired. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the

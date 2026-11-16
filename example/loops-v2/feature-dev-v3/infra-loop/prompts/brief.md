@@ -64,8 +64,9 @@ replaces is not worth building.
 **User interface.** When this ticket's slices test a user interface, the harness includes the shared test
 helper the tests read the screen through, and the fixture builders they mount, both built to the repository's
 own UI testing standards where it has them: every control, heading and status is found by role and accessible
-name through one matcher that every query in the helper shares, and each fixture builder gives every count
-and value it sets a different value, so no two cases a test tells apart can be swapped.
+name, where the interface exposes them, through one matcher that every query in the helper shares, and each
+fixture builder gives every count and value it sets a different value, so no two cases a test tells apart can
+be swapped.
 
 **Size.** A capability is small when it uses the repository's existing tooling, adds no dependency or CI job,
 changes no production code outside the files the ticket touches, and needs no rewrite of existing code to
