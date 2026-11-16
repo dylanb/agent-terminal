@@ -19,5 +19,6 @@ the platform's equivalent accessibility guidelines where WCAG does not apply: na
 programmatically exposed (SC 4.1.2), the change is keyboard-operable (SC 2.1.1), focus is visible (SC 2.4.7)
 and ordered (SC 2.4.3), text contrast holds (SC 1.4.3), any new pointer gesture has a single-pointer
 equivalent (SC 2.5.1), and new pointer targets meet the minimum size (SC 2.5.8). Exercise the change by
-narrating it as a screen-reader user would hear it. On a diff with no user interface, return clean. Cite the
-success criterion or guideline.
+narrating it as a screen-reader user would hear it. In a terminal UI, which exposes only text to assistive
+technology, each control's name, role, state, and value must come through in the text a screen reader reads.
+On a diff with no user interface, return clean. Cite the success criterion or guideline.
