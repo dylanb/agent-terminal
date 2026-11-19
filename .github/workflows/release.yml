@@ -40,15 +40,17 @@ env:
 
 jobs:
   bump:
+    name: Open version bump
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # Push the version-bump branch.
+      pull-requests: write # Open its release PR.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: true # zizmor: ignore[artipacked] -- This job only pushes the bump branch; it uploads no artifacts.
           ref: main
 
       - name: Open the version-bump PR
@@ -101,11 +103,12 @@ jobs:
           fi
 
   resolve:
+    name: Resolve release
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: write # Create the release tag or publish release assets.
     outputs:
       release: ${{ steps.r.outputs.release }}
       tag: ${{ steps.r.outputs.tag }}
@@ -113,8 +116,9 @@ jobs:
       prerelease: ${{ steps.r.outputs.prerelease }}
       branch: ${{ steps.r.outputs.branch }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: true # zizmor: ignore[artipacked] -- This job only resolves and pushes tags; it uploads no artifacts.
           fetch-depth: 0
 
       - id: r
@@ -202,6 +206,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   build:
+    name: Build apps
     needs: resolve
     if: needs.resolve.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
@@ -217,14 +222,16 @@ jobs:
           - os: ubuntu-latest
             builder_flags: --linux --x64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
-          cache: pnpm
+          package-manager-cache: false
 
       # postinstall rebuilds node-pty against Electron's ABI on this runner's OS and arch.
       - run: pnpm install --frozen-lockfile
@@ -240,11 +247,16 @@ jobs:
 
       - run: pnpm run build
 
-      - run: pnpm exec electron-builder ${{ matrix.builder_flags }} --publish never
+      - name: Package both apps
+        env:
+          BUILDER_FLAGS: ${{ matrix.builder_flags }}
+        # Both invocations explicitly disable publishing; release upload is a separate job.
+        run: | # zizmor: ignore[use-trusted-publishing]
+          read -r -a builder_args <<< "$BUILDER_FLAGS"
+          pnpm exec electron-builder "${builder_args[@]}" --publish never
+          pnpm exec electron-builder --config electron-builder.controller.yml "${builder_args[@]}" --publish never
 
-      - run: pnpm exec electron-builder --config electron-builder.controller.yml ${{ matrix.builder_flags }} --publish never
-
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-${{ runner.os }}
           if-no-files-found: error
@@ -260,13 +272,14 @@ jobs:
             dist/controller/*.deb
 
   release:
+    name: Publish release assets
     needs: [resolve, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: write # Create the release tag or publish release assets.
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
           path: assets
