@@ -1,6 +1,6 @@
 import { afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const inherited = {
@@ -8,7 +8,7 @@ const inherited = {
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   ZDOTDIR: process.env.ZDOTDIR,
 };
-const home = mkdtempSync(join(tmpdir(), 'atv-'));
+const home = mkdtempSync(join(homedir(), '.atv-'));
 Object.assign(process.env, { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), ZDOTDIR: home });
 
 afterAll(() => {
