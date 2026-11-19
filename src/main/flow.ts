@@ -293,10 +293,24 @@ export interface RunIdentity {
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
-export interface FlowEntryInput { name: string; type: string; required: boolean; value: string | undefined }
+export type FlowInputValidation = { valid: true } | { valid: false; reason: string };
+
+function validateEntryValues(declared: { name: string; type: string; required: boolean; value?: string }[], values: Record<string, string>): FlowInputValidation {
+  for (const name of Object.keys(values)) {
+    if (!declared.some(input => input.name === name)) return { valid: false, reason: `input ${JSON.stringify(name)} is not declared by the step being entered.` };
+  }
+  for (const input of declared) {
+    const supplied = Object.hasOwn(values, input.name);
+    if (!input.required && !supplied) continue;
+    const value = supplied ? values[input.name] : input.value;
+    if (!value?.trim()) return { valid: false, reason: `provide the required input ${JSON.stringify(input.name)}.` };
+    if ((input.type === 'github-ticket' || input.type === 'pr') && !/^[1-9]\d*$/.test(value)) return { valid: false, reason: `input ${JSON.stringify(input.name)} must be a positive issue or pull request number.` };
+  }
+  return { valid: true };
+}
 
 export interface FlowMachine {
-  entryInputs(action: 'start' | 'approve'): FlowEntryInput[];
+  validateEntryInputs(action: 'start' | 'approve', values: Record<string, string>): FlowInputValidation;
   state(): MachineView;
   /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
@@ -383,7 +397,7 @@ export function createFlowMachine(
     };
     return {
       state: view,
-      entryInputs: () => [],
+      validateEntryInputs: (_action, values) => validateEntryValues([], values),
       currentSlice: () => 1, // an error-state flow (no definition) has no slices
       sliceStartStep: () => null,
       start: view,
@@ -575,12 +589,12 @@ export function createFlowMachine(
   };
 
   return {
-    entryInputs: (action) => {
+    validateEntryInputs: (action, values) => {
       hydrate();
       const step = steps[action === 'start' ? index : nextIndex()];
-      return (step?.inputs ?? []).map(input => ({
+      return validateEntryValues((step?.inputs ?? []).map(input => ({
         name: input.name, type: input.type, required: input.required, value: Object.hasOwn(inputs, input.name) ? inputs[input.name] : undefined,
-      }));
+      })), values);
     },
     state: () => {
       hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
@@ -700,7 +714,7 @@ export function createFlowMachine(
  * is created until a transition writes.
  */
 export interface FlowManager {
-  entryInputs(repoKey: string, action: 'start' | 'approve'): FlowEntryInput[];
+  validateEntryInputs(repoKey: string, action: 'start' | 'approve', values: Record<string, string>): FlowInputValidation;
   state(repoKey: string): FlowStateView;
   start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition; inputs?: Record<string, string> }): FlowStateView;
   advance(repoKey: string, inputs?: Record<string, string>): FlowStateView;
@@ -805,7 +819,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
-    entryInputs: (k, action) => machineFor(k).machine.entryInputs(action),
+    validateEntryInputs: (k, action, values) => machineFor(k).machine.validateEntryInputs(action, values),
     start: (k, opts) => {
       // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
       // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
@@ -881,7 +895,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       const { machine } = machineFor(k);
       const status = machine.state().status;
       try {
-        // Startedness decides only the error case, so it is read only there.
         const runStarted = status === 'error' ? worktreeStartedness(k) : 'started';
         if (!terminateOffered({ status, runStarted })) return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
         if (status === 'error') makeStore(k).clearProgression();

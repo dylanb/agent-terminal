@@ -1,5 +1,6 @@
+import { createMcpGateOperations } from '../../src/main/mcpGateOperations';
 import { expect, it } from 'vitest';
-import { createMcpActions } from '../../src/main/mcpActions';
+import { mcpActions as createMcpActions } from '../helpers/mcpActions';
 import { HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome } from '../../src/main/appGateDecision';
 import { toolResult } from '../../src/main/mcpTools';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
@@ -19,10 +20,10 @@ it.each(['request_changes', 'redo', 'polish'])('%s refuses while approval side e
   const started = new Promise<void>(resolve => { entered = resolve; });
   const { deps, rec } = mkDeps({ holds: true, gate: [...APPROVE_MARK_READY, { option: 'request-changes', sideEffects: [] }, { option: 'redo', sideEffects: [] }, { option: 'polish', sideEffects: [] }],
     runSideEffect: async () => { entered(); await pending; return { outcome: 'done' }; } });
-  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => state(), readGateState: state,
-    gate: { autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => 'app',
+  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => state(), readActionState: state,
+    gate: createMcpGateOperations({ autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => 'app',
       approve: (repo, step, turn) => runAppApprove(repo, step, turn, deps, HUMAN_DECIDER),
-      decide: (repo, step, turn, option, note) => runAppGateDecisionOutcome(repo, step, turn, option, deps, note) } });
+      decide: (repo, step, turn, option, note) => runAppGateDecisionOutcome(repo, step, turn, option, deps, note) }) });
   const approving = actions.call({ tool: 'approve', args: target }, { session: 1 });
   await started;
   try {
@@ -33,8 +34,8 @@ it.each(['request_changes', 'redo', 'polish'])('%s refuses while approval side e
 
 it.each(['request_changes', 'redo', 'polish'])('%s reports no gate before a stale repository', async tool => {
   const current = state(); current.gate = null;
-  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => current, readGateState: () => current,
-    gate: { autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => 'app', approve: async () => ({ kind: 'advanced', effectFailures: [] }) } });
+  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => current, readActionState: () => current,
+    gate: createMcpGateOperations({ decide: async () => ({ taken: false, reason: "No decision configured" }),  autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => 'app', approve: async () => ({ kind: 'advanced', effectFailures: [] }) }) });
   const result = toolResult({ kind: 'answered', value: await actions.call({ tool, args: { ...target, repo: '/stale', ...(tool === 'request_changes' ? { feedback: 'revise' } : tool === 'redo' ? { instruction: 'rebuild' } : {}) } }, { session: 1 }) });
   expect({ error: result.isError, text: result.content[0].text }).toEqual({ error: true, text: expect.stringMatching(/no gate waiting/i) });
 });

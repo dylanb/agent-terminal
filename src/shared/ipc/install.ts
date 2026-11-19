@@ -37,16 +37,11 @@ export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
-// ---- Claude Code integration install (#322) ----
 
-/** claudeCode:install and claudeCode:remove request: no payload beyond the session; main computes the target from
- *  the running build and the user's Claude Code configuration. */
 export interface ClaudeCodeIntegrationMsg {
   sessionId: SessionId;
 }
 
-/** `ok` once Claude Code's configuration holds (or no longer holds) the integration's entries; `!ok` with the reason
- *  when nothing was written, or when the change stopped part way and says so. */
 export type ClaudeCodeIntegrationResult = { ok: true } | { ok: false; error: string };
 
 // ---- Install bundled examples (§18.1/§23.4/§27.15) ----
@@ -160,7 +155,6 @@ export interface CliApi {
   install(): Promise<CliInstallResult>;
 }
 
-/** The Claude Code integration's install and remove actions: the Settings molecule's only seam to them. */
 export interface ClaudeCodeApi {
   install(): Promise<ClaudeCodeIntegrationResult>;
   remove(): Promise<ClaudeCodeIntegrationResult>;

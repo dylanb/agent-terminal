@@ -59,8 +59,6 @@ function seedUserConfig(m: Machine): void {
   writeFileSync(m.settings, JSON.stringify(USER_SETTINGS, null, 2));
 }
 
-/** The integration as installed: its server registered through Claude Code, and one hook per guard event whose
- *  command runs the installed launch, beside the operator's own entries. */
 async function seedInstalled(m: Machine): Promise<void> {
   seedUserConfig(m);
   const added = await runFakeClaude(m.target.claude, ['mcp', 'add-json', '--scope', 'user', 'agent-terminal', JSON.stringify({ type: 'stdio', ...LAUNCH })], { env: m.target.env, cwd: m.root });
@@ -81,7 +79,6 @@ const eventsRunning = (file: string, command: string): string[] =>
     .filter(([, groups]) => groups.some((g) => (g.hooks ?? []).some((h) => (h.command ?? '').includes(command))))
     .map(([event]) => event)
     .sort();
-/** The `claude mcp` commands Claude Code ran successfully, as `<subcommand> <server>`. */
 const claudeMcpRuns = (m: Machine): string[] =>
   readFakeClaudeLog(m.log).flatMap((r) => (r.event === 'cli' && r.exit === 0 && ['add-json', 'remove'].includes(r.argv[1] ?? '') ? [`${r.argv[1]} ${r.argv.filter((a) => !a.startsWith('-') && a !== 'user').slice(2, 3).join('')}`] : []));
 
@@ -333,7 +330,6 @@ it.each(['install', 'remove'] as const)('%s refuses a Claude executable without 
 });
 
 describe('a change that stops after Claude Code has changed its server entry', () => {
-  /** A `claude` that does what Claude Code does, then leaves a settings file nobody can read in place of the real one. */
   function claudeThenBreakSettings(m: Machine, subcommand: string): string {
     const wrapper = join(dirname(m.log), 'claude-then-break');
     writeFileSync(wrapper, `#!/bin/sh\n'${m.target.claude}' "$@"\ns=$?\nif [ "$2" = '${subcommand}' ]; then rm -f '${m.settings}'; mkdir '${m.settings}'; fi\nexit $s\n`, { mode: 0o755 });

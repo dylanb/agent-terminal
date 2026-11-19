@@ -1,3 +1,4 @@
+import type { SessionPrompt } from './sessionPrompt';
 // The main-process flow audit writer (§25): opens a run file on flow:start and appends lifecycle
 // events on later transitions, never throwing into the flow path (best-effort, §25.1/§25.7). The
 // vocabulary, path derivation, serialization, and classifier are shared (src/shared/audit) so the
@@ -71,24 +72,23 @@ export interface AuditRunStart {
   flow: string;
 }
 
-type AuditPrompt = Extract<AuditEvent, { type: 'mcp.prompt' }>;
+const promptEvent = (prompt: SessionPrompt): Extract<AuditEvent, { type: 'mcp.prompt' }> => ({ type: 'mcp.prompt', id: prompt.id, text: prompt.text, ts: prompt.occurredAt });
 
 interface McpRecording {
   repo: string;
   call: McpAuditCall;
-  prompt: AuditPrompt | null;
+  prompt: SessionPrompt | null;
   active: boolean;
   events: { file: string; event: AuditEvent }[];
   file: string | null;
 }
 
 export interface AuditRecorder {
-  beginPrompt(repo: string, prompt: AuditPrompt): void;
-  forgetPrompt(prompt: AuditPrompt): void;
-  recordPrompt(prompt: AuditPrompt): void;
-  recordPrompts(discovery: Promise<AuditPrompt[]>): Promise<void>;
-  recordMcpCall(repo: string, tool: string, origin: TurnOrigin, prompt: AuditPrompt | null, act: () => Promise<unknown>): Promise<unknown>;
-  observeMcpOrigin(origin: TurnOrigin, prompt: AuditPrompt | null): void;
+  beginPrompt(repo: string, prompt: SessionPrompt): void;
+  forgetPrompt(prompt: SessionPrompt): void;
+  recordPrompt(prompt: SessionPrompt): void;
+  recordPrompts(discovery: Promise<SessionPrompt[]>): Promise<void>;
+  recordMcpCall<T>(repo: string, tool: string, origin: TurnOrigin, prompt: SessionPrompt | null, act: () => Promise<T>): Promise<T>;
   deliveryObserver(): (reason?: string) => void;
 
   recordTransition(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike, start?: AuditRunStart): void;
@@ -169,13 +169,13 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       call.events.push(...events.map(event => ({ file: call.file!, event })));
     } else writeEvents(file, events);
   };
-  const recordPromptAt = (repo: string, file: string, prompt: AuditPrompt): void => safe(() => {
+  const recordPromptAt = (repo: string, file: string, prompt: SessionPrompt): void => safe(() => {
     const recorded = recordedPrompts.get(file) ?? new Set<string>();
     if (recorded.has(prompt.id)) return;
-    append(repo, file, [prompt]);
+    append(repo, file, [promptEvent(prompt)]);
   });
-  const recordPrompt = (prompt: AuditPrompt): void => {
-    const binding = promptRuns.get(prompt.id);
+  const recordPrompt = (prompt: SessionPrompt): void => {
+    const binding = promptRuns.get(prompt.turnId);
     if (binding?.file && currentFile(binding.repo) === binding.file) recordPromptAt(binding.repo, binding.file, prompt);
   };
 
@@ -221,9 +221,9 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
 
   return {
     beginPrompt(repo, prompt) {
-      if (!promptRuns.has(prompt.id)) promptRuns.set(prompt.id, { repo, file: currentFile(repo) });
+      if (!promptRuns.has(prompt.turnId)) promptRuns.set(prompt.turnId, { repo, file: currentFile(repo) });
     },
-    forgetPrompt(prompt) { promptRuns.delete(prompt.id); },
+    forgetPrompt(prompt) { promptRuns.delete(prompt.turnId); },
     recordPrompt,
     async recordPrompts(discovery) {
       const bindings = new Map([...promptRuns].filter(([, binding]) => binding.file && currentFile(binding.repo) === binding.file));
@@ -236,8 +236,8 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       }
       try {
         for (const prompt of await discovery) {
-          const binding = bindings.get(prompt.id);
-          if (binding?.file) safe(() => writeEvents(binding.file!, [prompt]));
+          const binding = bindings.get(prompt.turnId);
+          if (binding?.file) safe(() => writeEvents(binding.file!, [promptEvent(prompt)]));
         }
       } catch (error) { log('audit prompt discovery failed', error); }
       finally {
@@ -247,17 +247,6 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
           if (pending?.size === 0) pendingCalls.delete(file);
           safe(() => finishRun(file));
         }
-      }
-    },
-    observeMcpOrigin(origin, prompt) {
-      const context = calls.getStore();
-      if (!context?.active) return;
-      context.call.origin = origin;
-      context.prompt = origin === 'human' ? prompt : null;
-      delete context.call.promptId;
-      if (context.prompt) {
-        context.call.promptId = context.prompt.id;
-        if (context.file) recordPromptAt(context.repo, context.file, context.prompt);
       }
     },
     deliveryObserver() {
@@ -280,10 +269,11 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       return calls.run(context, async () => {
         let result: unknown;
         try {
-          result = await act();
+          const answer = await act();
+          result = answer;
           context.call.outcome = isRecord(result) && typeof result.kind === 'string' ? result.kind : 'success';
           if (isWindowAnswerFailure(result)) context.call.reason = result.message;
-          return result;
+          return answer;
         } finally {
           context.active = false;
           safe(() => {
@@ -330,7 +320,7 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
           const call = calls.getStore();
           if (call?.active && call.repo === repoKey && call.call.tool === 'start') attach(call, file);
           if (call?.active && call.repo === repoKey && call.prompt) {
-            promptRuns.set(call.prompt.id, { repo: repoKey, file });
+            promptRuns.set(call.prompt.turnId, { repo: repoKey, file });
             recordPrompt(call.prompt);
           }
           append(repoKey, file, events);

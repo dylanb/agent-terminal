@@ -35,7 +35,6 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
   return { promise, resolve };
 }
 
-/** A clock whose `armed` settles once the call has set its acknowledgement deadline. */
 function deadlineClock(): VirtualClock & { armed: Promise<void> } {
   const clock = createVirtualClock();
   const armed = deferred();

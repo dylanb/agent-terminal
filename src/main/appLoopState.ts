@@ -335,26 +335,30 @@ export function roundReportFile(repoDir: string, round: number): string | null {
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }
 
-/** Reads one review round's report, or null when it is absent or cannot be read; a report that cannot be read is
- *  logged once per distinct reason. */
 export function createRoundReportReader(log: (line: string) => void): (repoDir: string, round: number) => Promise<unknown> {
-  const logged = new Set<string>();
+  const logged = new Map<string, Set<string>>();
   return async (repoDir, round) => {
+    const key = JSON.stringify([repoDir, round]);
     const file = roundReportFile(repoDir, round);
-    if (file === null) return null;
+    if (file === null) { logged.delete(key); return null; }
     try {
       const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      let result: unknown;
       try {
         if (!(await handle.stat()).isFile()) throw new Error('The round report is not a regular file.');
-        return JSON.parse(await handle.readFile('utf8')) as unknown;
+        result = JSON.parse(await handle.readFile('utf8')) as unknown;
       } finally {
         await handle.close();
       }
+      logged.delete(key);
+      return result;
     } catch (error) {
-      if (isErrno(error, 'ENOENT')) return null;
+      if (isErrno(error, 'ENOENT')) { logged.delete(key); return null; }
       const line = `The round report ${file} was not read: ${errMsg(error)}`;
-      if (!logged.has(line)) {
-        logged.add(line);
+      const failures = logged.get(key) ?? new Set<string>();
+      logged.set(key, failures);
+      if (!failures.has(line)) {
+        failures.add(line);
         log(line);
       }
       return null;

@@ -2,8 +2,6 @@ import { connect } from 'node:net';
 import { bridgeLineReader, encodeBridgeMessage, type AckTimers, type McpCaller, type WindowCallOutcome, type WindowRequest } from '../shared/mcpBridge';
 import { errMsg } from './errno';
 
-/** The server's end of the bridge: one call to the window at `endpoint`, made for `caller`. The window must
- *  acknowledge within `ackTimeoutMs`; once it has, the call waits for the operation however long it takes. */
 export function callWindow<H>(
   endpoint: string,
   request: WindowRequest,

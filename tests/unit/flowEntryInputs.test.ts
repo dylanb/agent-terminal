@@ -12,21 +12,21 @@ const entry = createFlowEntryActions({ isShellBusy: () => false, inject: () => {
 describe('inputs supplied at a flow transition', () => {
   it('enters the first step with supplied values and no input modal', () => {
     const flow = createFlowMachine(load, undefined, entry);
-    expect(flow.entryInputs?.('start')).toEqual([{ name: 'ticket', type: 'github-ticket', required: true, value: undefined }]);
+    expect(flow.validateEntryInputs('start', {})).toEqual({ valid: false, reason: 'provide the required input "ticket".' });
     expect(flow.start({ startedAt: 1, inputs: { ticket: '322', slices: '2' } }).prompt).toBeUndefined();
     expect(flow.state().refs?.ticket).toBe(322);
   });
   it('preflights the actual next step including repeat and resolved inputs', () => {
     const flow = createFlowMachine(load, undefined, entry);
     flow.start({ startedAt: 1, inputs: { ticket: '322', slices: '2' } });
-    expect(flow.entryInputs?.('approve')).toEqual([{ name: 'note', type: 'free-text', required: true, value: undefined }]);
+    expect(flow.validateEntryInputs('approve', {})).toEqual({ valid: false, reason: 'provide the required input "note".' });
     expect(flow.advance({ note: 'ready' }).prompt).toBeUndefined();
-    expect(flow.entryInputs?.('approve')).toEqual([{ name: 'ticket', type: 'github-ticket', required: true, value: '322' }]);
+    expect(flow.validateEntryInputs('approve', {})).toEqual({ valid: true });
     expect(flow.advance().stepName).toBe('first');
     expect(flow.advance().prompt).toBeUndefined();
-    expect(flow.entryInputs?.('approve')).toEqual([{ name: 'result', type: 'free-text', required: true, value: undefined }]);
+    expect(flow.validateEntryInputs('approve', {})).toEqual({ valid: false, reason: 'provide the required input "result".' });
     expect(flow.advance({ result: 'done' }).prompt).toBeUndefined();
-    expect(flow.entryInputs?.('approve')).toEqual([]);
+    expect(flow.validateEntryInputs('approve', {})).toEqual({ valid: true });
     expect(flow.advance().status).toBe('done');
   });
 });

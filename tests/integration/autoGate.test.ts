@@ -1,4 +1,5 @@
-import { createMcpActions } from '../../src/main/mcpActions';
+import { createMcpGateOperations } from '../../src/main/mcpGateOperations';
+import { mcpActions as createMcpActions } from '../helpers/mcpActions';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -2270,7 +2271,6 @@ describe('autoGate — one decider per gate, through the composed runners (AC10,
 
 describe('autoGate — the human approve the Approve control and the MCP approve share (#322)', () => {
   const PICKUP_HOLD = 'confirm or cancel the ticket pickup before deciding the gate';
-  /** The shared human approve over `rig`'s gate; its inner approve accepts the gate as the real one does. */
   const humanApprove = (rig: Rig, opts: { pickupHold?: string; binding?: LoopBinding; outcome?: GateApproveOutcome } = {}) =>
     composeHumanApprove(rig.gate, {
       pickupHold: () => opts.pickupHold ?? null,
@@ -3403,10 +3403,10 @@ describe('MCP gate decisions stand down the automatic gate', () => {
     };
     const ports = {
       windowId: 'gate-window', originOf: async () => 'human' as const,
-      readState: async () => state, readGateState: () => state,
-      gate: { autoGate: rig.gate, pickupHold: () => null, bindingOf: () => 'app' as const,
+      readState: async () => state, readActionState: () => state,
+      gate: createMcpGateOperations({ autoGate: rig.gate, pickupHold: () => null, bindingOf: () => 'app' as const,
         approve: async () => ({ kind: 'refused' as const, reason: 'not this action' }),
-        decide: async () => ({ taken: true as const }) },
+        decide: async () => ({ taken: true as const }) }),
     };
     try {
       await createMcpActions(ports).call({ tool, args: { window: state.window.id, repo: repoDir, step: STEP, turn: TURN,

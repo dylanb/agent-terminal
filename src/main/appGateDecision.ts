@@ -398,7 +398,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
       } catch (e) {
         const reason = errMsg(e);
         deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
-        // The engine's outcome feeds the failed-effect marker, which a report failure has never set (N9b.5(d)).
         if (by === 'human') effectFailures.push(`report ${o.id}: ${reason}`);
         deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
         ok = false;

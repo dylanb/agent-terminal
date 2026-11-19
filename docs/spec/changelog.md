@@ -1,3 +1,17 @@
+## #322 — queued human messages in the audit (2026-11-17)
+
+The real-client overlap check exposed a missing queued message in the full-prompt audit. §30.5 now makes
+explicit that confirmed human messages within an existing turn are recorded separately and subsequent
+human-turn calls reference the latest message. Turn authorization remains tied to the original turn;
+queued messages cannot authorize an engine-started turn.
+
+## #322 — stable MCP todo results (2026-11-11)
+
+The operator requested closing the remaining module-interface leaks. §30.3 now specifies that todo
+mutation results use the same identity, text and status representation as `read_state`, in list order.
+Persistence metadata is kept internal. Flow input validation, retry outcomes and prompt-to-audit
+conversion were also encapsulated without changing their existing rules or audit record format.
+
 ## #322 — accepted prompt and audit security limits (2026-11-10)
 
 The operator reaffirmed §30.4's human-turn eligibility limit: it is not per-action consent and does not

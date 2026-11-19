@@ -58,7 +58,7 @@ export function createTerminateConfirm(
       .todoList(repoKey)
       .then((todos) => {
         if (requestGeneration !== generation) return;
-        const n = terminateTodoCount(todos); // deterministic activation-time count (#26 AC3)
+        const n = terminateTodoCount(todos);
         dialogOpen = true;
         deps.dialog.render({
           title: 'Terminate flow',

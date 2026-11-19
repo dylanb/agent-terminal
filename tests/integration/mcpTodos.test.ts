@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMcpActions } from '../../src/main/mcpActions';
+import { mcpActions as createMcpActions, testGateOperations } from '../helpers/mcpActions';
 import { createMonitorEventStore } from '../../src/main/eventStore';
 import { captureLastReport } from '../../src/main/captureLast';
 import { createTodoStore } from '../../src/main/todoStore';
@@ -32,9 +32,8 @@ function fixture(origin: TurnOrigin = 'human', detected = true) {
   captureLastReport('own', captures, { captureLast: () => ({ report: emission('old captured report'), findings: [emission('old captured finding', 'finding')] }) });
   const captureReport = () => captureLastReport('own', captures, { captureLast: () => detected ? { report: emission('new distinct captured report'), findings: [emission('first distinct finding', 'finding'), emission('second distinct finding', 'finding')] } : null });
   const deps = {
-    windowId: 'own', originOf: async () => origin, readState: async () => state(), readGateState: state,
-    gate: { autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => null,
-      approve: async () => ({ kind: 'advanced' as const, effectFailures: [] }) },
+    windowId: 'own', originOf: async () => origin, readState: async () => state(), readActionState: state,
+    gate: testGateOperations({ pickupHold: () => null, approve: async () => ({ kind: 'advanced' as const, effectFailures: [] }) }),
     todos, captureReport,
   };
   const actions = createMcpActions(deps);
@@ -117,4 +116,11 @@ it('capture_report with nothing detected preserves the prior capture and reports
   const f = fixture('not-human', false); const before = f.captures.list();
   const result = await f.call('capture_report', f.args('capture_report'));
   expect({ error: result.error, captures: f.captures.list() }).toEqual({ error: false, captures: before });
+});
+
+it.each(['todo_create', 'todo_edit', 'todo_complete', 'todo_delete', 'todo_reorder'])('%s returns the same public todo representation as read_state', async tool => {
+  const f = fixture();
+  const result = await f.call(tool, f.args(tool));
+  expect(result.error).toBe(false);
+  expect(JSON.parse(result.text).todos).toEqual(f.state().todos);
 });

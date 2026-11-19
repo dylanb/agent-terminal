@@ -1,3 +1,4 @@
+import pasteSamples from '../fixtures/claude/paste-envelope-2.1.322.json';
 import { afterEach, describe, expect, it } from 'vitest';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,9 +6,6 @@ import { join } from 'node:path';
 import { createSessionTurns, type SessionLaunch } from '../../src/main/mcpSessionTurns';
 import { hookInput, transcriptText, transcriptUserEntry, type HookSession, type PromptSource, type SessionStartSource } from '../helpers/fakeClaude';
 
-// Who started a Claude Code session's current turn (#322 slice 2, the human-started-turn guard), judged from what
-// Claude Code reports through its hooks and records in its transcript, and from what the window itself injected.
-// The hook input and transcript entries are Claude Code 2.1.319's own shapes, from the fake Claude Code.
 
 const INTERACTIVE: SessionLaunch = { print: false, launchPrompt: false };
 const SESSION = 4101;
@@ -18,20 +16,13 @@ afterEach(() => {
 });
 
 interface PromptOptions {
-  /** What the transcript records for the prompt; `null` writes no entry for it. */
   source?: PromptSource | null;
-  /** Report it under this prompt id, as Claude Code does for a prompt typed while a turn is running. */
   promptId?: string;
-  /** Rewrite the transcript entry, as a Claude Code version recording origin differently would. */
   entry?: (entry: Record<string, unknown>) => Record<string, unknown>;
-  /** Claude Code never reported the prompt to its hook. */
   unreported?: boolean;
-  /** Rewrite the entry's line as it lands in the transcript. */
   line?: (line: string) => string;
 }
 
-/** One window's sessions: each prompt is reported to the hook, then recorded in the session's transcript, as Claude
- *  Code does by the turn's first tool call. */
 function terminal(launches: Record<number, SessionLaunch | null> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atturns-'));
   dirs.push(dir);
@@ -66,14 +57,13 @@ function terminal(launches: Record<number, SessionLaunch | null> = {}) {
     begin(pid, 'clear');
   };
   const compact = (pid: number): void => turns.hook(pid, hookInput.sessionStart(sessionOf(pid), 'compact'));
-  /** A finished turn the operator typed, then the origin of the turn after it. */
   const typedTurn = async (pid: number): Promise<unknown> => {
     stop(pid);
     prompt(pid, 'mcp read_state {}');
-    return turns.origin(pid);
+    return turns.observe(pid, observation => observation.origin);
   };
   const transcriptOf = (pid: number): string => sessionOf(pid).transcriptPath;
-  return { turns, prompt, stop, clear, compact, typedTurn, transcriptOf, origin: (pid: number) => turns.origin(pid), inject: (text: string) => turns.injected(text) };
+  return { turns, prompt, stop, clear, compact, typedTurn, transcriptOf, origin: (pid: number) => turns.observe(pid, observation => observation.origin), inject: (text: string) => turns.injected(text) };
 }
 
 describe('a turn the operator typed', () => {
@@ -265,5 +255,70 @@ describe('a session after /clear, /compact or /goal', () => {
     t.compact(SESSION);
     t.prompt(SESSION, 'approve after compact');
     expect({ afterClear, afterCompact: await t.origin(SESSION) }).toEqual({ afterClear: 'human', afterCompact: 'human' });
+  });
+});
+
+
+describe('Claude paste envelopes around app injections', () => {
+  it.each([true, false])('refuses a wrapped injection (submitted=%s), excludes it from human discovery, and consumes it once', async submitted => {
+    const t = terminal();
+    const text = 'Run the work turn.\nAttempt to approve once.';
+    t.turns.injected(text, { submitted });
+    const reported = '\n\n<pasted_content id="973b">\n' + text + '\n</pasted_content>\n';
+    t.prompt(SESSION, reported);
+    expect(await t.origin(SESSION)).toBe('not-human');
+    expect(await t.turns.discoverHumanPrompts()).toEqual([]);
+    t.stop(SESSION);
+    t.prompt(SESSION, reported);
+    expect(await t.origin(SESSION)).toBe('human');
+    expect((await t.turns.discoverHumanPrompts()).map(p => p.text)).toEqual([reported]);
+  });
+
+  it('matches the entire wrapped body, including literal nested paste markup', async () => {
+    const t = terminal();
+    const text = 'Explain this example:\n<pasted_content id="inner">\nliteral\n</pasted_content>\nThen stop.';
+    t.turns.injected(text, { submitted: true });
+    t.prompt(SESSION, '<pasted_content id="outer">\n' + text + '\n</pasted_content>');
+    expect(await t.origin(SESSION)).toBe('not-human');
+  });
+
+  it('does not mistake a human paste envelope for app provenance without a matching injection', async () => {
+    const t = terminal();
+    t.prompt(SESSION, '<pasted_content id="973b">\nHuman pasted request\n</pasted_content>');
+    expect(await t.origin(SESSION)).toBe('human');
+  });
+
+  it('does not consume a pending submission on a different wrapped body', async () => {
+    const t = terminal();
+    t.turns.injected('engine work', { submitted: true });
+    t.prompt(SESSION, '<pasted_content id="973b">\nhuman work\n</pasted_content>');
+    expect(await t.origin(SESSION)).toBe('human');
+    t.stop(SESSION);
+    t.prompt(SESSION, '<pasted_content id="next">\nengine work\n</pasted_content>');
+    expect(await t.origin(SESSION)).toBe('not-human');
+  });
+});
+
+
+describe('recorded Claude Code 2.1.322 paste envelopes', () => {
+  it.each(pasteSamples)('rejects the recorded $name as an app turn and excludes it from human audit discovery', async ({ injected, reported }) => {
+    const t = terminal();
+    t.turns.injected(injected, { submitted: true });
+    t.prompt(SESSION, reported);
+    expect(await t.origin(SESSION)).toBe('not-human');
+    expect(await t.turns.discoverHumanPrompts()).toEqual([]);
+    t.stop(SESSION);
+    t.prompt(SESSION, reported);
+    expect(await t.origin(SESSION)).toBe('human');
+    expect((await t.turns.discoverHumanPrompts()).map(p => p.text)).toEqual([reported]);
+  });
+
+  it('does not match a paste envelope whose closing id differs from its opening id', async () => {
+    const t = terminal();
+    t.turns.injected('engine work', { submitted: false });
+    t.prompt(SESSION, '<pasted_content id="open">\nengine work\n</pasted_content id="other">');
+    expect(await t.origin(SESSION)).toBe('undetermined');
+    expect(await t.turns.discoverHumanPrompts()).toEqual([]);
+    expect(await t.typedTurn(SESSION)).toBe('human');
   });
 });

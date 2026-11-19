@@ -17,7 +17,6 @@ function temp(prefix: string): string {
   return dir;
 }
 
-/** A stand-in app build at its own location: it prints its name and the arguments it was started with. */
 function build(name: string): string {
   const exe = join(temp(`agent-term-build-${name}-`), 'agent-terminal');
   writeFileSync(exe, `#!/bin/sh\necho "${name} $*"\n`, { mode: 0o755 });

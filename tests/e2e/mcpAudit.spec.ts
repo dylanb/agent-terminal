@@ -132,6 +132,23 @@ test('MCP audit: every human prompt is appended in full with its submission time
   expect.soft(auditText(m).startsWith(before)).toBe(true);
 });
 
+test('MCP audit: a queued human attachment is recorded and its approval references that message', { tag: '@ownapp' }, async () => {
+  const m = machine(); await launch(m, { FAKE_CLAUDE_QUEUED_ATTACHMENTS: '1' }); await start(m);
+  writeFileSync(m.hold, 'held');
+  const original = 'Wait for my next message.';
+  await type(original);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'prompt' && r.text === original)).toBe(true);
+  const before = entries(m).length;
+  const message = command('approve', { step: 'prepare', turn: null });
+  await type(message);
+  await expect.poll(() => readFakeClaudeLog(m.claude.logFile).some(r => r.event === 'prompt' && r.text === message && r.source === 'queued')).toBe(true);
+  rmSync(m.hold);
+  await expect.poll(() => calls(m, 'approve').length).toBe(1);
+  expectCall(m, 'approve', 'taken', 'human', message, before);
+  await expect.poll(() => prompts(m, original).length).toBe(1);
+  await expect(page.locator('#flow-strip')).toContainText('done');
+});
+
 test('MCP audit: calls in one human prompt retain order, outcomes, reasons and one shared prompt reference', { tag: '@ownapp' }, async () => {
   const m = machine(); await launch(m); await start(m);
   const before = entries(m).length;
@@ -368,7 +385,7 @@ test('MCP audit: a failed append never changes a tool outcome or prevents the vi
   const { todos: returnedTodos, ...failedEnvelope } = JSON.parse(answer(result).message);
   expect.soft(failedEnvelope).toEqual(controlEnvelope);
   expect.soft(failedEnvelope.kind).toBe('created');
-  expect.soft(returnedTodos).toEqual(JSON.parse(readFileSync(join(m.repo, '.agent-terminal/todos.json'), 'utf8')).sort((a: { order: number }, b: { order: number }) => a.order - b.order));
+  expect.soft(returnedTodos).toEqual(state.todos);
   rmSync(file, { recursive: true }); renameSync(saved, file);
   const after = command('todo_create', { text: 'records after recovery' });
   const recovered = await prompt(m, after); expect(answer(recovered).error).toBe(false);
@@ -609,4 +626,25 @@ exec "$MCP_TEST_REAL_TMUX" "$@"
   } finally {
     try { execFileSync(realTmux, ['-S', socket, 'kill-server'], { stdio: 'ignore' }); } catch {}
   }
+});
+
+
+test('MCP wrapped paste: app injection cannot approve or acquire human audit attribution, but a later human request can', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  await launch(m, { FAKE_CLAUDE_PASTE_ENVELOPE: '1' });
+  await start(m);
+  const text = ['mcp read_state {}', command('approve', { step: 'prepare', turn: null })].join('\n');
+  const before = entries(m).length;
+  expect(resultKind(await prompt(m, text, true))).toBe('not-human-started');
+  expect((await current(m)).gate?.step).toBe('prepare');
+  const injected = entries(m).slice(before).filter(e => e.mcp?.tool === 'approve');
+  expect(injected).toHaveLength(1);
+  expect(injected[0].mcp).toMatchObject({ origin: 'not-human', outcome: 'not-human-started' });
+  expect(injected[0].mcp?.promptId).toBeUndefined();
+  expect(prompts(m, '\n\n<pasted_content id="973b">\n' + text + '\n</pasted_content id="973b">\n')).toEqual([]);
+  expect(resultKind(await prompt(m, text))).toBe('taken');
+  expect((await current(m)).gate?.step).toBe('done');
+  const human = calls(m, 'approve').at(-1);
+  expect(human?.mcp).toMatchObject({ origin: 'human', outcome: 'taken' });
+  expect(human?.mcp?.promptId).toEqual(expect.any(String));
 });

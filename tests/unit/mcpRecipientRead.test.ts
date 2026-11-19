@@ -75,3 +75,16 @@ it.each(['', '.'])('does not execute a working-directory tmux through PATH %j', 
     rmSync(bin, { recursive: true, force: true });
   }
 });
+
+it.each(['ps', 'tmux'])('preserves the actual %s stderr in a recipient failure diagnostic', async failed => {
+  const real = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const failing = join(executableDir, failed);
+  writeFileSync(failing, '#!/bin/sh\nprintf "recipient permissions denied" >&2\nexit 1\n', { mode: 0o700 });
+  const diagnostics: string[] = [];
+  const error = vi.spyOn(console, 'error').mockImplementation(message => { diagnostics.push(String(message)); });
+  try {
+    processRead.mockImplementation((command, args, options) => command === 'ps' && failed === 'tmux' ? processes : real.execFileSync(failing, args, options));
+    expect(sessionRecipient(40, 10, { socket: `/tmp/diagnostic-${failed}.sock`, searchPath: executableDir })).toBeNull();
+    expect(diagnostics).toEqual([expect.stringContaining('recipient permissions denied')]);
+  } finally { error.mockRestore(); }
+});

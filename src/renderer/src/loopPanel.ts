@@ -144,12 +144,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   };
   const routeOuts = createPressGroup();
 
-  /** §27.12 — the `reason` row. On the patch path (a status→error transition on an already-rendered view) it
-   *  is added INSIDE the surviving live region so it announces as an addition (WCAG SC 4.1.3); on a first
-   *  render the region is built with the row already present, so that render is silent (§K.5). `anchor` is
-   *  the iteration row when a round has run, else the status row (a run-less §27 failure carries no iteration).
-   *  The reason is repo-sourced, so both callers pass it through `shownErrorReason`, which strips display-unsafe
-   *  bytes (CWE-117). */
   const syncReasonRow = (ldl: HTMLElement, anchor: HTMLElement, clean: string | null): void => {
     const existing = ldl.querySelector<HTMLElement>('[data-loop-reason]');
     if (clean === null) {
@@ -247,8 +241,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     for (const row of shownVerdictRows(loop)) syncNamedRow(ldl, anchor, row.key, row.label, row.value);
   };
 
-  /** Add / update / remove a keyed detail row in `ldl`, anchored after `anchor`. `datasetKey` is the
-   *  camelCase name; the matching `data-*` attribute is its kebab form. A null value removes the row. */
   const syncNamedRow = (ldl: HTMLElement, anchor: HTMLElement, datasetKey: string, label: string, value: string | null): void => {
     const attr = `data-${datasetKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
     const existing = ldl.querySelector<HTMLElement>(`[${attr}]`);

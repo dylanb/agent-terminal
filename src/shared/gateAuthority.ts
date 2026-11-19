@@ -51,7 +51,6 @@ export function autoHaltReasonText(r: { reason: AutoHaltReason; detail?: string 
   return r.detail === undefined ? label : `${label}: ${r.detail}`;
 }
 
-/** A halt reason as the gate panel shows it. */
 export function shownAutoHaltReason(r: { reason: AutoHaltReason; detail?: string }): string {
   return stripDisplayControlChars(autoHaltReasonText(r));
 }

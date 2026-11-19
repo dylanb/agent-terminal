@@ -11,10 +11,7 @@ import { errMsg, isErrno } from './errno';
 import { mergePaths, resolveShellPath, terminalShellArgs } from './pty';
 import { userClaudeStateFileFrom, userConfigRootFrom } from './userConfig';
 
-/** What the install and remove actions act on: the `claude` executable that runs `claude mcp`, the environment
- *  Claude Code runs with (it locates the configuration), and how Claude Code launches the server and its hooks. */
 export interface McpIntegrationTarget {
-  /** An absolute path; any other value is never run, and fails as "Claude Code was not found". */
   claude: string;
   env: NodeJS.ProcessEnv;
   launch: { command: string; args: string[] };
@@ -75,7 +72,6 @@ async function readSettings(file: string): Promise<{ settings: Settings; existed
   return { settings: parsed as Settings, existed: true };
 }
 
-/** `dir` with every symbolic link resolved, or as given when it does not exist yet. */
 async function realDir(dir: string): Promise<string> {
   try {
     return await realpath(dir);
@@ -93,7 +89,6 @@ async function writeSettings(file: string, settings: Settings, existed: boolean)
   }
 }
 
-/** Reads the settings afresh, so a change Claude Code wrote while `claude mcp` ran is kept. */
 async function rewriteSettings(file: string, change: (settings: Settings) => Settings | null): Promise<void> {
   const fresh = await readSettings(file);
   const next = change(fresh.settings);
@@ -104,7 +99,6 @@ function hookCommand(launch: McpIntegrationTarget['launch']): string {
   return [launch.command, ...launch.args].map(shellQuote).concat(MCP_HOOK_ARG).join(' ');
 }
 
-/** A hook is the integration's own when its command runs the installed launch. */
 function isOurHook(hook: unknown, launch: McpIntegrationTarget['launch']): boolean {
   const command = isRecord(hook) && typeof hook.command === 'string' ? hook.command : null;
   const ours = shellQuote(launch.command);
@@ -167,16 +161,12 @@ function runClaude(target: McpIntegrationTarget, args: string[]): Promise<Claude
   });
 }
 
-/** Claude Code's own state file, where `claude mcp` keeps user-scope servers. Read only: every write goes through
- *  `claude mcp`, so Claude Code's own concurrent writes to it are never lost. */
 function stateFile(env: NodeJS.ProcessEnv): string {
   const file = userClaudeStateFileFrom(env, env.HOME ?? os.homedir());
   if (file === null) throw new IntegrationFailure(NO_CONFIG_DIR);
   return file;
 }
 
-/** Whether Claude Code has no server under the integration's name, has the integration's own (it runs the launch),
- *  or has one that is someone else's. */
 async function registeredServer(target: McpIntegrationTarget): Promise<{ kind: 'absent' } | { kind: 'ours' } | { kind: 'theirs'; command: string }> {
   const read = await readJsonFile(stateFile(target.env), "Claude Code's state file", {});
   if (read === null) return { kind: 'absent' };
@@ -188,8 +178,6 @@ async function registeredServer(target: McpIntegrationTarget): Promise<{ kind: '
   return command === target.launch.command ? { kind: 'ours' } : { kind: 'theirs', command };
 }
 
-/** The hooks half of a change whose server half Claude Code has already made: a failure here says which half is
- *  done, since the same action run again finishes it. */
 async function afterServerChange(done: string, action: 'Install' | 'Remove', hooks: () => Promise<void>): Promise<void> {
   try {
     await hooks();
@@ -209,10 +197,6 @@ async function attempt(work: () => Promise<void>): Promise<McpIntegrationResult>
   }
 }
 
-/** Registers the agent-terminal server with Claude Code at user scope, through `claude mcp` so Claude Code's own
- *  writes to its state file are never lost, and adds the hooks the guard needs to its settings. Adds only its own
- *  entries and adds nothing that is already there. A settings file it cannot read or parse, or no `claude`, fails
- *  before anything is written. */
 export function installMcpIntegration(target: McpIntegrationTarget): Promise<McpIntegrationResult> {
   return attempt(async () => {
     const file = settingsFile(target.env);
@@ -237,7 +221,6 @@ export function installMcpIntegration(target: McpIntegrationTarget): Promise<Mcp
   });
 }
 
-/** Takes out only the integration's own server, through `claude mcp`, and its own hooks. */
 export function removeMcpIntegration(target: McpIntegrationTarget): Promise<McpIntegrationResult> {
   return attempt(async () => {
     const file = settingsFile(target.env);
@@ -271,8 +254,6 @@ async function isExecutable(file: string): Promise<boolean> {
   }
 }
 
-/** Where Claude Code is, and how the window's terminal would run it: with its shell's PATH (an npm install's
- *  `#!/usr/bin/env node` needs it) and its shell's CLAUDE_CONFIG_DIR, which the sessions in the window read. */
 export interface FoundClaude {
   claude: string;
   path: string;
@@ -282,8 +263,6 @@ export interface FoundClaude {
 
 const MARK = 'agent-terminal-claude-probe';
 
-/** Asks the user's shell the way the window's terminal starts it, and interactive, as the terminal's PTY makes it, so
- *  `.zshrc` or `.bashrc` is read too. Startup files may print anything, so only the marked lines are read. */
 function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ claude: string | null; path: string; claudeConfigDir?: string; claudeCustomOauthUrl?: string } | null> {
   const script = `c=$(command -v claude 2>/dev/null); printf '\\n${MARK}:claude:%s\\n${MARK}:path:%s\\n${MARK}:config:%s\\n${MARK}:oauth:%s\\n' "$c" "$PATH" "\${CLAUDE_CONFIG_DIR-}" "\${CLAUDE_CODE_CUSTOM_OAUTH_URL-}"`;
   return new Promise((resolve) => {
@@ -306,14 +285,10 @@ function shellLookup(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, timeoutM
   });
 }
 
-/** The `claude` the install action runs: the one in an absolute directory on the app's PATH, else the one the user's
- *  shell finds (an app started from the desktop inherits a PATH that rarely holds it), run with that shell's PATH added
- *  and its CLAUDE_CONFIG_DIR; else null. */
 export async function findClaude(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, opts: { shellTimeoutMs?: number } = {}): Promise<FoundClaude | null> {
   const current = env.PATH ?? '';
   const shell = await shellLookup(platform, env, opts.shellTimeoutMs ?? CLAUDE_COMMAND_TIMEOUT_MS);
   const merged = shell === null ? current : mergePaths(current, shell.path);
-  // A relative entry would resolve `node` (an npm install's interpreter) against the child's working directory.
   const absoluteOnly = merged.split(path.delimiter).filter((dir) => path.isAbsolute(dir)).join(path.delimiter);
   const runWith = {
     path: absoluteOnly,

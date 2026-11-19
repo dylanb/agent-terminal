@@ -86,3 +86,20 @@ describe("the report read_state gives for its window's loop", () => {
     }).toEqual({ reviewing: { round: 1 }, firstRound: null, reviewed: { round: 2 } });
   });
 });
+
+it.each(['valid report', 'missing report'])('logs a recurring report failure after recovery to %s without resetting other reports', async recovery => {
+  const messages: string[] = [];
+  const read = createRoundReportReader(line => messages.push(line));
+  const dir = repo({ 1: '{broken', 2: '{broken' });
+  const file = join(dir, roundReportRel(1));
+  await read(dir, 1); await read(dir, 2);
+  expect(messages).toHaveLength(2);
+  if (recovery === 'valid report') writeFileSync(file, '{"round":1}');
+  else rmSync(file);
+  expect(await read(dir, 1)).toEqual(recovery === 'valid report' ? { round: 1 } : null);
+  await read(dir, 2);
+  expect(messages).toHaveLength(2);
+  writeFileSync(file, '{broken');
+  expect(await read(dir, 1)).toBeNull();
+  expect(messages).toEqual([messages[0], messages[1], messages[0]]);
+});

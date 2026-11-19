@@ -1,8 +1,9 @@
+import { createMcpTodoDelivery } from '../../src/main/mcpTodoDelivery';
 import { afterEach, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMcpActions } from '../../src/main/mcpActions';
+import { mcpActions as createMcpActions, testGateOperations } from '../helpers/mcpActions';
 import { createSessionTurns } from '../../src/main/mcpSessionTurns';
 import { createTodoStore } from '../../src/main/todoStore';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
@@ -18,10 +19,14 @@ function fixture() {
   const hook = (event: string) => turns.hook(1, { hook_event_name: event, transcript_path: '/transcript', source: 'startup', prompt_id: 'turn', prompt: 'send' });
   hook('SessionStart'); hook('UserPromptSubmit');
   const state = (): McpWindowState => ({ window: { id: 'own' }, repo: { key: repo }, flow: null, selectionUnusable: false, gate: null, stalledTurn: null, loopMessage: null, roundReport: null, todos: store.list(repo), startable: [], startableError: null, terminateTodoCount: null });
-  const actions = createMcpActions({ windowId: 'own', originOf: async () => 'human', readState: async () => state(), readGateState: state,
-    gate: { autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => null, approve: async () => ({ kind: 'advanced', effectFailures: [] }) },
-    todos: { ...store, setStatus: (...args) => { if (fail) throw new Error('disk write failed'); return store.setStatus(...args); } },
-    sendTodo: (caller, todo, persist) => turns.acceptSend(caller.session!, todo, persist),
+  const delivery = createMcpTodoDelivery({ sessions: turns, destination: () => null,
+    markSent: (repo, id) => { if (fail) throw new Error('disk write failed'); store.setStatus(repo, id, 'in_progress'); },
+    deliveryObserver: () => () => {}, noteInjection: () => {}, reportDrop: () => {},
+  });
+  const actions = createMcpActions({ windowId: 'own', originOf: async () => 'human', readState: async () => state(), readActionState: state,
+    gate: testGateOperations({ pickupHold: () => null, approve: async () => ({ kind: 'advanced', effectFailures: [] }) }),
+    todos: store,
+    sendTodo: delivery.send,
   });
   const call = (tool: string, args: Record<string, unknown>) => actions.call({ tool, args: { window: 'own', repo, ...args } }, { session: 1 });
   return { call, store, repo, hook, turns, fail: (value: boolean) => { fail = value; } };

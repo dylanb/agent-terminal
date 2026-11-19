@@ -1,49 +1,36 @@
+import type { FlowInputValidation } from './flow';
+import { mcpTodo } from '../shared/mcpWindowState';
 import { outstandingTodoOrder } from '../shared/todoOrder';
 import type { TodoStore } from './todoStore';
 import type { MonitorEvent } from '../shared/ipc';
-import { isMcpToolName, type McpToolName } from '../shared/mcp';
-import type { McpCaller, WindowAnswerFailure, WindowRequest } from '../shared/mcpBridge';
+import { type McpToolName } from '../shared/mcp';
+import type { McpCaller, WindowAnswerFailure } from '../shared/mcpBridge';
 import type { McpWindowState } from '../shared/mcpWindowState';
 import type { TurnOrigin } from '../shared/turnOrigin';
-import type { GateApproveOutcome, GateDecisionOutcome } from './appGateDecision';
+import type { GateApproveOutcome } from './appGateDecision';
 import type { AppRetryOutcome } from './appLoopEngine';
-import type { AutoGate } from './autoGate';
-import { APPROVE_ALREADY_RUNNING, approveRunning, composeHumanApprove, humanApproveRefusal, type HumanApproveDeps } from './autoGateComposition';
-import { invalidToolArguments } from './mcpTools';
-
-/** The loop gate an approve acts on, as `read_state` names it. */
-export interface GateTarget {
-  repoKey: string;
-  step: string;
-  turnKey: string;
-}
+import type { McpGateOperations, GateTarget } from './mcpGateOperations';
+import { type McpCommand, type CommandFor } from './mcpTools';
+import type { McpActionResult, McpOperationResult } from './mcpActionResult';
 
 export interface McpActionDeps {
-  todos?: TodoStore;
-  captureReport?: () => MonitorEvent[];
-  sendTodo?: (caller: McpCaller, todo: { id: string; text: string }, persist: () => void) => string | null;
+  todos: Pick<TodoStore, 'list' | 'add' | 'update' | 'reorder' | 'setStatus' | 'delete'>;
+  captureReport: () => MonitorEvent[];
+  sendTodo: (caller: McpCaller, repo: string, todo: { id: string; text: string }) => string | null;
   windowId: string;
-  originOf(caller: McpCaller): Promise<TurnOrigin>;
-  originObserved?: (origin: TurnOrigin, caller: McpCaller) => void;
   readState(): Promise<McpWindowState>;
-  readGateState(): Pick<McpWindowState, 'repo' | 'gate'>;
-  readActionState?: () => McpWindowState;
-  entryStatus?: (repo: string) => { kind: string; message: string } | null;
-  /** What the window's own Approve control decides with: an MCP approve runs the same human approve over them. */
-  gate: HumanApproveDeps & {
-    autoGate: Pick<AutoGate, 'humanDecision'>;
-    decide?: (repo: string, step: string, turn: string, option: 'request-changes' | 'redo' | 'polish', note?: string) => Promise<GateDecisionOutcome>;
-  };
-  retry?: (repo: string, step: string, turn: string) => AppRetryOutcome | void;
-  dismissLoopMessage?: (id: string) => void;
-  chooseFlow?: (repo: string, id: string) => { ok: boolean; reason?: string };
-  entryInputs?: (repo: string, action: 'start' | 'approve') => { name: string; type: string; required: boolean; value?: string }[];
-  start?: (repo: string, inputs: Record<string, string>) => { kind: string; message?: string };
-  terminate?: (repo: string) => { kind: string; message?: string };
-  advance?: (repo: string, step: string, inputs: Record<string, string>) => { kind: string; message?: string };
+  readActionState: () => McpWindowState;
+  entryStatus: (repo: string) => McpOperationResult | null;
+  gate: McpGateOperations;
+  retry: (repo: string, step: string, turn: string) => AppRetryOutcome;
+  dismissLoopMessage: (id: string) => void;
+  chooseFlow: (repo: string, id: string) => { ok: boolean; reason?: string };
+  validateEntryInputs: (repo: string, action: 'start' | 'approve', values: Record<string, string>) => FlowInputValidation;
+  start: (repo: string, inputs: Record<string, string>) => McpOperationResult;
+  terminate: (repo: string) => McpOperationResult;
+  advance: (repo: string, step: string, inputs: Record<string, string>) => McpOperationResult;
 }
 
-/** The ticket's refusal reasons a window gives, in the order it checks them; app unreachable is the server's. */
 type RefusalKind = 'not-this-window' | 'origin-undetermined' | 'not-human-started' | 'no-gate-waiting' | 'not-valid';
 
 const REFUSAL_WORDING: Record<RefusalKind, string> = {
@@ -69,8 +56,7 @@ const ORIGIN_REFUSALS: Record<Exclude<TurnOrigin, 'human'>, WindowAnswerFailure>
 
 const quote = (value: string): string => JSON.stringify(value);
 
-/** What an approve the gate ran returns to the agent. */
-function approveAnswer(outcome: GateApproveOutcome, at: string): unknown {
+function approveAnswer(outcome: GateApproveOutcome, at: string): McpOperationResult {
   switch (outcome.kind) {
     case 'advanced':
       return outcome.effectFailures.length === 0
@@ -108,213 +94,160 @@ function approveAnswer(outcome: GateApproveOutcome, at: string): unknown {
 
 type TodoTool = Extract<McpToolName, `todo_${string}` | 'capture_report'>;
 
-interface ActionArguments {
-  window: string;
-  repo: string;
-  step: string;
-  turn: string;
-  feedback?: string;
-  instruction?: string;
-  message: string;
-  flow: string;
-  inputs?: Record<string, string>;
-  expectedTodoCount: number;
-  todo: string;
-  todos: string[];
-  text: string;
-}
+export function createMcpActions(deps: McpActionDeps): { execute(command: McpCommand, caller: McpCaller, origin: TurnOrigin): Promise<McpActionResult> } {
 
-/** The window's answer to a tool call, which the server turns into the call's tool result. */
-export function createMcpActions(deps: McpActionDeps): { call(request: WindowRequest, caller: McpCaller): Promise<unknown> } {
-  const originOf = async (caller: McpCaller): Promise<TurnOrigin> => {
-    const origin = await deps.originOf(caller);
-    deps.originObserved?.(origin, caller);
-    return origin;
-  };
-  const humanApprove = composeHumanApprove(deps.gate.autoGate, deps.gate);
 
-  const checkInputs = (args: ActionArguments, action: 'start' | 'approve'): WindowAnswerFailure | null => {
-    const declared = deps.entryInputs?.(args.repo, action) ?? [];
-    for (const name of Object.keys(args.inputs ?? {})) {
-      if (!declared.some(input => input.name === name)) return refusal('not-valid', `input ${quote(name)} is not declared by the step being entered.`);
-    }
-    for (const input of declared) {
-      const supplied = Object.hasOwn(args.inputs ?? {}, input.name);
-      if (!input.required && !supplied) continue;
-      const value = supplied ? args.inputs?.[input.name] : input.value;
-      if (!value?.trim()) return refusal('not-valid', `provide the required input ${quote(input.name)}.`);
-      if ((input.type === 'github-ticket' || input.type === 'pr') && !/^[1-9]\d*$/.test(value)) return refusal('not-valid', `input ${quote(input.name)} must be a positive issue or pull request number.`);
-    }
-    return null;
+  const checkInputs = (args: { repo: string; inputs?: Record<string, string> }, action: 'start' | 'approve'): WindowAnswerFailure | null => {
+    const result = deps.validateEntryInputs(args.repo, action, args.inputs ?? {});
+    return result.valid ? null : refusal('not-valid', result.reason);
   };
-  const act = async (tool: Exclude<McpToolName, 'read_state' | 'approve' | TodoTool>, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
+  const act = async (command: Exclude<McpCommand, CommandFor<'read_state' | 'approve' | TodoTool>>, origin: TurnOrigin): Promise<McpActionResult> => {
+    const { args, tool } = command;
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
-    const origin = await originOf(caller);
     if (origin !== 'human') return ORIGIN_REFUSALS[origin];
-    const state = deps.readActionState ? deps.readActionState() : await deps.readState();
+    const state = deps.readActionState();
     const decidesGate = tool === 'request_changes' || tool === 'redo' || tool === 'polish';
     if (decidesGate && state.gate === null) return refusal('no-gate-waiting', 'the window is not waiting at a gate.');
     if (state.repo?.key !== args.repo) return refusal('not-valid', `the current repository is ${quote(state.repo?.key ?? 'none')}. Read the state again.`);
-    switch (tool) {
+    switch (command.tool) {
       case 'request_changes':
       case 'redo':
       case 'polish': {
+        const { args, tool } = command;
         const gate = state.gate!;
         const option = tool === 'request_changes' ? 'request-changes' : tool;
         if (gate.turn === null || gate.step !== args.step || gate.turn !== args.turn || !gate.options.includes(option)) return refusal('not-valid', `the current gate is ${quote(gate.step)}, turn ${quote(gate.turn ?? 'none')}, offering ${gate.options.join(', ')}.`);
-        const held = approveRunning(deps.gate.autoGate, args.repo, args.step, args.turn)
-          ? APPROVE_ALREADY_RUNNING
-          : humanApproveRefusal(deps.gate, args.repo, args.step);
+        const target = { repoKey: args.repo, step: args.step, turnKey: args.turn ?? '' };
+        const held = deps.gate.refusal(target);
         if (held !== null) return refusal('not-valid', held);
-        const note = tool === 'request_changes' ? args.feedback : args.instruction;
+        const note = command.tool === 'request_changes' ? command.args.feedback : command.tool === 'redo' ? command.args.instruction : undefined;
         if (tool !== 'polish' && !note?.trim()) return refusal('not-valid', 'provide nonblank feedback or an instruction.');
-        if (!deps.gate.decide) return refusal('not-valid', 'gate decisions are unavailable.');
-        const settled = deps.gate.autoGate.humanDecision(args.repo, args.step, args.turn);
-        let landed = false;
-        try {
-          const outcome = await deps.gate.decide(args.repo, args.step, args.turn, option, note);
-          landed = outcome.taken;
-          if (landed) return { kind: 'taken', message: `${tool} taken at ${quote(args.step)}.` };
-          return neither('not-taken', outcome.taken ? 'The gate was not taken.' : outcome.reason);
-        } finally { settled(landed); }
+        const outcome = await deps.gate.decide(target, option, note);
+        return outcome.taken ? { kind: 'taken', message: `${tool} taken at ${quote(args.step)}.` }
+          : neither('not-taken', outcome.reason);
       }
-      case 'retry':
+      case 'retry': {
+        const { args } = command;
         { const held = deps.gate.pickupHold(args.repo); if (held !== null) return refusal('not-valid', held); }
-        if (!state.stalledTurn || state.stalledTurn.step !== args.step || state.stalledTurn.turn !== args.turn || !deps.retry) return refusal('not-valid', 'the stopped turn no longer matches; read the state again.');
+        if (!state.stalledTurn || state.stalledTurn.step !== args.step || state.stalledTurn.turn !== args.turn) return refusal('not-valid', 'the stopped turn no longer matches; read the state again.');
         { const outcome = deps.retry(args.repo, args.step, args.turn);
-          return outcome?.taken ? { kind: 'retried', message: 'The stopped turn was retried.' }
-            : neither('not-taken', outcome?.reason ?? 'The stopped turn was not retried.'); }
-      case 'dismiss_loop_message':
-        if (state.loopMessage?.id !== args.message || !deps.dismissLoopMessage) return refusal('not-valid', 'the message no longer matches; read the state again.');
+          return outcome.taken ? { kind: 'retried', message: 'The stopped turn was retried.' }
+            : neither('not-taken', outcome.reason); }
+      }
+      case 'dismiss_loop_message': {
+        const { args } = command;
+        if (state.loopMessage?.id !== args.message) return refusal('not-valid', 'the message no longer matches; read the state again.');
         deps.dismissLoopMessage(args.message);
         return { kind: 'dismissed', message: 'The loop message was dismissed.' };
-      case 'choose_flow':
-        if (state.flow?.runStarted || !state.startable?.some(item => item.id === args.flow) || !deps.chooseFlow) return refusal('not-valid', 'choose an available flow before a run starts.');
+      }
+      case 'choose_flow': {
+        const { args } = command;
+        if (state.flow?.runStarted || !state.startable?.some(item => item.id === args.flow)) return refusal('not-valid', 'choose an available flow before a run starts.');
         { const result = deps.chooseFlow(args.repo, args.flow);
           return result.ok ? { kind: 'selected', message: `Selected ${quote(args.flow)}.` } : refusal('not-valid', result.reason ?? 'the flow could not be selected.'); }
+      }
       case 'start': {
-        if (state.flow?.runStarted || state.selectionUnusable || !deps.start) return refusal('not-valid', 'the selected flow cannot start in this state.');
+        const { args } = command;
+        if (state.flow?.runStarted || state.selectionUnusable) return refusal('not-valid', 'the selected flow cannot start in this state.');
         const invalid = checkInputs(args, 'start');
         return invalid ?? deps.start(args.repo, args.inputs ?? {});
       }
-      case 'terminate':
-        if (state.terminateTodoCount === null || state.terminateTodoCount !== args.expectedTodoCount || !deps.terminate) return refusal('not-valid', `the current termination todo count is ${state.terminateTodoCount ?? 'unavailable'}. Read the state again.`);
+      case 'terminate': {
+        const { args } = command;
+        if (state.terminateTodoCount === null || state.terminateTodoCount !== args.expectedTodoCount) return refusal('not-valid', `the current termination todo count is ${state.terminateTodoCount ?? 'unavailable'}. Read the state again.`);
         return deps.terminate(args.repo);
+      }
       default:
-        return tool satisfies never;
+        return command satisfies never;
     }
   };
 
-  const approve = async (args: ActionArguments, caller: McpCaller): Promise<unknown> => {
+  const approve = async (args: CommandFor<'approve'>['args'], origin: TurnOrigin): Promise<McpActionResult> => {
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}, not ${quote(args.window)}.`);
-    const origin = await originOf(caller);
     if (origin !== 'human') return ORIGIN_REFUSALS[origin];
-    const state = deps.readGateState();
+    const state = deps.readActionState();
     const gate = state.gate;
     if (gate === null || state.repo === null) return refusal('no-gate-waiting', 'the window is not waiting at a gate.');
     const shown = `step ${quote(gate.step)}${gate.turn === null ? '' : `, turn ${quote(gate.turn)}`} of ${quote(state.repo.key)}`;
     if (gate.turn === null) {
-      if (args.repo !== state.repo.key || args.step !== gate.step || args.turn !== undefined) return refusal('not-valid', `the window waits at ${shown}. Read the state again.`);
+      if (args.repo !== state.repo.key || args.step !== gate.step || (args.turn !== undefined && args.turn !== null)) return refusal('not-valid', `the window waits at ${shown}. Read the state again.`);
       const held = deps.gate.pickupHold(args.repo);
       if (held !== null) return refusal('not-valid', held);
       const invalid = checkInputs(args, 'approve');
       if (invalid !== null) return invalid;
-      if (!deps.advance) return refusal('not-valid', 'step advancement is unavailable.');
       const outcome = deps.advance(args.repo, args.step, args.inputs ?? {});
       const outstanding = (await deps.readState()).todos.some(todo => todo.status !== 'done');
       return outstanding ? { ...outcome, message: `${outcome.message ?? 'Advanced.'} Todos are still outstanding.` } : outcome;
     }
-    const target: GateTarget = { repoKey: args.repo, step: args.step, turnKey: args.turn };
+    const target: GateTarget = { repoKey: args.repo, step: args.step, turnKey: args.turn ?? '' };
     if (target.repoKey !== state.repo.key || target.step !== gate.step || target.turnKey !== gate.turn) {
       return refusal('not-valid', `the window waits at the gate of ${shown}, not ${quote(target.step)}, ${quote(target.turnKey)} of ${quote(target.repoKey)}. Read the state again.`);
     }
     if (!gate.options.includes('approve')) return refusal('not-valid', `the gate of ${shown} offers ${gate.options.map(quote).join(', ')}, not approve.`);
-    const undecidable = approveRunning(deps.gate.autoGate, target.repoKey, target.step, target.turnKey)
-      ? APPROVE_ALREADY_RUNNING
-      : humanApproveRefusal(deps.gate, target.repoKey, target.step);
+    const undecidable = deps.gate.refusal(target);
     if (undecidable !== null) return refusal('not-valid', `the gate of ${shown} cannot be decided now: ${undecidable}`);
     const invalid = checkInputs(args, 'approve');
     if (invalid !== null) return invalid;
-    const outcome = await humanApprove(target.repoKey, target.step, target.turnKey, args.inputs);
+    const outcome = await deps.gate.approve(target, args.inputs);
     const answer = approveAnswer(outcome, shown);
     if (outcome.kind === 'advanced') {
-      const entry = deps.entryStatus?.(args.repo);
-      if (entry) return { ...answer as object, ...entry, message: `${(answer as { message: string }).message} ${entry.message}` };
+      const entry = deps.entryStatus(args.repo);
+      if (entry) return { ...answer, ...entry, message: `${answer.message} ${entry.message}` };
     }
     return answer;
   };
 
-  const todo = async (tool: TodoTool, args: ActionArguments, caller: McpCaller): Promise<unknown> => {
+  const todo = async (command: CommandFor<TodoTool>, caller: McpCaller, origin: TurnOrigin): Promise<McpActionResult> => {
+    const { args, tool } = command;
     if (args.window !== deps.windowId) return refusal('not-this-window', `this session's window is ${quote(deps.windowId)}.`);
     if (tool === 'todo_send') {
-      const origin = await originOf(caller);
       if (origin !== 'human') return ORIGIN_REFUSALS[origin];
     }
-    const state = deps.readActionState ? deps.readActionState() : await deps.readState();
+    const state = deps.readActionState();
     if (state.repo?.key !== args.repo) return refusal('not-valid', 'the repository changed; read the state again.');
     if (tool === 'capture_report') {
-      if (!deps.captureReport) return refusal('not-valid', 'capture is unavailable.');
       const events = deps.captureReport();
       return { kind: 'captured', message: events.length ? 'Captured the latest report.' : 'No report detected; the prior capture is preserved.', events };
     }
     const store = deps.todos;
-    if (!store) return refusal('not-valid', 'todos are unavailable.');
     const items = store.list(args.repo);
-    const targets = tool === 'todo_reorder' ? args.todos : tool === 'todo_create' ? [] : [args.todo];
+    const targets = command.tool === 'todo_reorder' ? command.args.todos : command.tool === 'todo_create' ? [] : [command.args.todo];
     if (targets.some(id => !items.some(item => item.id === id))) return refusal('not-valid', 'a todo no longer exists; read the state again.');
     if (['todo_edit', 'todo_reorder', 'todo_send'].includes(tool) && targets.some(id => items.some(item => item.id === id && item.status === 'done'))) return refusal('not-valid', 'a completed todo cannot be edited, reordered or sent.');
-    switch (tool) {
+    switch (command.tool) {
       case 'todo_create':
-        if (!args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
-        return { kind: 'created', todos: store.add(args.repo, args.text) };
+        if (!command.args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
+        return { kind: 'created', todos: store.add(command.args.repo, command.args.text).map(mcpTodo) };
       case 'todo_edit':
-        if (!args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
-        return { kind: 'edited', todos: store.update(args.repo, args.todo, args.text) };
-      case 'todo_complete': return { kind: 'completed', todos: store.setStatus(args.repo, args.todo, 'done') };
-      case 'todo_delete': return { kind: 'deleted', todos: store.delete(args.repo, args.todo) };
+        if (!command.args.text.trim()) return refusal('not-valid', 'provide nonblank todo text.');
+        return { kind: 'edited', todos: store.update(command.args.repo, command.args.todo, command.args.text).map(mcpTodo) };
+      case 'todo_complete': return { kind: 'completed', todos: store.setStatus(command.args.repo, command.args.todo, 'done').map(mcpTodo) };
+      case 'todo_delete': return { kind: 'deleted', todos: store.delete(command.args.repo, command.args.todo).map(mcpTodo) };
       case 'todo_reorder':
-        if (args.todos.length !== items.filter(item => item.status !== 'done').length || new Set(args.todos).size !== args.todos.length) return refusal('not-valid', 'provide every outstanding todo exactly once.');
-        return { kind: 'reordered', todos: store.reorder(args.repo, outstandingTodoOrder(items, args.todos)) };
+        if (command.args.todos.length !== items.filter(item => item.status !== 'done').length || new Set(command.args.todos).size !== command.args.todos.length) return refusal('not-valid', 'provide every outstanding todo exactly once.');
+        return { kind: 'reordered', todos: store.reorder(command.args.repo, outstandingTodoOrder(items, command.args.todos)).map(mcpTodo) };
       case 'todo_send': {
-        if (!deps.sendTodo) return refusal('not-valid', 'delivery is unavailable.');
-        const item = items.find(item => item.id === args.todo)!;
+        const item = items.find(item => item.id === command.args.todo)!;
         if (typeof item.text !== 'string' || !item.text.trim()) return refusal('not-valid', 'the stored todo text is malformed or blank; edit it before sending.');
-        const reason = deps.sendTodo(caller, { id: item.id, text: item.text }, () => { store.setStatus(args.repo, args.todo, 'in_progress'); });
+        const reason = deps.sendTodo(caller, command.args.repo, { id: item.id, text: item.text });
         if (reason !== null) return refusal('not-valid', reason);
         return { kind: 'accepted', message: 'Accepted for delivery when this turn ends and the session is idle.' };
       }
-      default: return tool satisfies never;
+      default: return command satisfies never;
     }
   };
 
-  const operations: Record<McpToolName, (args: ActionArguments, caller: McpCaller) => Promise<unknown>> = {
-    todo_create: (args, caller) => todo('todo_create', args, caller),
-    todo_edit: (args, caller) => todo('todo_edit', args, caller),
-    todo_reorder: (args, caller) => todo('todo_reorder', args, caller),
-    todo_complete: (args, caller) => todo('todo_complete', args, caller),
-    todo_delete: (args, caller) => todo('todo_delete', args, caller),
-    todo_send: (args, caller) => todo('todo_send', args, caller),
-    capture_report: (args, caller) => todo('capture_report', args, caller),
-    read_state: () => deps.readState(),
-    approve,
-    request_changes: (args, caller) => act('request_changes', args, caller),
-    redo: (args, caller) => act('redo', args, caller),
-    polish: (args, caller) => act('polish', args, caller),
-    retry: (args, caller) => act('retry', args, caller),
-    dismiss_loop_message: (args, caller) => act('dismiss_loop_message', args, caller),
-    choose_flow: (args, caller) => act('choose_flow', args, caller),
-    start: (args, caller) => act('start', args, caller),
-    terminate: (args, caller) => act('terminate', args, caller),
-  };
-
   return {
-    async call(request, caller) {
-      if (!isMcpToolName(request.tool)) throw new Error(`no window operation for ${request.tool}`);
-      const problem = invalidToolArguments(request.tool, request.args);
-      if (problem !== null) return neither('invalid-arguments', problem);
-      const args = { ...(request.args as Record<string, unknown> | undefined) };
-      if (request.tool === 'approve' && args.turn === null) delete args.turn;
-      return operations[request.tool](args as unknown as ActionArguments, caller);
+    async execute(command, caller, origin) {
+      switch (command.tool) {
+        case 'read_state': return deps.readState();
+        case 'approve': return approve(command.args, origin);
+        case 'todo_create': case 'todo_edit': case 'todo_reorder': case 'todo_complete':
+        case 'todo_delete': case 'todo_send': case 'capture_report': return todo(command, caller, origin);
+        case 'request_changes': case 'redo': case 'polish': case 'retry':
+        case 'dismiss_loop_message': case 'choose_flow': case 'start': case 'terminate': return act(command, origin);
+        default: return command satisfies never;
+      }
     },
   };
 }

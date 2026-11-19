@@ -30,8 +30,6 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** How the window's terminal starts the user's shell: a login shell on macOS (native terminals' convention), a plain
- *  interactive one on Linux (§5). */
 export function terminalShellArgs(platform: NodeJS.Platform): string[] {
   return platform === 'darwin' ? ['-l'] : [];
 }

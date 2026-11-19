@@ -11,18 +11,17 @@ export interface WindowBridge {
   close(): Promise<void>;
 }
 
-/** The directory that holds every window's endpoint under `appHome`. */
 export function windowBridgeDir(appHome: string): string {
   return join(appHome, '.agent-terminal', 'mcp');
 }
 
-/** The window's end of the bridge: answers its own sessions' calls with `handle`. `build` names the running build, so
- *  a server from another build is never answered. Each window listens at an endpoint of its own. */
-export async function openWindowBridge(opts: {
+interface WindowBridgeOptions {
   appHome: string;
   build: string;
   handle: (request: WindowRequest, caller: McpCaller) => Promise<unknown>;
-}): Promise<WindowBridge> {
+}
+
+export async function openWindowBridge(opts: WindowBridgeOptions): Promise<WindowBridge> {
   const dir = windowBridgeDir(opts.appHome);
   if (!await preparePrivateDir(dir)) throw new Error(`The MCP endpoint directory ${dir} must be owned by the current user with permissions 0700.`);
   const endpoint = join(dir, `${randomBytes(6).toString('hex')}.sock`);
@@ -83,4 +82,17 @@ export async function openWindowBridge(opts: {
       });
     })()),
   };
+}
+
+export async function openWindowBridgeForLifetime(opts: WindowBridgeOptions & {
+  lifetime: { isClosed(): boolean; onClosed(close: () => void): void };
+}): Promise<WindowBridge | null> {
+  const bridge = await openWindowBridge(opts);
+  const close = () => bridge.close().catch((error: unknown) => console.error(`The Claude Code tools' endpoint was not closed: ${errMsg(error)}`));
+  opts.lifetime.onClosed(() => { void close(); });
+  if (opts.lifetime.isClosed()) {
+    await close();
+    return null;
+  }
+  return bridge;
 }

@@ -1,3 +1,6 @@
+import { createMcpCallHandler } from './mcpCallHandler';
+import type { McpOperationResult } from './mcpActionResult';
+import { createMcpGateOperations } from './mcpGateOperations';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
@@ -99,7 +102,7 @@ import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
 import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
-import { createAuditObservation } from './auditObservation';
+import { createMcpSessionAudit } from './mcpSessionAudit';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
@@ -137,7 +140,7 @@ import { changeClaudeCodeIntegration } from './mcpIntegration';
 import type { ClaudeCodeIntegrationResult } from '../shared/ipc';
 import { refreshMcpLauncher, resolveMcpScript } from './mcpLauncher';
 import { mcpBuildId } from './mcpBuildId';
-import { openWindowBridge, type WindowBridge } from './mcpWindowBridge';
+import { openWindowBridgeForLifetime, type WindowBridge } from './mcpWindowBridge';
 import { windowSessionEnv } from './mcpSessionEnv';
 import { catalogView, readLatestRoundReport, readWindowState } from './mcpWindowState';
 import type { McpWindowState } from '../shared/mcpWindowState';
@@ -147,8 +150,8 @@ import { createMcpActions } from './mcpActions';
 import { startedAnswer, terminatedAnswer } from './mcpFlowOutcome';
 import { createSessionTurns, readSessionLaunch } from './mcpSessionTurns';
 import { sessionRecipient } from './mcpSessionProcess';
-import { createPaneInjector } from './mcpPaneInjector';
-import { createRecipientInjector } from './recipientInjector';
+import { createPaneTransport } from './mcpPaneInjector';
+import { createMcpTodoDelivery } from './mcpTodoDelivery';
 import { isValidClaudeCodeIntegration } from './ipcValidation';
 import { errMsg } from './errno';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
@@ -298,24 +301,20 @@ async function createWindow(): Promise<void> {
   if (target.kind === 'url') await win.loadURL(target.url);
   else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
   if (!await registration || win.isDestroyed()) return;
-  // Launch setup for the Claude Code tools is best-effort: on any failure the terminal still spawns, its sessions
-  // just get no tools.
   await refreshMcpLauncher(flowGlobalDir, mcpInvocation).catch((error: unknown) =>
     console.error(`The Claude Code tools' launcher could not be refreshed: ${errMsg(error)}`));
   let answerMcp: (request: WindowRequest, caller: McpCaller) => Promise<unknown> = async () => {
     throw new Error('the window is still starting');
   };
-  const mcpBridge: WindowBridge | null = await (async () => openWindowBridge({
+  const mcpBridge: WindowBridge | null = await (async () => openWindowBridgeForLifetime({
     appHome: flowGlobalDir,
     build: mcpBuildId(mcpScript),
     handle: (request, caller) => answerMcp(request, caller),
+    lifetime: { isClosed: () => win.isDestroyed(), onClosed: close => { win.once('closed', close); } },
   }))().catch((error: unknown) => {
     console.error(`The Claude Code tools are off in this window: ${errMsg(error)}`);
     return null;
   });
-  const closeMcpBridge = (): void => {
-    mcpBridge?.close().catch((error: unknown) => console.error(`The Claude Code tools' endpoint was not closed: ${errMsg(error)}`));
-  };
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -323,7 +322,6 @@ async function createWindow(): Promise<void> {
   });
   if (win.isDestroyed()) {
     ptyProcess.kill();
-    closeMcpBridge();
     return;
   }
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
@@ -377,7 +375,7 @@ async function createWindow(): Promise<void> {
       agentActivity = status.agentState;
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
-      if (status.agentState === 'quiet') { notifyInjectable(); deliverMcpTodos(); } // §27.2: the instance is now injectable
+      if (status.agentState === 'quiet') { notifyInjectable(); deliverMcpTodos(); }
     },
   });
 
@@ -840,10 +838,7 @@ async function createWindow(): Promise<void> {
       return load.ok ? load.definition.name : null;
     },
   });
-  const auditObservation = createAuditObservation({
-    observe: () => audit.recordPrompts(sessionTurns.discoverHumanPrompts()),
-    cancel: () => sessionTurns.cancelAuditDiscovery(),
-  });
+  const sessionAudit = createMcpSessionAudit({ sessions: sessionTurns, audit, repo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot) });
   const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
 
   const trustedAppBootstraps = createTrustedPickups({
@@ -1346,7 +1341,7 @@ async function createWindow(): Promise<void> {
   // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.
   ptyProcess.onData((data) => {
     void recordHumanPrompts();
-    sessionTurns.cancelInterruptedSends();
+    todoDelivery.recipientChanged();
     outputGate.send(data);
     shadow.write(data);
   });
@@ -1395,7 +1390,6 @@ async function createWindow(): Promise<void> {
     return readWindowState({ ...source, latestRoundReport: await latestRoundReport(source.repoKey, source.view) });
   };
   const startFlow = (repoKey: string, inputs?: Record<string, string>): FlowStateView => {
-        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
         const started = worktreeLock.withWorktreeLock(repoKey, () =>
           beginRunHere(repoKey, () => {
             const started = flowStartTransition(repoKey, inputs);
@@ -1427,19 +1421,22 @@ async function createWindow(): Promise<void> {
     if (result.ok) pushFlowChanged();
     return result;
   };
-  const routeAppTurn = (repoKey: string, step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate') => {
+  const prepareAppTurnRoute = (repoKey: string): string | null => {
     const held = pickupHoldRefusal(repoKey);
-    if (held !== null) { loopMessages.post('error', held); return { taken: false as const, reason: held }; }
+    if (held !== null) { loopMessages.post('error', held); return held; }
     if (appEngine.activeRepoDir() !== repoKey) appEngine.resume(repoKey);
     armAppTurnDoneWatch(repoKey);
-    return appEngine.routeOut(repoKey, step, turnKey, action);
+    return null;
   };
-  const entryStatus = (repoKey: string) => {
+  const routeAppTurn = (repoKey: string, step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate'): void => {
+    if (prepareAppTurnRoute(repoKey) === null) appEngine.routeOut(repoKey, step, turnKey, action);
+  };
+  const entryStatus = (repoKey: string): McpOperationResult | null => {
     if (pickupConfirmations.view(repoKey)) return { kind: 'waiting-on-dialog', message: 'Waiting on pickup confirmation at the machine.' };
     if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: 'Pickup started.' };
     return null;
   };
-  const entryOutcome = (repoKey: string, view: FlowStateView, verb: string) => {
+  const entryOutcome = (repoKey: string, view: FlowStateView, verb: string): McpOperationResult => {
     pushFlowChanged();
     if (view.pickupConfirm) return { kind: 'waiting-on-dialog', message: `${verb}; waiting on pickup confirmation at the machine.` };
     if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: `${verb}; pickup started.` };
@@ -1463,26 +1460,22 @@ async function createWindow(): Promise<void> {
     return list;
   }
   const captureReport = () => captureLastReport(SESSION_ID, store, scanner);
-  deliverMcpTodos = () => sessionTurns.deliverPending(agentActivity === 'quiet', (text, pid, identity, tmux, delivery) => {
-    const onDrop = (reason: string): void => { delivery.finish(reason); console.error('MCP todo delivery dropped:', reason); };
-    const onInject = (): void => {
-      sessionTurns.injected(text, { submitted: true, sendingSession: pid });
-      suppressor.noteInjection();
-    };
-    let writer: Injector;
-    if (tmux === undefined) {
-      writer = createRecipientInjector({
-        canReceive: delivery.canReceive,
-        paste: data => ptyIo.io.write(wrapForPaste(data, shadow.isBracketedPaste())),
-        write: data => ptyIo.io.write(data), onInject, onDrop,
-      });
-    } else {
+  const todoDelivery = createMcpTodoDelivery({
+    sessions: sessionTurns,
+    destination: (pid, tmux) => {
       const recipient = sessionRecipient(pid, ptyProcess.pid, tmux);
-      if (recipient?.identity !== identity || recipient.pane === undefined) { onDrop('the destination pane changed.'); return; }
-      writer = createPaneInjector(tmux, recipient.pane, delivery.canReceive, onInject, onDrop);
-    }
-    writer(text, { submit: true, onComplete: delivery.finish });
+      if (!recipient) return null;
+      if (tmux !== undefined) return recipient.pane === undefined ? null : { identity: recipient.identity, ...createPaneTransport(tmux, recipient.pane) };
+      return { identity: recipient.identity,
+        paste: data => ptyIo.io.write(wrapForPaste(data, shadow.isBracketedPaste())),
+        write: data => ptyIo.io.write(data),
+      };
+    },
+    markSent: (repo, todo) => { todoOperations.setStatus(repo, todo, 'in_progress'); },
+    deliveryObserver: () => audit.deliveryObserver(), noteInjection: () => suppressor.noteInjection(),
+    reportDrop: reason => console.error('MCP todo delivery dropped:', reason),
   });
+  deliverMcpTodos = () => todoDelivery.flush(agentActivity === 'quiet');
   const mcpActions = createMcpActions({
     todos: todoOperations,
     captureReport: () => {
@@ -1490,21 +1483,21 @@ async function createWindow(): Promise<void> {
       if (events.length) send(CH.captureChanged, { sessionId: SESSION_ID, events });
       return events;
     },
-    sendTodo: (caller, todo, persist) => caller.session === null ? 'the calling session is unknown.' : sessionTurns.acceptSend(caller.session, todo, persist, audit.deliveryObserver()),
+    sendTodo: todoDelivery.send,
     windowId,
-    originOf: (caller) => (caller.session === null ? Promise.resolve('undetermined') : sessionTurns.origin(caller.session)),
-    originObserved: (origin, caller) => audit.observeMcpOrigin(origin, caller.session === null ? null : sessionTurns.prompt(caller.session)),
     readState: readMcpWindowState,
-    readGateState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
     readActionState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
     entryStatus,
-    gate: {
+    gate: createMcpGateOperations({
       ...humanApproveDeps, autoGate,
       decide: (repoKey, step, turnKey, option, note) => runAppGateDecisionOutcome(repoKey, step, turnKey, option, approveDepsFor(repoKey), note),
-    },
-    entryInputs: (repoKey, action) => flow.entryInputs(repoKey, action),
+    }),
+    validateEntryInputs: (repoKey, action, values) => flow.validateEntryInputs(repoKey, action, values),
     chooseFlow,
-    retry: (repoKey, step, turnKey) => routeAppTurn(repoKey, step, turnKey, 'retry'),
+    retry: (repoKey, step, turnKey) => {
+      const reason = prepareAppTurnRoute(repoKey);
+      return reason === null ? appEngine.retry(repoKey, step, turnKey) : { taken: false, reason };
+    },
     dismissLoopMessage: (id) => loopMessages.dismiss(id),
     start: (repoKey, inputs) => {
       const view = startFlow(repoKey, inputs);
@@ -1519,25 +1512,12 @@ async function createWindow(): Promise<void> {
     },
   });
   function recordHumanPrompts(): Promise<void> {
-    return auditObservation.observe();
+    return sessionAudit.observe();
   }
+  const callMcp = createMcpCallHandler({ repo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot), sessions: sessionTurns, audit, actions: mcpActions });
   answerMcp = async (request, caller) => {
-    const repo = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
-    if (request.tool !== MCP_HOOK_REPORT) {
-      const origin = caller.session === null ? 'undetermined' : await sessionTurns.origin(caller.session);
-      const prompt = caller.session === null ? null : sessionTurns.prompt(caller.session);
-      return audit.recordMcpCall(repo, request.tool, origin, prompt, () => mcpActions.call(request, caller));
-    }
-    if (caller.session !== null) {
-      void recordHumanPrompts();
-      const previous = sessionTurns.prompt(caller.session);
-      sessionTurns.hook(caller.session, request.args, caller.tmux);
-      const prompt = sessionTurns.prompt(caller.session);
-      if (previous && previous.id !== prompt?.id) audit.forgetPrompt(previous);
-      if (prompt) audit.beginPrompt(repo, prompt);
-      await sessionTurns.origin(caller.session);
-      void recordHumanPrompts();
-    }
+    if (request.tool !== MCP_HOOK_REPORT) return callMcp(request, caller);
+    if (caller.session !== null) await sessionAudit.report(caller.session, request.args, caller.tmux);
     deliverMcpTodos();
     return null;
   };
@@ -1826,7 +1806,7 @@ async function createWindow(): Promise<void> {
   win.on('close', event => {
     if (auditClosed) return;
     event.preventDefault();
-    auditClose ??= auditObservation.close().finally(() => {
+    auditClose ??= sessionAudit.close().finally(() => {
       auditClosed = true;
       win.close();
     });
@@ -1837,8 +1817,7 @@ async function createWindow(): Promise<void> {
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
       unregisterController,
-      () => sessionTurns.cancelPending('the terminal closed.'),
-      closeMcpBridge,
+      () => todoDelivery.close(),
       () => disposeIpc(),
       () => ptyProcess.kill(),
       () => scanner.dispose(),

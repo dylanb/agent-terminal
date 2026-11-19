@@ -1,6 +1,7 @@
+import { createMcpGateOperations } from '../../src/main/mcpGateOperations';
 import { describe, expect, it } from 'vitest';
 import { HUMAN_DECIDER, runAppApprove } from '../../src/main/appGateDecision';
-import { createMcpActions } from '../../src/main/mcpActions';
+import { mcpActions as createMcpActions } from '../helpers/mcpActions';
 import { toolResult, type McpToolResult } from '../../src/main/mcpTools';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
 import type { TurnOrigin } from '../../src/shared/turnOrigin';
@@ -8,8 +9,6 @@ import { APPROVE_MARK_READY, defWithGate, mkDeps } from '../helpers/appGateDecis
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { APP_LOOP_NAMESPACE, MARKED_BINDING_REASON, RETIRED_LOOP_NAMESPACE, type LoopBinding } from '../../src/shared/loopNamespace';
 
-// Approve through MCP (#322 slice 2): the window checks the ticket's refusal reasons in order before any decision
-// reaches the gate, then runs the same approve its Approve control runs and answers with that approve's outcome.
 
 const WINDOW = 'window-1';
 const REPO = '/repo';
@@ -32,7 +31,6 @@ const atGate = (gate: Partial<NonNullable<McpWindowState['gate']>> | null = {}):
 
 const OWN_TARGET = { window: WINDOW, repo: REPO, step: GATE.step, turn: GATE.turn };
 
-/** The ticket's refusal reasons, in its order, each as the wording its message carries. */
 const REFUSALS = [
   ['not this window', /not this session.s window/i],
   ['origin undetermined', /turn origin could not be determined/i],
@@ -42,10 +40,8 @@ const REFUSALS = [
 ] as const;
 
 const text = (result: McpToolResult): string => result.content.map((c) => c.text).join('\n');
-/** The message the agent relays, as the result carries it. */
 const messageOf = (result: McpToolResult): string => String((JSON.parse(text(result)) as { message?: unknown }).message);
 
-/** Which refusal a result is: `taken` for a success, `neither` for an error naming no refusal reason. */
 function classOf(result: McpToolResult): string {
   if (!result.isError) return 'taken';
   const named = REFUSALS.filter(([, wording]) => wording.test(text(result))).map(([name]) => name);
@@ -54,18 +50,15 @@ function classOf(result: McpToolResult): string {
 
 const CALLER = 4101;
 
-/** A window whose approve is the real gate approve, over ports that record what it did. `origin` is the calling
- *  session's turn; `origins` gives each session's own. */
 function window(opts: { origin?: TurnOrigin; origins?: Record<number, TurnOrigin>; state?: McpWindowState; gate?: Parameters<typeof mkDeps>[0]; pickupHold?: string; binding?: LoopBinding } = {}) {
   const { deps, rec } = mkDeps(opts.gate ?? {});
-  /** Each human decision the gate was told of, and whether it landed once settled. */
   const decisions: { repoKey: string; step: string; turnKey: string | null; beforeAccept: boolean; landed?: boolean }[] = [];
   const actions = createMcpActions({
     windowId: WINDOW,
     originOf: async (caller) => (caller.session === null ? undefined : (opts.origins ?? { [CALLER]: opts.origin ?? 'human' })[caller.session]) ?? 'undetermined',
     readState: async () => structuredClone(opts.state ?? atGate()),
-    readGateState: () => structuredClone(opts.state ?? atGate()),
-    gate: {
+    readActionState: () => structuredClone(opts.state ?? atGate()),
+    gate: createMcpGateOperations({ decide: async () => ({ taken: false, reason: "No decision configured" }),
       autoGate: {
         humanDecision: (repoKey, step, turnKey) => {
           const decision: (typeof decisions)[number] = { repoKey, step, turnKey, beforeAccept: rec.accepts.length === 0 };
@@ -76,12 +69,10 @@ function window(opts: { origin?: TurnOrigin; origins?: Record<number, TurnOrigin
       pickupHold: () => opts.pickupHold ?? null,
       bindingOf: () => opts.binding ?? APP_LOOP_NAMESPACE,
       approve: (repoKey, step, turnKey) => runAppApprove(repoKey, step, turnKey, deps, HUMAN_DECIDER),
-    },
+    }),
   });
   const call = async (tool: string, args: Record<string, unknown>, session = CALLER): Promise<McpToolResult> =>
     toolResult({ kind: 'answered', value: await actions.call({ tool, args }, { session }) });
-  /** What the approve changed: an accept, a side effect, an advance, a loop message, or a human decision the gate was
-   *  told of. */
   const acted = (): boolean => rec.accepts.length + rec.sideEffects.length + rec.advances.length + rec.errors.length + rec.notices.length > 0;
   const changed = (): boolean => acted() || decisions.length > 0;
   return { call, rec, acted, changed, decisions };
@@ -364,13 +355,13 @@ describe('the current target after authorization', () => {
       windowId: WINDOW,
       originOf: () => new Promise<TurnOrigin>((resolve) => { release = resolve; started(); }),
       readState: async () => structuredClone(current),
-      readGateState: () => structuredClone(current),
-      gate: {
+      readActionState: () => structuredClone(current),
+      gate: createMcpGateOperations({ decide: async () => ({ taken: false, reason: "No decision configured" }),
         autoGate: { humanDecision: () => { gateChanged = true; return () => {}; } },
         pickupHold: () => null,
         bindingOf: () => APP_LOOP_NAMESPACE,
         approve: (repoKey, step, turnKey) => runAppApprove(repoKey, step, turnKey, deps, HUMAN_DECIDER),
-      },
+      }),
     });
     const pending = actions.call({ tool: 'approve', args: OWN_TARGET }, { session: CALLER });
     await checking;

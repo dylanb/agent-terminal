@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { claudeSessionOf, type ProcessEntry } from '../../src/main/mcpSessionProcess';
 import { parseSessionLaunch } from '../../src/main/mcpSessionTurns';
 
-// Which Claude Code session a server or hook process belongs to, and how that session was launched, read from the
-// process table (#322 slice 2).
 
 const LAUNCHER = '/home/op/.agent-terminal/claude-code/agent-terminal-mcp';
 const CLAUDE = 700;

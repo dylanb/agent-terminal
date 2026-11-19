@@ -2,7 +2,7 @@ import type { FlowStateView } from '../shared/ipc';
 import type { WindowAnswerFailure } from '../shared/mcpBridge';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 
-export interface EntryStatus { kind: string; message: string }
+export type EntryStatus = import('./mcpActionResult').McpOperationResult;
 
 const notTaken = (reason: string): WindowAnswerFailure => ({ outcome: 'neither', kind: 'not-taken', message: `Not taken: ${reason}` });
 

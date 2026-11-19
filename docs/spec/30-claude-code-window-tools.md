@@ -22,7 +22,8 @@ terminal from opening.
 ### 30.2 Server and results
 
 The server uses the official MCP SDK over stdio. Names match `^[a-zA-Z0-9_-]{1,128}$`.
-`src/shared/mcp.ts` defines the names; `src/main/mcpTools.ts` defines arguments and results. Acting tools name
+`src/shared/mcp.ts` defines the names; `src/main/mcpTools.ts` defines arguments and result encoding, and
+`src/main/mcpActionResult.ts` defines action results. Acting tools name
 the window and repository, plus the current step, turn or todo where applicable. Unknown tools and malformed
 arguments fail before reaching an operation.
 
@@ -52,6 +53,9 @@ have run, so the caller should read state again. A build mismatch is app unreach
 The MCP and UI paths share the underlying operations. They do not act through the controller. Starting and
 approving validate required typed inputs and preserve pickup/branch-conflict/epic-preview dialogs. Changing
 selection or starting after a run has begun is refused.
+
+Todo mutation results use the same todo representation as `read_state`: identity, text and status,
+in list order. Storage ordering keys, timestamps and source metadata are not part of that representation.
 
 At most one todo send is accepted per calling turn; a second names the already accepted todo and is refused.
 Acceptance marks the todo in progress but means accepted for delivery, not submitted. Delivery uses live
@@ -105,6 +109,11 @@ submission time, including prompts with no tool calls. Transcript origin may arr
 recording can therefore occur later when it can be classified. A crash or forced kill before that record is
 written can lose it; this is an accepted best-effort limit. Reaching done keeps the record open; Terminate
 finalizes it.
+
+A confirmed human message queued into an existing turn is recorded separately with its own text and
+submission time, even without a new prompt hook. Later calls in a human turn reference the latest confirmed
+human message. This audit association does not change the turn's origin: a human message joining an
+engine-started turn cannot authorize that turn's guarded actions. App-injected messages are excluded.
 
 `src/shared/audit.ts` is the shared serialized vocabulary:
 

@@ -20,12 +20,9 @@ function disposeOnce(transport: Transport): Promise<void> {
   disposed.set(transport, done);
   return done;
 }
-/** An MCP call the app acknowledges slowly under load is never reported as "app unreachable" in an e2e: only a launch
- *  that sets `APP_MCP_ACK_TIMEOUT_MS` to a value other than the shell's (the timeout's own tests) gets a reachable one. */
+// Under host load, an acknowledgement deadline can misclassify a reachable app; only deadline tests use a reachable timeout.
 const MCP_ACK_OUT_OF_REACH_MS = String(60 * 60 * 1000);
 
-/** Fails the closing test when it wrote the worker-shared Claude Code config (by `claude mcp` or directly), and
- *  restores what it changed, so the worker's later tests never run its hooks or servers. */
 function sharedConfigWriteCheck(env: Record<string, string>): () => void {
   const paths = claudeConfigPaths(env);
   if (!isSharedClaudeConfig(paths.root)) return () => {};
@@ -47,7 +44,6 @@ export function controllerOf(app: ElectronApplication) {
   if (!transport) throw new Error('This app was not launched through registeredElectron');
   const terminal = () => transport.terminals().find(item => item.status !== 'disconnected');
   return {
-    /** Stops the controller this app registered with, so the app runs on with none connected. */
     disconnect: (): Promise<void> => disposeOnce(transport),
     loopMessage: (): ControllerLoopMessage | null | undefined => terminal()?.work?.loopMessage,
     dismissLoopMessage(messageId: string) {
@@ -74,20 +70,15 @@ export const electron = {
     for (const [key, value] of Object.entries({ ...process.env, ...withSetupCheckOff(options.env) })) {
       if (value !== undefined) env[key] = value;
     }
-    // A launch that spreads process.env carries the shell's value, which is not the test's own.
     const ownAckTimeout = options.env?.[APP_MCP_ACK_TIMEOUT_ENV];
     if (ownAckTimeout === undefined || ownAckTimeout === process.env[APP_MCP_ACK_TIMEOUT_ENV]) env[APP_MCP_ACK_TIMEOUT_ENV] = MCP_ACK_OUT_OF_REACH_MS;
     const isolatedHome = !env.APP_HOME_DIR && env.HOME === process.env.HOME
       ? mkdtempSync(join(tmpdir(), 'at-launch-')) : undefined;
     if (isolatedHome) env.APP_HOME_DIR = isolatedHome;
-    // A launch that chose no Claude Code config of its own never reads or installs into the developer's: neither the
-    // one their real HOME implies nor one their shell exported.
-    // An empty or unset value falls back to HOME, so it is decided on HOME, not on whether it differs from the shell's.
     const ownClaudeConfig = env.CLAUDE_CONFIG_DIR?.trim() || undefined;
     const inheritedClaudeConfig = ownClaudeConfig === undefined
       ? env.HOME === process.env.HOME
       : ownClaudeConfig === process.env.CLAUDE_CONFIG_DIR?.trim();
-    // The root itself is left absent, as on a machine where Claude Code has never written its configuration.
     const isolatedClaudeConfig = inheritedClaudeConfig ? mkdtempSync(join(tmpdir(), 'at-launch-claude-')) : undefined;
     if (isolatedClaudeConfig) env.CLAUDE_CONFIG_DIR = join(isolatedClaudeConfig, 'claude-config');
     const checkSharedConfig = sharedConfigWriteCheck(env);

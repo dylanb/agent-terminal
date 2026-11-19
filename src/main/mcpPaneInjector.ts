@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { McpTmux } from '../shared/mcpBridge';
-import type { Injector } from './inject';
 import { runTmux } from './mcpTmuxCommand';
-import { createRecipientInjector } from './recipientInjector';
 
-export function createPaneInjector(tmux: McpTmux, pane: string, canReceive: () => boolean, onInject: () => void, onDrop: (reason: string) => void): Injector {
+export function createPaneTransport(tmux: McpTmux, pane: string): { paste(text: string): void; write(text: string): void } {
   const transfer = (data: string, paste: boolean): void => {
     if (!/^%\d+$/.test(pane)) throw new Error('the destination pane is invalid.');
     const buffer = `agent-terminal-${randomUUID()}`;
@@ -18,5 +16,5 @@ export function createPaneInjector(tmux: McpTmux, pane: string, canReceive: () =
       throw error;
     }
   };
-  return createRecipientInjector({ canReceive, paste: data => transfer(data, true), write: data => transfer(data, false), onInject, onDrop });
+  return { paste: data => transfer(data, true), write: data => transfer(data, false) };
 }

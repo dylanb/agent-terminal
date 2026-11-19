@@ -1,5 +1,3 @@
-// The §27 gate-decision executor's ports as fakes that record what each one was asked to do, for tests that drive
-// `runAppApprove` or `runAppGateDecision` directly.
 
 import type { AppGateDecisionDeps } from '../../src/main/appGateDecision';
 import type { AppLoopBootstrap, AppLoopRunState } from '../../src/main/appLoopState';

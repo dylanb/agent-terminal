@@ -78,7 +78,7 @@ it('includes the original prompt as context when a later call occurs inside a UI
   const root = temp(); const repo = temp();
   const now = new Date('2026-11-09T12:00:00Z');
   const audit = createAuditRecorder({ root, now: () => now, flowName: () => 'work' });
-  const prompt = { type: 'mcp.prompt' as const, id: 'outside-prompt', text: 'original request', ts: '2026-11-09T11:59:00Z' };
+  const prompt = { id: 'outside-prompt', turnId: 'outside-prompt', text: 'original request', occurredAt: '2026-11-09T11:59:00Z' };
   audit.beginPrompt(repo, prompt);
   audit.recordTransition(repo, 'start', before, after);
   audit.recordPrompt(prompt);
@@ -86,7 +86,7 @@ it('includes the original prompt as context when a later call occurs inside a UI
   expect(parseAuditStream(readFileSync(file, 'utf8')).events.map(e => e.type)).toEqual(['flow.started']);
   await audit.recordMcpCall(repo, 'read_state', 'human', prompt, async () => ({ kind: 'success' }));
   expect(parseAuditStream(readFileSync(file, 'utf8')).events).toMatchObject([
-    { type: 'flow.started' }, prompt, { type: 'mcp.call', mcp: { promptId: prompt.id, outcome: 'success' } },
+    { type: 'flow.started' }, { type: 'mcp.prompt', id: prompt.id, text: prompt.text, ts: prompt.occurredAt }, { type: 'mcp.call', mcp: { promptId: prompt.id, outcome: 'success' } },
   ]);
 });
 
@@ -95,7 +95,7 @@ it('retries a buffered original prompt after audit storage recovers within the s
   const root = temp(); const repo = temp();
   const now = new Date('2026-11-09T12:00:00Z');
   const audit = createAuditRecorder({ root, now: () => now, flowName: () => 'work', log: () => {} });
-  const prompt = { type: 'mcp.prompt' as const, id: 'recover-prompt', text: 'original request', ts: now.toISOString() };
+  const prompt = { id: 'recover-prompt', turnId: 'recover-prompt', text: 'original request', occurredAt: now.toISOString() };
   const file = auditFilePath(root, repo, 'work', now);
   audit.beginPrompt(repo, prompt);
   await expect(audit.recordMcpCall(repo, 'start', 'human', prompt, async () => {
@@ -108,7 +108,7 @@ it('retries a buffered original prompt after audit storage recovers within the s
   renameSync(`${file}.saved`, file);
   await audit.recordMcpCall(repo, 'read_state', 'human', prompt, async () => ({ kind: 'success' }));
   const events = parseAuditStream(readFileSync(file, 'utf8')).events;
-  expect(events.filter(e => e.type === 'mcp.prompt')).toEqual([prompt]);
+  expect(events.filter(e => e.type === 'mcp.prompt')).toEqual([{ type: 'mcp.prompt', id: prompt.id, text: prompt.text, ts: prompt.occurredAt }]);
   expect(events.at(-1)).toMatchObject({ type: 'mcp.call', mcp: { promptId: prompt.id } });
 });
 
@@ -119,7 +119,7 @@ it('finishes asynchronous prompt discovery in its original run across hook clean
   const audit = createAuditRecorder({ root, now: () => now, flowName: () => 'work' });
   audit.recordTransition(repo, 'start', before, after);
   const original = auditFilePath(root, repo, 'work', now);
-  const prompt = { type: 'mcp.prompt' as const, id: 'pending-prompt', text: 'original request', ts: now.toISOString() };
+  const prompt = { id: 'pending-prompt', turnId: 'pending-prompt', text: 'original request', occurredAt: now.toISOString() };
   audit.beginPrompt(repo, prompt);
   let resolve!: (prompts: typeof prompt[]) => void;
   const discovery = new Promise<typeof prompt[]>(done => { resolve = done; });
@@ -132,7 +132,7 @@ it('finishes asynchronous prompt discovery in its original run across hook clean
   resolve([prompt]);
   await recording;
   expect(parseAuditStream(readFileSync(original, 'utf8')).events).toEqual([
-    expect.objectContaining({ type: 'flow.started' }), prompt, expect.objectContaining({ type: 'flow.terminated' }),
+    expect.objectContaining({ type: 'flow.started' }), { type: 'mcp.prompt', id: prompt.id, text: prompt.text, ts: prompt.occurredAt }, expect.objectContaining({ type: 'flow.terminated' }),
   ]);
   expect(parseAuditStream(readFileSync(replacement, 'utf8')).events.map(e => e.type)).toEqual(['flow.started']);
 });
@@ -142,7 +142,7 @@ it('finishes the original audit run when pending discovery rejects', async () =>
   const now = new Date('2026-11-09T12:00:00Z');
   const audit = createAuditRecorder({ root, now: () => now, flowName: () => 'work', log: () => {} });
   audit.recordTransition(repo, 'start', before, after);
-  audit.beginPrompt(repo, { type: 'mcp.prompt', id: 'failed-prompt', text: 'request', ts: now.toISOString() });
+  audit.beginPrompt(repo, { id: 'failed-prompt', turnId: 'failed-prompt', text: 'request', occurredAt: now.toISOString() });
   let reject!: (error: Error) => void;
   const recording = audit.recordPrompts(new Promise((_resolve, fail) => { reject = fail; }));
   audit.recordTerminate(repo);

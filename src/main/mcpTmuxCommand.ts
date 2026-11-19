@@ -12,7 +12,7 @@ export function runTmux(tmux: McpTmux, args: string[], input?: string): string {
   const options: ExecFileSyncOptionsWithStringEncoding = {
     encoding: 'utf8', timeout: 1000, input,
     env: { ...process.env, PATH: directories.join(path.delimiter) },
-    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'],
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   };
   return execFileSync(executable, ['-S', tmux.socket, ...args], options);
 }

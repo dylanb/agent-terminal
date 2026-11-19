@@ -1,5 +1,3 @@
-// Claude Code tools VIEW organism (UI-STANDARDS): the Settings section around the install and remove actions. Built
-// from the host document so it stays relocatable; signals out only through the injected contract.
 
 import { createMcpInstallAction, type McpInstall, type McpInstallDeps } from './mcpInstallAction';
 

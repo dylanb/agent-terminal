@@ -1,5 +1,3 @@
-// Claude Code integration install molecule (UI-STANDARDS): the Install and Remove actions and their announcements in
-// the Settings view. Built from the host document; signals out only through the injected contract.
 
 import type { ClaudeCodeIntegrationResult } from '../../shared/ipc';
 import { createPressGroup } from './pressable';

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
-import { createMcpActions } from '../../src/main/mcpActions';
+import { mcpActions as createMcpActions, testGateOperations } from '../helpers/mcpActions';
 import { toolResult } from '../../src/main/mcpTools';
 import type { McpWindowState } from '../../src/shared/mcpWindowState';
 
@@ -15,12 +15,11 @@ it.each(['start', 'step', 'loop'] as const)('%s refuses undeclared input keys wi
   const read = (): McpWindowState => ({ window: { id: 'w' }, repo: { key: '/repo' }, flow: { selected: null, steps: flow.state().steps, step: flow.state().stepName, status: flow.state().status, runStarted: mode !== 'start' }, selectionUnusable: false,
     gate: mode === 'start' ? null : { step: 'before', turn: mode === 'loop' ? 'consolidate' : null, options: ['approve'], reasons: [], engineDeciding: false },
     stalledTurn: null, loopMessage: null, roundReport: null, todos: [], startable: [], startableError: null, terminateTodoCount: 0 });
-  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => read(), readGateState: read,
-    gate: { autoGate: { humanDecision: () => () => {} }, pickupHold: () => null, bindingOf: () => mode === 'loop' ? 'app' : null,
-      approve: async (_repo, _step, _turn, inputs) => { flow.advance(inputs); return { kind: 'advanced', effectFailures: [] }; } },
-    entryInputs: (_repo, action) => flow.entryInputs(action),
-    start: (_repo, inputs) => { flow.start({ startedAt: 1, inputs }); return { kind: 'started' }; },
-    advance: (_repo, _step, inputs) => { flow.advance(inputs); return { kind: 'advanced' }; },
+  const actions = createMcpActions({ windowId: 'w', originOf: async () => 'human', readState: async () => read(), readActionState: read,
+    gate: testGateOperations({ pickupHold: () => null, approve: async (_target, inputs) => { flow.advance(inputs); return { kind: 'advanced', effectFailures: [] }; } }),
+    validateEntryInputs: (_repo, action, values) => flow.validateEntryInputs(action, values),
+    start: (_repo, inputs) => { flow.start({ startedAt: 1, inputs }); return { kind: 'taken', message: 'Taken.' }; },
+    advance: (_repo, _step, inputs) => { flow.advance(inputs); return { kind: 'taken', message: 'Taken.' }; },
   });
   const call = async (inputs: Record<string, string>) => toolResult({ kind: 'answered', value: await actions.call({ tool: mode === 'start' ? 'start' : 'approve', args: { window: 'w', repo: '/repo', ...(mode === 'start' ? {} : { step: 'before', ...(mode === 'loop' ? { turn: 'consolidate' } : {}) }), inputs } }, { session: 1 }) });
   const before = { state: flow.state(), entered: structuredClone(entered) };

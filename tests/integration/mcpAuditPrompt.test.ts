@@ -17,12 +17,12 @@ it.each(['process loss', 'later injection'])('records historical human prompt ev
   const turns = createSessionTurns({ launchOf: async () => launch });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'human request'));
-  expect(await turns.origin(1001)).toBe('undetermined');
+  expect(await turns.observe(1001, observation => observation.origin)).toBe('undetermined');
   appendFileSync(session.transcriptPath, transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'human request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'typed' } })]));
   if (interruption === 'process loss') launch = null;
   else turns.injected('later engine request', { submitted: true });
-  expect(await turns.origin(1001)).toBe('undetermined');
-  expect(await turns.discoverHumanPrompts()).toMatchObject([{ type: 'mcp.prompt', text: 'human request' }]);
+  expect(await turns.observe(1001, observation => observation.origin)).toBe('undetermined');
+  expect(await turns.discoverHumanPrompts()).toMatchObject([{ text: 'human request' }]);
 });
 
 
@@ -32,11 +32,11 @@ it('discovers an original human prompt asynchronously and retains it across late
   const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }) });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'human request'));
-  await turns.origin(1001);
+  await turns.observe(1001, observation => observation.origin);
   appendFileSync(session.transcriptPath, transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'human request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'typed' } })]));
   const pending = turns.discoverHumanPrompts();
   const concurrent = turns.discoverHumanPrompts();
-  expect(await pending).toMatchObject([{ type: 'mcp.prompt', text: 'human request' }]);
+  expect(await pending).toMatchObject([{ text: 'human request' }]);
   expect(await concurrent).toEqual(await pending);
   appendFileSync(session.transcriptPath, transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-2', uuid: 'entry-2', text: 'later request', timestamp: '2026-11-09T12:01:00Z', source: { kind: 'typed' } })]));
   expect(await turns.discoverHumanPrompts()).toEqual(await pending);
@@ -49,7 +49,7 @@ it('retains a definitive generated origin during later audit observation', async
   const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }) });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'scheduled request'));
-  await turns.origin(1001);
+  await turns.observe(1001, observation => observation.origin);
   appendFileSync(session.transcriptPath, transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'scheduled request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'scheduled' } })]));
   expect(await turns.discoverHumanPrompts()).toEqual([]);
   expect(await turns.discoverHumanPrompts()).toEqual([]);
@@ -62,12 +62,12 @@ it('keeps asynchronous discovery best-effort when the transcript cannot be read'
   const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }) });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'human request'));
-  await turns.origin(1001);
+  await turns.observe(1001, observation => observation.origin);
   mkdirSync(session.transcriptPath);
   expect(await turns.discoverHumanPrompts()).toEqual([]);
   rmSync(session.transcriptPath, { recursive: true });
   appendFileSync(session.transcriptPath, transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'human request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'typed' } })]));
-  expect(await turns.discoverHumanPrompts()).toMatchObject([{ type: 'mcp.prompt', text: 'human request' }]);
+  expect(await turns.discoverHumanPrompts()).toMatchObject([{ text: 'human request' }]);
 });
 
 
@@ -77,7 +77,7 @@ it('rejects a non-regular transcript without consuming its prompt bytes', async 
   const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }) });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'human request'));
-  await turns.origin(1001);
+  await turns.observe(1001, observation => observation.origin);
   execFileSync('mkfifo', [session.transcriptPath]);
   const bytes = transcriptText([transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'human request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'typed' } })]);
   const writer = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], process.argv[2])', session.transcriptPath, bytes], { stdio: 'ignore' });
@@ -93,11 +93,21 @@ it('discovers an earlier human prompt for the first time after a newer transcrip
   const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }) });
   turns.hook(1001, hookInput.sessionStart(session, 'startup'));
   turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt-1', 'original human request'));
-  await turns.origin(1001);
+  await turns.observe(1001, observation => observation.origin);
   appendFileSync(session.transcriptPath, transcriptText([
     transcriptUserEntry({ ...session, promptId: 'prompt-1', uuid: 'entry-1', text: 'original human request', timestamp: '2026-11-09T12:00:00Z', source: { kind: 'typed' } }),
     transcriptUserEntry({ ...session, promptId: 'prompt-2', uuid: 'entry-2', text: 'newer request', timestamp: '2026-11-09T12:01:00Z', source: { kind: 'typed' } }),
   ]));
-  expect(await turns.origin(1001)).toBe('undetermined');
-  expect(await turns.discoverHumanPrompts()).toMatchObject([{ type: 'mcp.prompt', text: 'original human request' }]);
+  expect(await turns.observe(1001, observation => observation.origin)).toBe('undetermined');
+  expect(await turns.discoverHumanPrompts()).toMatchObject([{ text: 'original human request' }]);
+});
+
+it('exposes a domain prompt observation independent of the audit event format', async () => {
+  const turns = createSessionTurns({ launchOf: async () => ({ print: false, launchPrompt: false }), observeTranscript: async () => ({ origin: 'human', version: '1' }) });
+  const session = { sessionId: 'domain', transcriptPath: '/transcript', cwd: '/repo' };
+  turns.hook(1001, hookInput.sessionStart(session, 'startup'));
+  turns.hook(1001, hookInput.userPromptSubmit(session, 'prompt', 'human request'));
+  const observation = await turns.observe(1001, value => value);
+  expect(observation).toEqual({ origin: 'human', prompt: { id: expect.any(String), turnId: expect.any(String), text: 'human request', occurredAt: expect.any(String) } });
+  expect(await turns.discoverHumanPrompts()).toEqual([observation.prompt]);
 });

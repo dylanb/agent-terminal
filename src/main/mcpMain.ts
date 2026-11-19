@@ -1,4 +1,3 @@
-// The agent-terminal MCP server and its Claude Code hooks, run by the installed launcher in plain-Node mode.
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { MCP_HOOK_ARG, MCP_HOOK_REPORT, MCP_WINDOW_ENV, mcpAckTimeoutMs } from '../shared/mcp';
 import { isMcpTmux, type AckTimers } from '../shared/mcpBridge';
@@ -25,8 +24,6 @@ const caller = () => ({
   ...(isMcpTmux(tmux) ? { tmux } : {}),
 });
 
-/** Hands the window Claude Code's hook input. Claude Code waits on the hook, so the window, which answers a report
- *  as soon as it reads it, gets the ack timeout for the whole exchange; the hook always exits 0 and prints nothing. */
 async function reportHook(): Promise<void> {
   process.stdin.on('error', () => {});
   process.stdin.setEncoding('utf8');

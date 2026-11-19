@@ -18,8 +18,6 @@ import { readGateRunState, writeGateRunState } from '../../src/main/gateRunState
 import { gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditGateEntries, seedTrustedFlow } from './autoGateHarness';
 
-// The Claude Code integration (#322, slice 1): the operator installs it from Settings, and every Claude Code session
-// in the window — typed or engine-driven — lists the agent-terminal tools and reads its own window's state.
 
 const SERVER = 'agent-terminal';
 const SLICE_TOOLS = ['approve', 'capture_report', 'choose_flow', 'dismiss_loop_message', 'polish', 'read_state', 'redo', 'request_changes', 'retry', 'start', 'terminate', 'todo_complete', 'todo_create', 'todo_delete', 'todo_edit', 'todo_reorder', 'todo_send'];
@@ -55,8 +53,6 @@ interface Machine {
   claude: SeededFakeClaude;
 }
 
-/** A temp home, a separate temp app home, a Claude Code config of the test's own holding the operator's own entries, a repository with a
- *  `.gitignore`, and the fake `claude` first on PATH. */
 function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; reviews?: ('full' | 'needs-human')[] }; gitignore?: boolean; hold?: string } = {}): Machine {
   const home = temp('agent-term-e2e-mcp-home-');
   const appHome = temp('agent-term-e2e-mcp-app-home-');
@@ -111,7 +107,6 @@ async function inSettings(name: 'Install' | 'Remove', announced: RegExp): Promis
   await page.locator('[data-viewbtn="1"]').click();
 }
 
-/** The sessions the fake ran, in order, each with the records it logged. */
 function sessions(m: Machine): FakeClaudeRecord[][] {
   const byPid = new Map<number, FakeClaudeRecord[]>();
   for (const r of readFakeClaudeLog(m.claude.logFile)) {
@@ -141,7 +136,6 @@ const ourHooks = (records: FakeClaudeRecord[] | undefined): Extract<FakeClaudeRe
   (records ?? []).filter((r): r is Extract<FakeClaudeRecord, { event: 'hook' }> => r.event === 'hook' && r.command !== 'true');
 const configFiles = (m: Machine) => ({ state: readJson(join(m.config, '.claude.json')), settings: readJson(join(m.config, 'settings.json')) });
 const configBytes = (m: Machine) => ({ state: readFileSync(join(m.config, '.claude.json'), 'utf8'), settings: readFileSync(join(m.config, 'settings.json'), 'utf8') });
-/** The servers Claude Code registered, one entry per successful `claude mcp add-json`. */
 const registrations = (m: Machine): number => readFakeClaudeLog(m.claude.logFile).filter((r) => r.event === 'cli' && r.exit === 0 && r.argv[0] === 'mcp' && r.argv[1] === 'add-json').length;
 
 test('installing from Settings gives a Claude Code session in the window the tools, changing only its own configuration entries', { tag: '@ownapp' }, async () => {
@@ -220,8 +214,6 @@ test("inside the window the installed hooks run the window's build and print not
   expect.soft({ ourHooksRan: hooks.length > 0, noisyHooks: hooks.filter((h) => h.exit !== 0 || h.stdout !== '' || h.stderr !== '') }).toEqual({ ourHooksRan: true, noisyHooks: [] });
 });
 
-/** Copies the build file by file into writable directories of its own, so the copy can be removed afterwards. It
- *  lives under the gitignored `out/`, a tmpfs under the Podman harness, so an interrupted run leaves no copy in the checkout. */
 function copyTree(from: string, to: string, skip: (name: string) => boolean = () => false): void {
   mkdirSync(to, { recursive: true });
   for (const entry of readdirSync(from, { withFileTypes: true })) {
@@ -347,8 +339,6 @@ test('a failed install from Settings shows its reason and changes no configurati
     .toEqual({ alert: expect.stringContaining(settings), status: expect.not.stringMatching(/installed/i), files: before });
 });
 
-/** A repository whose flow is a §27 plan loop with a human gate and no pull request yet, then a manual step, with its
- *  bootstrap done. */
 function seedGateFlow(repo: string): void {
   mkdirSync(join(repo, '.agent-terminal', 'loop'), { recursive: true });
   writeFileSync(
@@ -363,8 +353,6 @@ function seedGateFlow(repo: string): void {
   writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/plan-loop/issue-176\n');
 }
 
-/** The fixture's own plan loop: no pickup, so an approve with no pull request posts its notice, and a work prompt that
- *  makes the engine's turn read the window, then make `calls`. */
 function ownPlanLoop(config: string, calls: string[] = []): void {
   const dir = join(config, 'loops-v2', 'plan-loop');
   const defPath = join(dir, 'plan-loop.yaml');
@@ -406,7 +394,6 @@ test("an engine-driven session lists the tools, reads its window in the engine's
   await expect.poll(() => sessions(m).length).toBe(1);
   const session = (): FakeClaudeRecord[] | undefined => sessions(m)[0];
   const stops = (): number => (session() ?? []).filter((r) => r.event === 'stop').length;
-  /** A typed `read_state` turn in the window's session, and what it returned. */
   const typedRead = async (): Promise<ReadState | undefined> => {
     const turnsBefore = stops();
     const callsBefore = readCalls(session()).length;
@@ -518,7 +505,6 @@ test("an engine-driven session lists the tools, reads its window in the engine's
   });
 });
 
-/** A typed `read_state` turn in the window's one session, and what it returned. */
 async function readInSession(m: Machine): Promise<ReadState | undefined> {
   const session = (): FakeClaudeRecord[] | undefined => sessions(m)[0];
   const stops = (): number => (session() ?? []).filter((r) => r.event === 'stop').length;
@@ -596,14 +582,12 @@ test('a read before Start names the flow the picker has selected, among the flow
   expect.soft({ selected: state?.flow?.selected, startable: state?.startable }).toEqual({ selected: 'picker-other', startable: pickerEntries });
 });
 
-// Approve through MCP and the human-started-turn guard (#322, slice 2).
 
 type ApproveRecord = Extract<FakeClaudeRecord, { event: 'call' | 'call-unsent' | 'call-lost' }>;
 const approveRecords = (records: FakeClaudeRecord[] | undefined): ApproveRecord[] =>
   (records ?? []).filter((r): r is ApproveRecord => (r.event === 'call' || r.event === 'call-unsent' || r.event === 'call-lost') && r.tool === 'approve');
 const stopCount = (records: FakeClaudeRecord[] | undefined): number => (records ?? []).filter((r) => r.event === 'stop').length;
 
-/** The ticket's refusal reasons, each as the wording its message carries. */
 const REFUSAL_WORDING = {
   'not this window': /not this session.s window/i,
   'origin undetermined': /turn origin could not be determined/i,
@@ -612,7 +596,6 @@ const REFUSAL_WORDING = {
   'not valid': /not valid in the current state/i,
 } as const;
 
-/** `taken` for a success, else the one refusal reason the result names. */
 function outcomeOf(record: ApproveRecord | undefined): string {
   if (record === undefined) return 'no approve call';
   if (record.event !== 'call') return `not answered: ${record.reason}`;
@@ -631,10 +614,8 @@ const approveCall = (target: { window?: string; repo?: string; step: string; tur
 };
 const AT_THE_GATE = { step: '$read_state.gate.step', turn: '$read_state.gate.turn' };
 const NO_GATE = { step: 'plan', turn: 'work' };
-/** A todo's approve starts with its repository, so the terminal shows when the Insert has landed. */
 const TODO_MARK = 'mcp approve {"repo"';
 
-/** Inserts `text` as a todo from the todo tab, as the operator does, then submits it with Enter. */
 async function insertTodoAndSubmit(text: string): Promise<void> {
   const appEl = page.locator('#app');
   if (!(await page.locator('#tab-todo').isVisible())) await page.locator('#qs').click();
@@ -654,9 +635,6 @@ async function pasteAndSubmit(text: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
-/** Submits `text` as one prompt with `submit` in the window's interactive session, the `index`th session the fake
- *  ran, and returns the outcome of the last approve that prompt's own turn made. The turn is found by its prompt, so
- *  another turn ending meanwhile (an engine prompt, a gate question) is never taken for it. */
 async function approveTurn(m: Machine, submit: (text: string) => Promise<void>, text: string, index = 0): Promise<string> {
   const records = (): FakeClaudeRecord[] => sessions(m)[index] ?? [];
   const prompts = (): Extract<FakeClaudeRecord, { event: 'prompt' }>[] => records().filter((r): r is Extract<FakeClaudeRecord, { event: 'prompt' }> => r.event === 'prompt');
@@ -1031,4 +1009,18 @@ test('MCP typed entry inputs retain the UI input audit when starting and advanci
   expect.soft(events()).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'input.resolved', name: 'summary', value: 'Ready for review' }),
   ]));
+});
+
+test('closing the terminal releases its MCP bridge while Electron remains alive', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  await launch(m);
+  const directory = windowBridgeDir(m.appHome);
+  expect(readdirSync(directory)).toHaveLength(1);
+  await app!.evaluate(({ BrowserWindow }) => {
+    const terminal = BrowserWindow.getAllWindows()[0];
+    new BrowserWindow({ show: false });
+    terminal.close();
+  });
+  await expect.poll(() => readdirSync(directory)).toEqual([]);
+  expect(await app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
 });

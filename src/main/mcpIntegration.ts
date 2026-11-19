@@ -4,8 +4,6 @@ import { errMsg } from './errno';
 import { CLAUDE_NOT_FOUND, findClaude, installMcpIntegration, removeMcpIntegration } from './mcpInstall';
 import { mcpLaunch, refreshMcpLauncher } from './mcpLauncher';
 
-/** The window's Install and Remove actions. Install rewrites the launcher for the running build first; Remove only
- *  needs to know where it is, so a launcher that can no longer be written never keeps the entries in place. */
 export async function changeClaudeCodeIntegration(
   change: 'install' | 'remove',
   ctx: { appHome: string; invocation: LaunchInvocation; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },

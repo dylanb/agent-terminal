@@ -1,7 +1,4 @@
-// A stand-in for Claude Code 2.1.319, run as `claude` (node strips the types) and imported by tests for the shapes it
-// writes. It imports nothing from src/: every shape here was read off real Claude Code 2.1.319, never off the app's
-// readers. It speaks MCP over stdio as Claude Code does, runs the user's hooks with Claude Code's hook input, and
-// writes Claude-shaped transcript entries. A prompt's `mcp <tool> <json>` lines are its tool calls.
+// Fixture protocol shapes were observed in Claude Code 2.1.319 independently of the application readers.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -10,9 +7,6 @@ import { dirname, join, relative, isAbsolute } from 'node:path';
 
 export const FAKE_CLAUDE_VERSION = '2.1.319';
 export const FAKE_CLAUDE_READY = 'fake-claude: ready';
-/** Marks a Claude Code config dir shared by every test of a worker: the fake's `mcp add-json` and `remove` refuse to
- *  write one, so an install into it fails its test instead of leaking into the worker's later tests. It holds the
- *  dir's own path, so a test's private copy (which inherits the file) is not mistaken for the shared dir. */
 export const SHARED_CONFIG_MARKER = '.agent-terminal-e2e-shared-config';
 
 export function isSharedClaudeConfig(root: string): boolean {
@@ -24,7 +18,6 @@ export function isSharedClaudeConfig(root: string): boolean {
 }
 const HOLD_CAP_MS = 30_000;
 
-/** Where Claude Code keeps its user configuration: with CLAUDE_CONFIG_DIR set, its state file moves inside it. */
 export interface ClaudeConfigPaths {
   root: string;
   state: string;
@@ -38,9 +31,7 @@ export function claudeConfigPaths(env: NodeJS.ProcessEnv): ClaudeConfigPaths {
   return { root: join(home, '.claude'), state: env.FAKE_CLAUDE_STATE_FILE ?? join(home, '.claude.json'), settings: join(home, '.claude', 'settings.json') };
 }
 
-// ---- transcript entries ----
 
-/** How a prompt reached the session, as the transcript records it. */
 export type PromptSource =
   | { kind: 'typed' }
   | { kind: 'queued' }
@@ -68,7 +59,6 @@ const SOURCE_FIELDS: { [K in PromptSource['kind']]: (source: Extract<PromptSourc
   peer: (s) => ({ origin: { kind: 'peer', name: s.name, senderTaskId: s.senderTaskId }, promptSource: 'system', turnOrigin: 'peer' }),
 };
 
-/** One user entry of a session transcript, as Claude Code 2.1.319 writes it. */
 export function transcriptUserEntry(p: TranscriptPrompt): Record<string, unknown> {
   const source = (SOURCE_FIELDS[p.source.kind] as (s: PromptSource) => Record<string, unknown>)(p.source);
   return {
@@ -89,15 +79,12 @@ export function transcriptUserEntry(p: TranscriptPrompt): Record<string, unknown
   };
 }
 
-/** A transcript's text: one JSON entry per line. */
 export const transcriptText = (entries: Record<string, unknown>[]): string => entries.map((e) => `${JSON.stringify(e)}\n`).join('');
 
-/** Claude Code's transcript file for a session started in `cwd`. */
 export function transcriptPath(config: ClaudeConfigPaths, cwd: string, sessionId: string): string {
   return join(config.root, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${sessionId}.jsonl`);
 }
 
-// ---- hook input ----
 
 export type HookEvent = 'SessionStart' | 'UserPromptSubmit' | 'Stop' | 'SessionEnd';
 export type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact';
@@ -117,7 +104,6 @@ const hookCommon = (s: HookSession, event: HookEvent) => ({
   hook_event_name: event,
 });
 
-/** The JSON Claude Code writes to a hook command's stdin, per event. */
 export const hookInput = {
   sessionStart: (s: HookSession, source: SessionStartSource) => ({ ...hookCommon(s, 'SessionStart'), source }),
   userPromptSubmit: (s: HookSession, promptId: string, prompt: string) => ({ ...hookCommon(s, 'UserPromptSubmit'), prompt_id: promptId, prompt }),
@@ -125,7 +111,6 @@ export const hookInput = {
   sessionEnd: (s: HookSession, reason: SessionEndReason) => ({ ...hookCommon(s, 'SessionEnd'), reason }),
 };
 
-// ---- the log a test reads ----
 
 export interface McpToolInfo {
   name: string;
@@ -139,9 +124,6 @@ export interface McpCallResult {
   structuredContent?: unknown;
 }
 
-/** One line of FAKE_CLAUDE_LOG. `error` on a call is a JSON-RPC error the server returned, never a tool's own isError
- *  result; a call the fake never sent (a bad directive, a `$` reference naming nothing, no server listing the tool, a
- *  server already gone) is `call-unsent`, and one whose server went away before answering is `call-lost`. `held` is logged once a turn's work is done and it stays open while FAKE_CLAUDE_HOLD exists. */
 export type FakeClaudeRecord =
   | { event: 'cli'; pid: number; argv: string[]; exit: number; stdout: string; stderr: string }
   | { event: 'session'; pid: number; sessionId: string; transcriptPath: string; mode: 'interactive' | 'print'; cause: SessionStartSource }
@@ -167,9 +149,7 @@ function logger(env: NodeJS.ProcessEnv): (record: Unlogged<FakeClaudeRecord>) =>
   };
 }
 
-// ---- the MCP client ----
 
-/** Every server, hook and agent process still running, killed with the session so none outlives it. */
 const liveChildren = new Set<ChildProcess>();
 
 function track(child: ChildProcess): ChildProcess {
@@ -191,14 +171,12 @@ export interface McpClient {
   readonly pid: number | undefined;
   readonly tools: McpToolInfo[];
   call(name: string, args: unknown): Promise<McpCallResult>;
-  /** Any request, for a test of what the server answers outside the tools Claude Code calls. */
   request(method: string, params?: unknown): Promise<unknown>;
   close(): void;
 }
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
-/** The server went away rather than answering: `sent` says whether the request had been written to it. */
 export class McpConnectionLost extends Error {
   readonly sent: boolean;
   constructor(message: string, sent: boolean) {
@@ -216,9 +194,7 @@ const CLIENT_INFO = {
 };
 const CLIENT_CAPABILITIES = { roots: { listChanged: true }, elicitation: { form: {}, url: {} } };
 
-/** Connect to a stdio server the way Claude Code 2.1.319 does: a `server/discover` probe (whatever it answers),
- *  then `initialize` at 2025-11-25, `notifications/initialized` and `tools/list`. Rejects when the server exits or
- *  fails before the handshake ends. Aborting `signal` kills the server, mid-handshake or later. */
+// Claude Code 2.1.319 probes server/discover before initialize, even when that probe is rejected.
 export async function connectMcpServer(
   spec: McpServerSpec,
   opts: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal; onExit?: (code: number | null, signal: string | null, stderr: string) => void },
@@ -318,7 +294,6 @@ export async function connectMcpServer(
   }
 }
 
-// ---- `claude mcp …` ----
 
 type CliOutcome = { exit: number; stdout: string; stderr: string };
 
@@ -336,8 +311,6 @@ function writeJsonObject(file: string, value: Record<string, unknown>): void {
   renameSync(tmp, file);
 }
 
-/** `claude mcp add-json|remove|get|list`, user scope only: any other scope would write the repository (`.mcp.json`)
- *  or the project entry, which nothing in agent-terminal may do, so it fails here as loudly as a bad argument. */
 function mcpCli(argv: string[], env: NodeJS.ProcessEnv): CliOutcome {
   const [sub, ...rest] = argv;
   let scope: string | undefined;
@@ -391,7 +364,6 @@ function mcpCli(argv: string[], env: NodeJS.ProcessEnv): CliOutcome {
   }
 }
 
-// ---- hooks ----
 
 type HookGroup = { matcher?: string; hooks?: { type?: string; command?: string }[] };
 
@@ -416,10 +388,7 @@ function runCommand(command: string, input: string, cwd: string, env: NodeJS.Pro
   });
 }
 
-// ---- the session ----
 
-/** A prompt's tool calls: each `mcp <tool> <json>` line, in order. A string argument `$<tool>.<path>` is replaced by
- *  that path in the latest result of `<tool>` this session got (its structuredContent, else its text as JSON). */
 export const DIRECTIVE = /^mcp\s+([A-Za-z0-9_-]+)\s*(.*)$/;
 
 function resultValue(result: McpCallResult | undefined): unknown {
@@ -471,8 +440,6 @@ function out(text: string): void {
   process.stdout.write(text.replace(/\r?\n/g, '\r\n'));
 }
 
-/** Resolves once `path` is gone, or with true after `capMs`, so a hold nobody releases fails its test on that test's
- *  own assertion. */
 function whileExists(path: string, capMs: number): Promise<boolean> {
   const until = Date.now() + capMs;
   return new Promise((done) => {
@@ -555,8 +522,6 @@ async function session(argv: string[], env: NodeJS.ProcessEnv): Promise<number> 
     }
   }
 
-  // FAKE_CLAUDE_AGENT is the scripted agent (seedFakeAgentSteps' `fake-agent`) that does each turn's work: it reads
-  // the prompt on stdin and writes to the session's own terminal, as Claude Code's own output would.
   const runAgent = (text: string): Promise<void> =>
     new Promise((resolve) => {
       const agent = env.FAKE_CLAUDE_AGENT;
@@ -573,13 +538,25 @@ async function session(argv: string[], env: NodeJS.ProcessEnv): Promise<number> 
     });
 
   const record = async (promptId: string, text: string, source: PromptSource): Promise<boolean> => {
-    const blocked = (await runHooks('UserPromptSubmit', hookInput.userPromptSubmit(current, promptId, text))).includes(2);
+    if (source.kind === 'queued' && env.FAKE_CLAUDE_QUEUED_ATTACHMENTS === '1') {
+      const uuid = id(2, ++counters.entry);
+      const timestamp = new Date().toISOString();
+      appendFileSync(current.transcriptPath, transcriptText([{
+        type: 'attachment', uuid, isSidechain: false, timestamp,
+        attachment: { type: 'queued_command', prompt: text, source_uuid: uuid, commandMode: 'prompt',
+          origin: { kind: 'human' }, humanTurn: true, timestamp },
+      }]));
+      log({ event: 'prompt', sessionId: current.sessionId, promptId, text, source: source.kind });
+      return true;
+    }
+    const reported = env.FAKE_CLAUDE_PASTE_ENVELOPE === '1' ? `\n\n<pasted_content id="973b">\n${text}\n</pasted_content id="973b">\n` : text;
+    const blocked = (await runHooks('UserPromptSubmit', hookInput.userPromptSubmit(current, promptId, reported))).includes(2);
     if (blocked) {
       log({ event: 'prompt-blocked', sessionId: current.sessionId, promptId, text });
       out('fake-claude: prompt blocked by a hook\n');
       return false;
     }
-    const entry = transcriptUserEntry({ sessionId: current.sessionId, promptId, uuid: id(2, ++counters.entry), text, cwd, timestamp: new Date().toISOString(), source });
+    const entry = transcriptUserEntry({ sessionId: current.sessionId, promptId, uuid: id(2, ++counters.entry), text: reported, cwd, timestamp: new Date().toISOString(), source });
     mkdirSync(dirname(current.transcriptPath), { recursive: true });
     appendFileSync(current.transcriptPath, transcriptText([entry]));
     log({ event: 'prompt', sessionId: current.sessionId, promptId, text, source: source.kind });
@@ -621,8 +598,7 @@ async function session(argv: string[], env: NodeJS.ProcessEnv): Promise<number> 
     await runAgent(text);
   };
 
-  // The turn whose tool calls or agent are running. A prompt typed then joins it, as in Claude Code 2.1.319: it is
-  // reported at once under the open turn's prompt_id, and its work runs in that turn, before the one Stop.
+  // Claude Code 2.1.319 reports a mid-turn prompt under the open prompt_id and emits only one Stop for the joined work.
   let open: { promptId: string; joined: string[]; recording: Promise<unknown> } | null = null;
   const join = (text: string): boolean => {
     const turnNow = open;
@@ -776,7 +752,6 @@ async function session(argv: string[], env: NodeJS.ProcessEnv): Promise<number> 
   return new Promise<number>(() => {});
 }
 
-/** The `claude` program: `--version`, `mcp …`, or a session (interactive on a terminal; `-p` or piped stdin prints). */
 export async function runFakeClaude(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (argv[0] === '--version' || argv[0] === '-v') {
     process.stdout.write(`${FAKE_CLAUDE_VERSION} (Claude Code)\n`);

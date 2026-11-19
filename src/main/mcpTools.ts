@@ -1,7 +1,6 @@
 import { MCP_TOOL_NAMES, isMcpToolName, type McpToolName } from '../shared/mcp';
 import { isWindowAnswerFailure, type WindowCallOutcome } from '../shared/mcpBridge';
 
-/** What a tool call returns to Claude Code. */
 export interface McpToolResult {
   isError: boolean;
   content: { type: 'text'; text: string }[];
@@ -31,18 +30,18 @@ const gateTarget = {
   step: target('The gate.step or stalledTurn.step returned by read_state.'),
   turn: target('The gate.turn or stalledTurn.turn returned by read_state.'),
 };
-const inputs: ArgumentSchema = { type: 'object', additionalProperties: { type: 'string' }, description: 'Required inputs for the step being entered, by input name. Already resolved inputs need no value.' };
-const action = (description: string, properties: Record<string, ArgumentSchema>, required = Object.keys(properties)): Omit<McpToolDefinition, 'name'> => ({
+const inputs = { type: 'object', additionalProperties: { type: 'string' }, description: 'Required inputs for the step being entered, by input name. Already resolved inputs need no value.' } as const satisfies ArgumentSchema;
+const action = <const P extends Record<string, ArgumentSchema>, const R extends keyof P = keyof P>(description: string, properties: P, required: R[] = Object.keys(properties) as R[]) => ({
   description: `${description} Name the target returned by read_state. Only a human-started turn may act.`,
-  inputSchema: { type: 'object', properties, required, additionalProperties: false },
+  inputSchema: { type: 'object' as const, properties, required, additionalProperties: false as const },
 });
 
-const todoAction = (description: string, properties: Record<string, ArgumentSchema>): Omit<McpToolDefinition, 'name'> => ({
-  description, inputSchema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false },
+const todoAction = <const P extends Record<string, ArgumentSchema>>(description: string, properties: P) => ({
+  description, inputSchema: { type: 'object' as const, properties, required: Object.keys(properties) as (keyof P)[], additionalProperties: false as const },
 });
 const todoTarget = { ...ownWindow, todo: target('The todo id returned by read_state.') };
 
-const TOOLS: { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> } = {
+const TOOLS = {
   todo_create: todoAction('Create a todo in any turn.', { ...ownWindow, text: target('The todo text.') }),
   todo_edit: todoAction('Edit an outstanding todo in any turn.', { ...todoTarget, text: target('The replacement text.') }),
   todo_reorder: todoAction('Reorder outstanding todos in any turn.', { ...ownWindow, todos: { type: 'array', items: { type: 'string' }, description: 'Outstanding todo ids in the desired order.' } }),
@@ -67,9 +66,8 @@ const TOOLS: { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> } = 
     ...ownWindow,
     expectedTodoCount: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'The terminateTodoCount returned by read_state; the action is refused if it changed.' },
   }),
-};
+} satisfies { readonly [N in McpToolName]: Omit<McpToolDefinition, 'name'> };
 
-/** The tools the agent-terminal MCP server lists, by name. */
 export function mcpToolNames(): string[] {
   return [...MCP_TOOL_NAMES];
 }
@@ -78,10 +76,9 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
   return MCP_TOOL_NAMES.map((name) => ({ name, ...structuredClone(TOOLS[name]) }));
 }
 
-/** Why `args` is not a valid call of `tool`, or null when it is. */
 export function invalidToolArguments(tool: string, args: unknown): string | null {
   if (!isMcpToolName(tool)) return `unknown tool ${JSON.stringify(tool)}`;
-  const { properties, required = [] } = TOOLS[tool].inputSchema;
+  const { properties, required = [] }: McpToolDefinition['inputSchema'] = TOOLS[tool].inputSchema;
   const given = args ?? {};
   if (typeof given !== 'object' || given === null || Array.isArray(given)) return `${tool} takes an object of arguments`;
   const unknown = Object.keys(given).filter((key) => !Object.hasOwn(properties, key));
@@ -116,12 +113,28 @@ export function invalidToolArguments(tool: string, args: unknown): string | null
   return null;
 }
 
+type SchemaValue<S> = S extends { type: 'string' } ? string
+  : S extends { anyOf: unknown } ? string | null
+  : S extends { type: 'integer' } ? number
+  : S extends { type: 'array' } ? string[]
+  : S extends { type: 'object' } ? Record<string, string> : never;
+type ArgumentsOf<S extends McpToolDefinition['inputSchema']> =
+  { [K in keyof S['properties'] as K extends (S extends { required: readonly (infer R)[] } ? R : never) ? K : never]: SchemaValue<S['properties'][K]> }
+  & { [K in keyof S['properties'] as K extends (S extends { required: readonly (infer R)[] } ? R : never) ? never : K]?: SchemaValue<S['properties'][K]> };
+export type McpCommand = { [N in McpToolName]: { tool: N; args: ArgumentsOf<(typeof TOOLS)[N]['inputSchema']> } }[McpToolName];
+export type CommandFor<N extends McpToolName> = Extract<McpCommand, { tool: N }>;
+
+export function parseMcpCommand(tool: string, args: unknown): { ok: true; command: McpCommand } | { ok: false; reason: string } {
+  const reason = invalidToolArguments(tool, args);
+  if (reason !== null) return { ok: false, reason };
+  return { ok: true, command: { tool, args: structuredClone(args ?? {}) } as McpCommand };
+}
+
 const text = (body: Record<string, unknown>): McpToolResult['content'] => [{ type: 'text', text: JSON.stringify(body, null, 2) }];
 
 const fieldsOf = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : { value };
 
-/** The tool result a window call's outcome becomes. */
 export function toolResult(outcome: WindowCallOutcome): McpToolResult {
   switch (outcome.kind) {
     case 'answered':

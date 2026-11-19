@@ -5,9 +5,6 @@ import { join } from 'node:path';
 import { createSessionTurns, type SessionLaunch } from '../../src/main/mcpSessionTurns';
 import { hookInput, transcriptText, transcriptUserEntry, type HookSession, type PromptSource } from '../helpers/fakeClaude';
 
-// The human-started-turn guard (#322 slice 2) across several Claude Code sessions in one window, a session's process
-// id outliving it, injections still on their way, and hook reports this build cannot read. Hook input and transcript
-// entries are Claude Code 2.1.319's own shapes, from the fake Claude Code.
 
 const INTERACTIVE: SessionLaunch = { print: false, launchPrompt: false };
 const OPERATOR = 5101;
@@ -44,7 +41,7 @@ function window(launches: Record<number, SessionLaunch> = {}) {
     turns.hook(pid, hookInput.sessionEnd(of(pid), 'prompt_input_exit'));
     current.delete(pid);
   };
-  return { turns, start, of, prompt, stop, exit, origin: (pid: number) => turns.origin(pid) };
+  return { turns, start, of, prompt, stop, exit, origin: (pid: number) => turns.observe(pid, observation => observation.origin) };
 }
 
 describe('injections in a window with more than one Claude Code session', () => {
@@ -223,13 +220,13 @@ describe('a turn that changes while its origin is being read', () => {
       appendFileSync(s.transcriptPath, transcriptText([transcriptUserEntry({ sessionId: s.sessionId, promptId, uuid: `u-${promptId}`, text, cwd: dir, timestamp: '2026-11-08T10:00:00.000Z', source: { kind: 'typed' } })]));
     };
     typed('p-1', 'a typed turn');
-    const reading = turns.origin(OPERATOR);
+    const reading = turns.observe(OPERATOR, observation => observation.origin);
     turns.hook(OPERATOR, hookInput.stop(s));
     resolveLaunch(INTERACTIVE);
     const changed = await reading;
     deferred = false;
     typed('p-2', 'the next typed turn');
-    expect({ changed, next: await turns.origin(OPERATOR) }).toEqual({ changed: 'undetermined', next: 'human' });
+    expect({ changed, next: await turns.observe(OPERATOR, observation => observation.origin) }).toEqual({ changed: 'undetermined', next: 'human' });
   });
 });
 
@@ -255,7 +252,7 @@ describe('attribution that changes during an origin lookup', () => {
     turns.hook(OPERATOR, hookInput.sessionStart(s, 'startup'));
     turns.hook(OPERATOR, hookInput.userPromptSubmit(s, 'p-race', 'a typed turn'));
     appendFileSync(s.transcriptPath, transcriptText([transcriptUserEntry({ sessionId: s.sessionId, promptId: 'p-race', uuid: 'u-race', text: 'a typed turn', cwd: dir, timestamp: '2026-11-08T10:00:00.000Z', source: { kind: 'typed' } })]));
-    const reading = turns.origin(OPERATOR);
+    const reading = turns.observe(OPERATOR, observation => observation.origin);
     if (change === 'session restarted') {
       turns.hook(OPERATOR, hookInput.sessionStart(s, 'startup'));
     } else {
@@ -276,7 +273,7 @@ describe('an injection during transcript reading', () => {
     turns.hook(OPERATOR, hookInput.sessionStart(s, 'startup'));
     turns.hook(OPERATOR, hookInput.userPromptSubmit(s, 'p-read', 'a typed turn'));
     appendFileSync(s.transcriptPath, transcriptText([transcriptUserEntry({ sessionId: s.sessionId, promptId: 'p-read', uuid: 'u-read', text: 'a typed turn', cwd: dir, timestamp: '2026-11-08T10:00:00.000Z', source: { kind: 'typed' } })]));
-    const reading = turns.origin(OPERATOR);
+    const reading = turns.observe(OPERATOR, observation => observation.origin);
     await Promise.resolve();
     turns.injected('Answer the gate question.', { submitted: true });
     if (reported) turns.hook(OPERATOR, hookInput.userPromptSubmit(s, 'p-read', 'Answer the gate question.'));

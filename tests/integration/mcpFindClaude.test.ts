@@ -23,9 +23,6 @@ function executable(dir: string, name: string, body = 'exit 0'): string {
   return file;
 }
 
-/** The user's shell as macOS's terminal starts it, interactive and login, whose startup files put `claude` at `found`, `loginPath` on PATH and, when given,
- *  export `configDir` as CLAUDE_CONFIG_DIR: it runs the command it is given in that environment, where
- *  `command -v claude` answers `found`, after printing the noise an interactive startup can print. */
 function loginShellFinding(found: string | null, loginPath: string, configDir?: string): string {
   const dir = temp();
   const bin = join(dir, 'login-bin');
