@@ -1,0 +1,21 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 32635,
+  "note": "Claude Code 2.1.319 (interactive, inside agent-terminal on macOS) between tool calls, caught while a hook it runs (bash -> bash -> jq, in a new process group of its own) was under a second old; caffeinate is its same-group helper. Captured from a process outside the shell's tree",
+  "rows": [
+    "26002 34407 26002    0       00:00 bash            ",
+    "26026 26002 26002    0       00:00 bash            ",
+    "26028 26026 26002    0       00:00 jq              ",
+    "24379 34407 34407 34407       02:06 caffeinate      ",
+    "32635 31901 32635 34407    07:22:21 zsh             ",
+    "34407 32635 34407 34407    07:22:06 2.1.319         "
+  ],
+  "expected": {
+    "waiting": null
+  }
+}

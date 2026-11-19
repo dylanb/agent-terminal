@@ -1,4 +1,5 @@
 import { syncDockedPanel } from './dockedPanelSync';
+import { stepLabel } from '../../shared/stepLabel';
 import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
@@ -8,6 +9,7 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
 import { createPickupConfirm } from './pickupConfirm';
+import { createAdoptTicketChoice } from './adoptTicketChoice';
 import { createSetupCheckDialog } from './setupCheckDialog';
 import { createSetupFlowRun } from './setupFlowRun';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
@@ -32,9 +34,10 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import type { GateDecisionOption } from '../../shared/ipc';
+import type { GateDecisionOption, HostedAgentState } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
+import { createDisplaySettings } from './displaySettings';
 import { createCliInstall } from './cliInstall';
 import { createCliInstallAction } from './cliInstallAction';
 import { createMcpInstall } from './mcpInstall';
@@ -89,12 +92,13 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onRebind: (action, chord) => keymap.setOverride(action, [chord]),
   onReset: (action) => keymap.clearOverride(action),
 });
+createDisplaySettings(document.getElementById('display-settings-view')!, { settings: window.monitor });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createMcpInstall(document.getElementById('mcp-install-view')!, {
   install: () => window.claudeCode.install(),
   remove: () => window.claudeCode.remove(),
 });
-const installExamples = createInstallExamples(document.getElementById('install-examples-view')!, {
+createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>
     window.examples.apply(previewId, replace, removeRetired),
@@ -139,7 +143,7 @@ const showError = (options: ErrorDialogOptions): void => {
 if (errorDialog) {
   window.flow.onBootstrapError((reason, repoKey, step) =>
     showError({
-      title: `Bootstrap failed — ${step}`,
+      title: `Bootstrap failed — ${stepLabel(step)}`,
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
@@ -307,15 +311,21 @@ if (flowStripHost) {
     confirm: (key, run, pr, ticket) => window.flow.confirmRunPickup(key, run, pr, ticket),
     onFocusLost: landFocus,
   });
+  const adoptTicketChoiceHost = document.getElementById('adopt-ticket-choice-modal-host');
+  if (adoptTicketChoiceHost) createAdoptTicketChoice(adoptTicketChoiceHost, {
+    onOffer: (cb) => window.flow.onAdoptTicketChoice(cb),
+    answer: (repoKey, step, choiceId, answer) => window.flow.resolveAdoptTicket(repoKey, step, choiceId, answer),
+    onFocusLost: landFocus,
+  });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     onView: (...args) => {
       for (const listener of [...viewListeners]) listener(...args);
     },
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
-    onPanelState: (loop, title, refs) => {
-      syncDockedPanel(loop, title, refs, {
-        render: (l, t, r) => loopPanel?.render(l, t, r),
+    onPanelState: (loop, title, refs, tokens) => {
+      syncDockedPanel(loop, title, refs, tokens, {
+        render: (l, t, r, k) => loopPanel?.render(l, t, r, k),
         closePanel: () => shell.closeLoopPanel(),
         syncExpanded: () => shell.syncLoopReadout(),
       });
@@ -358,22 +368,35 @@ if (flowStripHost) {
 }
 
 const setupCheckHost = document.getElementById('setup-check-host');
-if (setupCheckHost) {
-  const setupCheck = createSetupCheckDialog(setupCheckHost, {
+const setupNeededHost = document.getElementById('setup-needed');
+if (setupCheckHost && setupNeededHost) {
+  let agentState: HostedAgentState = 'absent';
+  const agentListeners = new Set<(state: HostedAgentState) => void>();
+  const agentStateIs = (state: HostedAgentState): void => {
+    if (state === agentState) return;
+    agentState = state;
+    for (const cb of [...agentListeners]) cb(state);
+  };
+  window.setup.onAgentStateChanged(agentStateIs);
+  window.setup.agentState().then(agentStateIs, (e: unknown) => {
+    console.error(`could not read whether an agent is at the prompt: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  const setupCheck = createSetupCheckDialog({ button: setupNeededHost, dialog: setupCheckHost }, {
     status: (repoKey) => window.setup.status(repoKey),
     dismiss: (dismissal) => window.setup.dismiss(dismissal),
-    openInstallExamples: () => {
-      shell.setView('4');
-      installExamples.open();
-    },
+    previewExamples: () => window.examples.preview(),
+    installExamples: (previewId, { replace, removeRetired }) => window.examples.apply(previewId, replace, removeRetired),
     runSetupFlow: createSetupFlowRun({
       setActiveFlow: (repoKey, id) => window.flow.setActiveFlow(repoKey, id),
       start: (repoKey) => flowStrip?.start(repoKey) ?? Promise.resolve(),
     }),
-    announce: (title, message) => showError({ title, message }),
+    onSetupLoopFailed: (reason) => showError({ title: 'Could not run the setup loop', message: reason }),
+    agentState: () => agentState,
+    onAgentStateChanged: (cb) => {
+      agentListeners.add(cb);
+      return () => agentListeners.delete(cb);
+    },
     onFocusLost: landFocus,
-    blockingDialogOpen: () => shell.modalIsOpen(),
-    onBlockingDialogClosed: (cb) => shell.onModalClosed(cb),
   });
   repo.onChange((info) => void setupCheck.check(info.repoKey));
 }

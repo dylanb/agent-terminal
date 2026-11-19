@@ -51,6 +51,16 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
     expect(s[0].truncated).toBe(false);
   });
 
+  it('reports whether the shell has shown its prompt, and announces the first one', async () => {
+    setup();
+    let changed = 0;
+    tracker.onChange(() => changed++);
+    expect(tracker.shellPrompted()).toBe(false);
+    shadow.write(osc('133;A') + '$ ');
+    await sleep(60);
+    expect({ prompted: tracker.shellPrompted(), changed, spans: tracker.summaries().length }).toEqual({ prompted: true, changed: 1, spans: 0 });
+  });
+
   it('clear() drops finished commands and fires a change (§15.5, tracker-internal)', async () => {
     setup();
     shadow.write(runCmd('echo hi', 'hi\r\n', 0));

@@ -1,5 +1,5 @@
 import { ipcMain, type WebContents } from 'electron';
-import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerClearRequest, type ControllerClearOutcome, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerLoopMessageDismissal, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
+import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_SORT_MODE, CONTROLLER_DEFAULT_THEME, isControllerSortMode, isTheme, SESSION_ID, type ControllerActivation, type ControllerClearRequest, type ControllerClearOutcome, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerLoopMessageDismissal, type ControllerSnapshot, type ControllerSortMode, type ControllerSortModeChoice, type ControllerSortModeRequest, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
 import type { ControllerAlwaysOnTop } from './controllerAlwaysOnTop';
@@ -48,6 +48,14 @@ export function installControllerIpc(
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID || !isTheme(payload.theme)) return;
     settings.saveTheme(payload.theme);
   });
+  ipcMain.handle(CONTROLLER_CH.getSortMode, (event, payload: ControllerSortModeRequest): ControllerSortMode => {
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_SORT_MODE;
+    return settings.sortMode();
+  });
+  ipcMain.handle(CONTROLLER_CH.setSortMode, (event, payload: ControllerSortModeChoice) => {
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID || !isControllerSortMode(payload.sortMode)) return;
+    settings.saveSortMode(payload.sortMode);
+  });
   ipcMain.handle(CONTROLLER_CH.getAlwaysOnTop, (event, payload: ControllerAlwaysOnTopRequest): boolean => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_ALWAYS_ON_TOP;
     return alwaysOnTop.current();
@@ -66,6 +74,8 @@ export function installControllerIpc(
     ipcMain.removeHandler(CONTROLLER_CH.dismissLoopMessage);
     ipcMain.removeHandler(CONTROLLER_CH.getTheme);
     ipcMain.removeHandler(CONTROLLER_CH.setTheme);
+    ipcMain.removeHandler(CONTROLLER_CH.getSortMode);
+    ipcMain.removeHandler(CONTROLLER_CH.setSortMode);
     ipcMain.removeHandler(CONTROLLER_CH.getAlwaysOnTop);
     ipcMain.removeHandler(CONTROLLER_CH.setAlwaysOnTop);
   };

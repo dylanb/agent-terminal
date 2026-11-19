@@ -2,19 +2,21 @@
 // integration tests drive the production composition rather than a copy of it.
 
 import type { FlowStateView } from '../shared/ipc';
-import type { TransitionKind } from '../shared/audit';
+import type { FlowLike, TransitionKind } from '../shared/audit';
 import { runAppApprove, type AppGateDecisionDeps, type ApproveDecider, type GateApproveOutcome } from './appGateDecision';
-import type { AuditRecorder } from './auditRecorder';
-import { type AutoGate, type AutoGateDeps, type StartRun } from './autoGate';
+import type { AuditRecorder, AuditRunStart } from './auditRecorder';
+import { type AutoGate, type AutoGateDeps, type FlowTransitionAfter, type StartRun } from './autoGate';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from './loopDefV2';
 import type { LoopBinding } from '../shared/loopNamespace';
 import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
 import { createBoundSourceLoader } from './runResolver';
+import type { LoopDefV2Tiers } from './loopDefV2';
 import { createFlowStateStore } from './flowState';
 import { readRunBinding } from './runDisposition';
+import { readStepDecision } from './stepDecision';
 
 export type ObservedResolveDef = (repoDir: string, name: string) => LoopDefV2Result;
-export type RecordFlowTransition = AuditRecorder['recordTransition'];
+export type RecordFlowTransition = (repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowTransitionAfter, start?: AuditRunStart) => void;
 
 export interface StartTransitionDeps {
   autoGate: AutoGate;
@@ -62,6 +64,14 @@ export function composeLoopBindingResolve(autoGate: AutoGate, observedResolveDef
   };
 }
 
+/** The decision an `auto` step wrote, read through the def its loop resolves to. */
+export function composeStepDecisionRead(observedResolveDef: ObservedResolveDef): AutoGateDeps['readStepDecision'] {
+  return (repoDir, steps, step, loop) => {
+    const r = observedResolveDef(repoDir, loop);
+    return readStepDecision(steps, step, r.ok ? r.def : null);
+  };
+}
+
 /** The engine's approve: the human approve's marked-binding refusal and its per-worktree deps. */
 export function composeEngineApprove(
   approveDepsFor: (repoKey: string) => AppGateDecisionDeps,
@@ -87,8 +97,8 @@ export function composeLifecycleEndRun(autoGate: AutoGate): (repoKey: string) =>
   return (repoKey) => autoGate.endRun(repoKey);
 }
 
-export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'] {
-  const loadBound = createBoundSourceLoader(globalRoot);
+export function composeCurrentRun(globalRoot: string, defTiers: LoopDefV2Tiers): AutoGateDeps['currentRun'] {
+  const loadBound = createBoundSourceLoader(globalRoot, defTiers);
   return (repoDir) => {
     const binding = readRunBinding(repoDir);
     if (binding === null) return null;

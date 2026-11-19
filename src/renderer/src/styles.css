@@ -63,6 +63,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar:has(.sb-alert-btn) { background:color-mix(in srgb, var(--attn) 10%, var(--card));
   border-bottom-color:color-mix(in srgb, var(--attn) 38%, var(--hair)); }
 
+.status-bar .sb-body { display:contents; }
+.status-bar .sb-setup-slot { flex:none; display:flex; }
+.status-bar .sb-setup { min-height:var(--sb-line); padding:0 10px; border-radius:999px; font:inherit; font-weight:600;
+  border:1px solid var(--attn); background:transparent; color:var(--text); cursor:pointer; }
+.status-bar .sb-setup:hover, .status-bar .sb-setup:focus-visible { background:color-mix(in srgb, var(--attn) 12%, transparent); }
+.status-bar .sb-setup[hidden] { display:none; }
+
 /* WCAG 1.4.4 / 1.4.10 / 2.4.11 */
 .status-bar .sb-title { flex:0 10000 auto; min-width:7ch; overflow:hidden; margin-right:auto; }
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -116,6 +123,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .kprofile { display:flex; align-items:center; justify-content:space-between; gap:24px; margin:26px 0 8px; padding:16px 18px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
 .kprofile .kp-label { font-size:13px; font-weight:600; }
 .kprofile .kp-help { font-size:12px; color:var(--dim); margin-top:3px; max-width:34ch; }
+.display-setting { margin:26px 0 8px; padding:16px 18px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
 /* CLI launcher install affordance (§23.4 / #25). */
 .cli-status { margin:12px 0 0; padding:0 2px; font-size:12.5px; line-height:1.4; color:var(--dim); min-height:1.2em; }
 .cli-status.ok { color:var(--pass-text); }
@@ -235,13 +243,20 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flow .stn .nm { font-size:12.5px; font-weight:500; }
 .flow .stn.active .nm { color:var(--signal); }
 .flow .stn.todo .nm, .flow .stn.todo .o { opacity:.5; }
+.flow .stn.marker .nm { padding-left:19px; font-style:italic; color:var(--dim); }
+.flow .stn .tag { font-size:11.5px; color:var(--dim); }
 .flow .seg { height:2px; width:30px; margin:0 11px; background:var(--signal); opacity:.5; }
 .flow .seg.future { background:repeating-linear-gradient(90deg,var(--dim) 0 4px,transparent 4px 9px); opacity:.5; }
 .flow.vert { flex-direction:column; align-items:flex-start; gap:0; }
 .flow.vert .stn { padding:9px 0; }
 .flow.vert .seg { width:2px; height:18px; margin:0 0 0 4px; }
+.flowstrip .tok { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--text); }
+.flowstrip .tok .tok-n, .flowstrip .tok .tok-mark { white-space:nowrap; }
+.flowstrip .tok .tok-mark { color:var(--dim); }
+.flowstrip .flow-run-total { margin-top:8px; display:flex; align-items:baseline; gap:6px; }
+.flowstrip .flow-run-total .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 /* §24.2.2 S5 — live derived status (n/m done · activity); compact, muted (no mockup counterpart). */
-.flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); text-transform:lowercase; }
+.flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); }
 .flowstrip .flow-control { margin-top:8px; }
 /* Undo a manual advance (§24.2.2) — secondary to Restart: same outline pill, muted label. */
 .flowstrip .flow-undo { margin-top:8px; color:var(--dim); }
@@ -306,6 +321,15 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .loop-panel .catalog-persona[data-chosen="true"]::before { content:"● "; }
 /* §27.9/AC9 — the arm-interrupt control ("hand back to me") offered while the loop is iterating. */
 .loop-panel .arm-interrupt { margin-top:12px; }
+.loop-panel .ltokens { margin:18px 0 4px; overflow-x:auto; }
+.loop-panel .token-table { border-collapse:collapse; width:100%; }
+.loop-panel .token-table caption { text-align:left; text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+.loop-panel .token-table th, .loop-panel .token-table td { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; padding:3px 0 3px 10px; border-bottom:1px solid var(--hair); text-align:right; white-space:nowrap; color:var(--text); }
+.loop-panel .token-table th { font-weight:500; }
+.loop-panel .token-table th:first-child { text-align:left; padding-left:0; }
+.loop-panel .token-table thead th { color:var(--dim); font-size:10px; }
+.loop-panel .token-table tfoot th, .loop-panel .token-table tfoot td { border-bottom:none; }
+.loop-panel .token-table .tok-mark { color:var(--dim); }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }
@@ -487,8 +511,8 @@ button:hover { border-color:var(--dim); }
 .flow-modal { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:60; }
 /* The consent step's manifest is unbounded — it enumerates the whole bundle — so this dialog can outgrow
    any viewport (WCAG 2.1.1, 2.4.3, 1.4.10). `safe`: CSS Box Alignment L3 §4.4. */
-.flow-modal { overflow-y:auto; align-items:safe center; }
-.flow-modal .card { width:440px; max-width:92vw; max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
+.flow-modal { overflow-y:auto; align-items:safe center; justify-content:safe center; }
+.flow-modal .card { width:440px; max-width:calc(92vw - 46px); max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
 /* The shell's body slot (UI §5): a card marks the chain that should absorb the card's leftover column height
    `data-modal-grow`, and the one box within it that should scroll `data-modal-scroll`. The bound is the
    card's remaining column height, never a `vh` cap — a viewport-relative bound cannot know what the column
@@ -529,7 +553,10 @@ button:hover { border-color:var(--dim); }
 .flow-modal .field input { width:100%; box-sizing:border-box; font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:7px; padding:9px 11px; }
 .flow-modal .field input:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
 .flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
-.flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
+.flow-modal .field .ferr { font-size:12.5px; color:var(--status-error-text); margin-top:7px; line-height:1.4; }
+.flow-modal .field input[aria-invalid="true"] { border-color:var(--status-error-text); }
+.flow-modal .mfoot { display:flex; flex-wrap:wrap; justify-content:safe flex-end; gap:9px; margin-top:20px; }
+.flow-modal .mfoot .pill { flex:0 1 auto; max-width:100%; height:auto; min-height:34px; white-space:normal; text-align:center; }
 
 /* §27.9/AC4 — the request-changes feedback composer body: a free-text area, a curatable review-todo
    checklist, and the delivery-mode radios, all styled to the modal's own field system so it reads as one
@@ -597,6 +624,13 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-pane-list { display:grid; gap:var(--r); align-items:start; grid-template-columns:repeat(auto-fit, minmax(min(18rem, calc((100% - var(--r)) / 2)), 1fr)); }
 .controller-panes[data-layout="one-column"] .controller-pane-list { grid-template-columns:minmax(0, 1fr); }
 .controller-pane-list > p { margin:0; }
+.controller-group-heading { grid-column:1 / -1; margin:var(--r) 0 0; font-size:13px; font-weight:600; color:var(--text); }
+.controller-group-heading:first-child { margin-top:0; }
+.sort-mode-control { display:inline-flex; flex-wrap:wrap; gap:var(--r); }
+.sort-mode-control > [role="radio"] { display:inline-flex; align-items:center; gap:var(--r); background:var(--card); color:var(--text); border-color:var(--signal); }
+.sort-mode-control > [role="radio"][aria-checked="true"] { background:var(--signal-text); color:var(--card); border-color:var(--signal-text); }
+.sort-mode-control > [role="radio"][aria-checked="true"] .spin { color:var(--card); }
+.controller-sort-sentence { flex-basis:100%; margin:0; font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
 .controller-panes [data-status="error"] { --card-accent:var(--status-error); --card-text:var(--status-error-text); }
 .controller-panes [data-status="needs-human"] { --card-accent:var(--status-needs-human); --card-text:var(--status-needs-human-text); }
 .controller-panes [data-status="working"] { --card-accent:var(--status-working); --card-text:var(--status-working-text); }

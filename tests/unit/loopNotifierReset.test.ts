@@ -7,7 +7,7 @@ it.each([true, false])('loop disappearance ends only a per-step stop (per-step=%
   const received: string[] = [];
   source.subscribe(notification => received.push(notification.message));
   const view: FlowStateView = {
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status: 'complete', iteration: 1, humanNeeded: true, pr: null, branch: null, ready: false,
       ...(perStep ? { autoGate: { deciding: false, hung: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] } } : {}),
     },

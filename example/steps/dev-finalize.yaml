@@ -1,0 +1,4 @@
+kind: loop
+loop: finalize-loop
+loop_namespace: app
+todo_template: finalize

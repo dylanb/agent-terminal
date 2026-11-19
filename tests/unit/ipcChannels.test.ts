@@ -57,6 +57,8 @@ const TERMINAL_WIRE_NAMES = {
   flowOnBootstrapError: 'flow:onBootstrapError',
   flowOnAppBootstrapConflict: 'flow:onAppBootstrapConflict',
   flowResolveAppBootstrapConflict: 'flow:resolveAppBootstrapConflict',
+  flowOnAdoptTicketChoice: 'flow:onAdoptTicketChoice',
+  flowResolveAdoptTicket: 'flow:resolveAdoptTicket',
   flowOnEpicPromotionPreview: 'flow:onEpicPromotionPreview',
   flowResolveEpicPromotion: 'flow:resolveEpicPromotion',
   flowGithubRef: 'flow:githubRef',
@@ -76,6 +78,8 @@ const TERMINAL_WIRE_NAMES = {
   installExamplesApply: 'examples:apply',
   setupStatus: 'setup:status',
   setupDismiss: 'setup:dismiss',
+  setupAgentState: 'setup:agentState',
+  setupAgentStateChanged: 'setup:agentStateChanged',
 };
 
 const CONTROLLER_WIRE_NAMES = {
@@ -87,6 +91,8 @@ const CONTROLLER_WIRE_NAMES = {
   dismissLoopMessage: 'controller:dismissLoopMessage',
   getTheme: 'controller:getTheme',
   setTheme: 'controller:setTheme',
+  getSortMode: 'controller:getSortMode',
+  setSortMode: 'controller:setSortMode',
   getAlwaysOnTop: 'controller:getAlwaysOnTop',
   setAlwaysOnTop: 'controller:setAlwaysOnTop',
   alwaysOnTop: 'controller:alwaysOnTop',
@@ -129,6 +135,7 @@ describe('IPC channel contract', () => {
       'CONTROLLER_CH',
       'CONTROLLER_CHANNELS',
       'CONTROLLER_DEFAULT_ALWAYS_ON_TOP',
+      'CONTROLLER_DEFAULT_SORT_MODE',
       'CONTROLLER_DEFAULT_THEME',
       'CONTROLLER_WINDOW_ARGUMENT',
       'DEFAULT_UI_SETTINGS',
@@ -136,6 +143,7 @@ describe('IPC channel contract', () => {
       'INSTALL_DESTINATION_IDS',
       'SESSION_ID',
       'hasFlowRefs',
+      'isControllerSortMode',
       'isTheme',
     ]);
   });

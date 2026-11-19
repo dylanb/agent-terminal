@@ -3,7 +3,7 @@ import type { McpOperationResult } from '../../src/main/mcpActionResult';
 import { createMcpGateOperations } from '../../src/main/mcpGateOperations';
 import { describe, expect, it } from 'vitest';
 import { mcpActions as createMcpActions } from '../helpers/mcpActions';
-import { HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome } from '../../src/main/appGateDecision';
+import { type GateApproveOutcome, HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome } from '../../src/main/appGateDecision';
 import { createLoopMessages } from '../../src/main/loopMessages';
 import { toolResult, type McpToolResult } from '../../src/main/mcpTools';
 import { APP_LOOP_NAMESPACE, RETIRED_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
@@ -21,7 +21,7 @@ const stateAtGate = (): McpWindowState => ({
   stalledTurn: null, loopMessage: null, roundReport: null, todos: [], startable: null, startableError: null, terminateTodoCount: 0,
 });
 
-function fixture(opts: { origin?: TurnOrigin; state?: McpWindowState; busy?: boolean; polishError?: string; held?: boolean; retired?: boolean; required?: boolean; resolved?: boolean; operationResult?: McpOperationResult } = {}) {
+function fixture(opts: { origin?: TurnOrigin; state?: McpWindowState; busy?: boolean; polishError?: string; held?: boolean; retired?: boolean; required?: boolean; resolved?: boolean; approveOutcome?: GateApproveOutcome; operationResult?: McpOperationResult } = {}) {
   const state = structuredClone(opts.state ?? stateAtGate());
   const messages = createLoopMessages(() => {});
   messages.post('error', 'the work turn failed');
@@ -41,7 +41,7 @@ function fixture(opts: { origin?: TurnOrigin; state?: McpWindowState; busy?: boo
       autoGate: { humanDecision: () => () => {} },
       pickupHold: () => opts.held ? 'Confirm the run ticket first' : null,
       bindingOf: () => opts.retired ? RETIRED_LOOP_NAMESPACE : APP_LOOP_NAMESPACE,
-      approve: (repo: string, step: string, turn: string) => runAppApprove(repo, step, turn, deps, HUMAN_DECIDER),
+      approve: (repo: string, step: string, turn: string) => opts.approveOutcome ? Promise.resolve(opts.approveOutcome) : runAppApprove(repo, step, turn, deps, HUMAN_DECIDER),
       decide: (repo: string, step: string, turn: string, option: 'request-changes' | 'redo' | 'polish', note?: string) => runAppGateDecisionOutcome(repo, step, turn, option, deps, note),
     }),
     retry: (_repo: string, _step: string, _turn: string) => { state.stalledTurn = null; return { taken: true as const }; },
@@ -242,3 +242,15 @@ it('terminate acts with the read count and clears the run and its todos', async 
   const result = await f.call('terminate', { window: current.window.id, repo: current.repo?.key, expectedTodoCount: current.terminateTodoCount });
   expect({ error: result.isError, status: f.state.flow?.status, started: f.state.flow?.runStarted, todos: f.state.todos }).toEqual({ error: false, status: 'not_started', started: false, todos: [] });
 });
+
+for (const outcome of [{ kind: 'decision-held', value: 'review' }, { kind: 'decision-invalid', problem: 'missing' }] satisfies GateApproveOutcome[]) {
+  it(`reports ${outcome.kind} as an untaken approve with its reason`, async () => {
+    const f = fixture({ approveOutcome: outcome });
+    const before = f.snapshot();
+    const result = await f.call('approve', TARGET);
+    expect(result.isError).toBe(true);
+    expect(said(result)).toMatch(/not taken/i);
+    expect(said(result)).toContain(outcome.kind === 'decision-held' ? 'review' : 'missing');
+    expect(f.snapshot()).toEqual(before);
+  });
+}

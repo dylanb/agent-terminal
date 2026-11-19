@@ -2,30 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { CommandFailure } from '../../src/main/appBootstrapCommand';
 import {
   createOriginConfigReader,
-  originUrls,
-  soleOriginUrl,
-  type OriginConfigReader,
+  remoteUrls,
+  soleRemoteUrl,
+  type RemoteConfigReader,
 } from '../../src/main/originUrl';
 
 // The module both the repository this NAMES and the remote an operation REACHES resolve through, so the
 // two cannot drift. Its rules are git's: push prefers pushurl and falls back to url, fetch never reads
 // pushurl, an unset key is empty rather than an error, and a multi-valued origin has no single answer.
 
-const reader = (values: Record<string, string[]>): OriginConfigReader => ({
+const reader = (values: Record<string, string[]>): RemoteConfigReader => ({
   values: async (key) => values[key] ?? [],
 });
 
-describe('originUrls', () => {
+describe('remoteUrls', () => {
   it('prefers pushurl for a push and ignores it for a fetch', async () => {
     const origin = reader({
       url: ['https://github.com/owner/repository.git'],
       pushurl: ['git@github.com:owner/repository.git'],
     });
 
-    expect(await originUrls(origin, 'push')).toEqual([
+    expect(await remoteUrls(origin, 'push')).toEqual([
       'git@github.com:owner/repository.git',
     ]);
-    expect(await originUrls(origin, 'fetch')).toEqual([
+    expect(await remoteUrls(origin, 'fetch')).toEqual([
       'https://github.com/owner/repository.git',
     ]);
   });
@@ -33,16 +33,16 @@ describe('originUrls', () => {
   it('falls back to url for a push when no pushurl is configured', async () => {
     const origin = reader({ url: ['https://github.com/owner/repository.git'] });
 
-    expect(await originUrls(origin, 'push')).toEqual([
+    expect(await remoteUrls(origin, 'push')).toEqual([
       'https://github.com/owner/repository.git',
     ]);
   });
 });
 
-describe('soleOriginUrl', () => {
+describe('soleRemoteUrl', () => {
   it('answers only when the config names exactly one URL', async () => {
     const one = reader({ url: ['https://github.com/owner/repository.git'] });
-    expect(await soleOriginUrl(one, 'fetch')).toBe(
+    expect(await soleRemoteUrl(one, 'fetch')).toBe(
       'https://github.com/owner/repository.git',
     );
 
@@ -52,8 +52,8 @@ describe('soleOriginUrl', () => {
         'https://github.com/other/repository.git',
       ],
     });
-    expect(await soleOriginUrl(several, 'fetch')).toBeNull();
-    expect(await soleOriginUrl(reader({}), 'fetch')).toBeNull();
+    expect(await soleRemoteUrl(several, 'fetch')).toBeNull();
+    expect(await soleRemoteUrl(reader({}), 'fetch')).toBeNull();
   });
 });
 

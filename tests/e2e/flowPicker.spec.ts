@@ -43,18 +43,18 @@ test('AC1: picking the second of two global catalog flows shows its steps, and t
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
   await openPicker(page);
   await pickerOption(page, 'picker-flow-two').click();
 
-  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('two-second');
+  await expect(harness.stepName(1)).toHaveText('Two first', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('Two second');
   expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'picker-flow-two' });
 
   const relaunched = await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('two-second');
+  await expect(harness.stepName(1)).toHaveText('Two first', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('Two second');
   await openPicker(relaunched);
   await expect(pickerOption(relaunched, 'picker-flow-two')).toHaveAttribute('aria-selected', 'true');
   await expect(pickerOption(relaunched, 'picker-flow-one')).not.toHaveAttribute('aria-selected', 'true');
@@ -74,7 +74,7 @@ test("AC2: each worktree's picker lists its own repo-tier entries plus the share
   const page = await harness.launch();
 
   await harness.cdInto(repoA);
-  await expect(harness.stepName(1)).toHaveText('a-only-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('A only first', { timeout: 10_000 });
   await openPicker(page);
   await expect(pickerOption(page, 'repo-a-only-flow')).toBeVisible();
   await expect(pickerOption(page, 'shared-global-flow')).toBeVisible();
@@ -83,7 +83,7 @@ test("AC2: each worktree's picker lists its own repo-tier entries plus the share
   await page.keyboard.press('Escape');
 
   await harness.cdInto(repoB);
-  await expect(harness.stepName(1)).toHaveText('b-only-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('B only first', { timeout: 10_000 });
   await openPicker(page);
   await expect(pickerOption(page, 'repo-b-only-flow')).toBeVisible();
   await expect(pickerOption(page, 'shared-global-flow')).toBeVisible();
@@ -134,7 +134,7 @@ test('a worktree change while the picker holds keyboard focus lands focus in the
 
   const page = await harness.launch();
   await harness.cdInto(repoA);
-  await expect(harness.stepName(1)).toHaveText('a-only-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('A only first', { timeout: 10_000 });
   await expect(pickerTrigger(page)).toBeEnabled({ timeout: 10_000 });
 
   await page.locator('.xterm-screen').click();
@@ -142,9 +142,9 @@ test('a worktree change while the picker holds keyboard focus lands focus in the
   await page.keyboard.press('Enter');
   await pickerTrigger(page).focus();
   await expect(pickerTrigger(page)).toBeFocused();
-  await expect(harness.stepName(1)).toHaveText('a-only-first');
+  await expect(harness.stepName(1)).toHaveText('A only first');
 
-  await expect(harness.stepName(1)).toHaveText('b-only-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('B only first', { timeout: 10_000 });
   expect(await page.evaluate(() => document.activeElement === null || document.activeElement === document.body)).toBe(false);
 });
 
@@ -187,7 +187,7 @@ test('a first-step bootstrap failure leaves no run record: the picker unlocks wi
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('p-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('P first', { timeout: 10_000 });
   await flowControl(page).click();
 
   const bootstrapError = page.locator('#flow-error-host .flow-modal');
@@ -200,7 +200,7 @@ test('a first-step bootstrap failure leaves no run record: the picker unlocks wi
   await expect(flowTerminate(page)).toHaveCount(0);
   await openPicker(page);
   await pickerOption(page, 'other-flow').click();
-  await expect(harness.stepName(1)).toHaveText('o-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('O first', { timeout: 10_000 });
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
 });
@@ -218,7 +218,7 @@ test('AC3: with no flow to run, the picker is usable from the error view, and a 
   await openPicker(page);
   await pickerOption(page, 'rescue-flow').click();
 
-  await expect(harness.stepName(1)).toHaveText('rescue-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Rescue first', { timeout: 10_000 });
   await expect(flowControl(page)).toHaveText('Start');
   await expect(flowError(page)).toHaveCount(0);
   expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'rescue-flow' });
@@ -234,12 +234,12 @@ test('AC4: "use the default" clears the selection to the unset resolution, and o
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('chosen-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Chosen first', { timeout: 10_000 });
 
   await openPicker(page);
   await expect(useDefault(page)).toBeVisible();
   await useDefault(page).click();
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
   expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
 
   await openPicker(page);
@@ -248,7 +248,7 @@ test('AC4: "use the default" clears the selection to the unset resolution, and o
 
   const relaunched = await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
   expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
   await openPicker(relaunched);
   await expect(pickerOption(relaunched, 'chosen-flow')).toBeVisible();
@@ -265,7 +265,7 @@ test("AC6/AC7/AC5: a started run locks the picker; after Terminate it is usable 
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('a-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('A first', { timeout: 10_000 });
   await expect(pickerTrigger(page)).toBeEnabled({ timeout: 10_000 });
 
   await flowControl(page).click();
@@ -280,7 +280,7 @@ test("AC6/AC7/AC5: a started run locks the picker; after Terminate it is usable 
   await openPicker(page);
   await expect(pickerOption(page, 'flow-a')).toHaveAttribute('aria-selected', 'true');
   await pickerOption(page, 'flow-b').click();
-  await expect(harness.stepName(1)).toHaveText('b-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('B first', { timeout: 10_000 });
 
   await flowControl(page).click();
   await expect(inputModal(page)).toBeVisible({ timeout: 10_000 });
@@ -338,7 +338,7 @@ test('AC8: a repo entry whose flow.yaml escapes its tier is listed, cannot be pi
 
     const page = await harness.launch();
     await harness.cdInto(repo);
-    await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+    await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
     await openPicker(page);
     const row = pickerOption(page, 'escaping-flow');
     await expect(row).toHaveCount(1);
@@ -349,7 +349,7 @@ test('AC8: a repo entry whose flow.yaml escapes its tier is listed, cannot be pi
     expect(afterClick.ok && afterClick.listing.selection, 'no pointer write follows the click').toEqual({ kind: 'unset' });
     await expect(row).not.toHaveAttribute('aria-selected', 'true');
     await expect(pickerTrigger(page)).toHaveText('Flow: default');
-    await expect(harness.stepName(1)).toHaveText('fallback-first');
+    await expect(harness.stepName(1)).toHaveText('Fallback first');
     expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
   } finally {
     cat.cleanup();
@@ -405,7 +405,7 @@ test('AC10: an over-long hostile pointer with a local flow.yaml shows a clean, b
 
     await openPicker(page);
     await pickerOption(page, 'valid-flow').click();
-    await expect(harness.stepName(1)).toHaveText('valid-first', { timeout: 10_000 });
+    await expect(harness.stepName(1)).toHaveText('Valid first', { timeout: 10_000 });
     await expect(flowControl(page)).toHaveText('Start');
     await expect(flowError(page)).toHaveCount(0);
   } finally {
@@ -425,7 +425,7 @@ test('AC11: a pick whose pointer write fails shows the reason and returns the hi
 
     const page = await harness.launch();
     await harness.cdInto(repo);
-    await expect(harness.stepName(1)).toHaveText('a-first', { timeout: 10_000 });
+    await expect(harness.stepName(1)).toHaveText('A first', { timeout: 10_000 });
     await openPicker(page);
     await expect(pickerOption(page, 'flow-a')).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
@@ -456,22 +456,22 @@ test("AC18: the operator's pick wins over a local flow.yaml at Start and after a
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Local first', { timeout: 10_000 });
   await openPicker(page);
   await expect(pickerOption(page, 'pick-two')).toHaveCount(1);
   expect(await tierNotices(page, /\S/, /\b(repo|global)\b/), 'an empty repo tier shows no tier notice').toBe(0);
   await pickerOption(page, 'pick-two').click();
-  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('two-second');
+  await expect(harness.stepName(1)).toHaveText('Two first', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('Two second');
 
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
   await expect(stationState(page, 1)).toHaveClass(/\bactive\b/);
-  await expect(harness.stepName(1)).toHaveText('two-first');
+  await expect(harness.stepName(1)).toHaveText('Two first');
 
   await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Two first', { timeout: 10_000 });
   await expect(stationState(harness.page(), 1)).toHaveClass(/\bactive\b/);
   await expect(flowControl(harness.page())).toHaveText('Advance');
   await expect(pickerTrigger(harness.page())).toHaveText('Flow: pick-two', { timeout: 10_000 });
@@ -495,7 +495,7 @@ test('AC18: a non-file at the pointer path shows the flow-load error, and "use t
 
     await openPicker(page);
     await useDefault(page).click();
-    await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+    await expect(harness.stepName(1)).toHaveText('Local first', { timeout: 10_000 });
     await expect(flowControl(page)).toHaveText('Start');
     await expect(flowError(page)).toHaveCount(0);
     expect(existsSync(activeFlowPointerFile(repo))).toBe(false);
@@ -663,8 +663,8 @@ test('AC12/AC15: a held run with a missing record resumes onto a catalog flow at
   await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
   await recoverOnto(page, 'resume-flow');
 
-  await expect(harness.stepName(3)).toHaveText('s3', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('s2');
+  await expect(harness.stepName(3)).toHaveText('S3', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('S2');
   await expect(flowStation(page, 2)).toHaveClass(/\bactive\b/);
   await expect(flowError(page)).toHaveCount(0);
   expect(runFiles(repo)[0]).toEqual(progressionBefore);
@@ -675,7 +675,7 @@ test('AC12/AC15: a held run with a missing record resumes onto a catalog flow at
   harness.seedLocalFlow(repo, ['s1', 's2']);
   const relaunched = await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(3)).toHaveText('s3', { timeout: 10_000 });
+  await expect(harness.stepName(3)).toHaveText('S3', { timeout: 10_000 });
   await expect(flowStation(relaunched, 2)).toHaveClass(/\bactive\b/);
 });
 
@@ -691,7 +691,7 @@ test('AC13/AC15: a held run with a garbage record resumes onto the global fallba
   await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
   await recoverOnto(page, /fallback/i);
 
-  await expect(harness.stepName(3)).toHaveText('fallback-3', { timeout: 10_000 });
+  await expect(harness.stepName(3)).toHaveText('Fallback 3', { timeout: 10_000 });
   await expect(flowStation(page, 2)).toHaveClass(/\bactive\b/);
   await expect(flowError(page)).toHaveCount(0);
   expect(readRunBinding(repo)).toEqual({ source: 'fallback' });
@@ -701,7 +701,7 @@ test('AC13/AC15: a held run with a garbage record resumes onto the global fallba
   harness.seedLocalFlow(repo, ['s1', 's2']);
   const relaunched = await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(3)).toHaveText('fallback-3', { timeout: 10_000 });
+  await expect(harness.stepName(3)).toHaveText('Fallback 3', { timeout: 10_000 });
   await expect(flowStation(relaunched, 2)).toHaveClass(/\bactive\b/);
 });
 
@@ -751,7 +751,7 @@ test('AC12: a held run recovered onto a catalog flow lacking its step is ended a
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('s1', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('S1', { timeout: 10_000 });
   await expect(flowControl(page)).toHaveText('Start');
   await flowControl(page).click();
   await expect(flowStation(page, 1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
@@ -769,8 +769,8 @@ test('AC12: a held run recovered onto a catalog flow lacking its step is ended a
   await expect.poll(() => readActiveFlow(repo), { timeout: 10_000 }).toEqual({ kind: 'value', id: 'other-flow' });
   expect(existsSync(runDispositionFile(repo))).toBe(false);
   await expect(flowError(held)).toHaveCount(0);
-  await expect(harness.stepName(1)).toHaveText('o1', { timeout: 10_000 });
-  await expect(harness.stepName(2)).toHaveText('o2');
+  await expect(harness.stepName(1)).toHaveText('O1', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('O2');
   await expect(flowControl(held)).toHaveText('Start');
   await expect(recoverControl(held)).toHaveCount(0);
   await expect(pickerTrigger(held)).toBeEnabled();
@@ -784,7 +784,7 @@ test('AC12: a held run recovered onto a catalog flow lacking its step is ended a
 
   const relaunched = await harness.relaunch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('o1', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('O1', { timeout: 10_000 });
   await expect(flowControl(relaunched)).toHaveText('Start');
 });
 
@@ -798,7 +798,7 @@ test('a reset run whose run record was left behind: the picker names Start as th
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Local first', { timeout: 10_000 });
   await expect(pickerHost(page).locator('.flow-picker-lock')).toContainText(/Start the run/);
   await expect(flowControl(page)).toHaveText('Start');
   await flowControl(page).click();
@@ -818,10 +818,10 @@ test('integration: a flow picked and started from the picker, then held by a los
 
   const page = await harness.launch();
   await harness.cdInto(repo);
-  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Fallback first', { timeout: 10_000 });
   await openPicker(page);
   await pickerOption(page, 'journey-a').click();
-  await expect(harness.stepName(1)).toHaveText('ja-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Ja first', { timeout: 10_000 });
   await flowControl(page).click();
   await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
   await expect(pickerTrigger(page)).toBeDisabled({ timeout: 10_000 });
@@ -834,7 +834,7 @@ test('integration: a flow picked and started from the picker, then held by a los
   await recoverOnto(held, 'journey-a');
 
   await expect(flowError(held)).toHaveCount(0, { timeout: 10_000 });
-  await expect(harness.stepName(1)).toHaveText('ja-first');
+  await expect(harness.stepName(1)).toHaveText('Ja first');
   await expect(flowStation(held, 1)).toHaveClass(/\bactive\b/);
   await expect(flowControl(held)).toHaveText('Advance');
   expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'journey-a' });
@@ -847,6 +847,6 @@ test('integration: a flow picked and started from the picker, then held by a los
   await openPicker(held);
   await expect(pickerOption(held, 'journey-a')).toHaveAttribute('aria-selected', 'true');
   await pickerOption(held, 'journey-b').click();
-  await expect(harness.stepName(1)).toHaveText('jb-first', { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('Jb first', { timeout: 10_000 });
   expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'journey-b' });
 });

@@ -213,6 +213,15 @@ describe('the proof publisher (stand-in gh)', () => {
     expect.soft(comments.filter((c) => c.body.includes('first proof of aaaa'))).toHaveLength(1);
   });
 
+  it('sends the summary body on stdin, never as an argv element, when it posts and when it edits (#304)', async () => {
+    const gh = withGh({});
+    await createProofPublisher(repo).summary(12, 'first proof of aaaa');
+    await createProofPublisher(repo).summary(12, 'second proof of bbbb');
+    const summaries = (gh.read().comments['12'] ?? []).filter((c) => c.login === 'proof-author');
+    expect.soft(gh.read().calls.flat().filter((arg) => arg.includes('proof of'))).toEqual([]);
+    expect.soft(summaries.map((c) => c.body.includes('second proof of bbbb'))).toEqual([true]);
+  });
+
   it('rejects the status promise when GitHub refuses the status', async () => {
     withGh({ failStatusFor: ['test-proof/e2e'] });
     await expect(createProofPublisher(repo).status(SHA_A, 'test-proof/e2e', '391 passed')).rejects.toThrow();

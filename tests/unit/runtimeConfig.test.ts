@@ -36,6 +36,19 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_BRANCH_REFRESH_MS: '0' }).branchRefreshMs).toBe(300_000);
   });
 
+  it('defaults the wait for an agent to reach the prompt to sixty seconds and parses a valid override', () => {
+    expect(resolveRuntimeConfig({}).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '5000' }).agentWaitMs).toBe(5000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: 'nope' }).agentWaitMs).toBe(60_000);
+    expect(resolveRuntimeConfig({ APP_AGENT_WAIT_MS: '0' }).agentWaitMs).toBe(60_000);
+  });
+
+  it('lists claude and codex as agent commands by default and parses a comma-separated override', () => {
+    expect(resolveRuntimeConfig({}).agentCommands).toEqual(['claude', 'codex']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' claude, gemini ,,aider ' }).agentCommands).toEqual(['claude', 'gemini', 'aider']);
+    expect(resolveRuntimeConfig({ APP_AGENT_COMMANDS: ' , ' }).agentCommands).toEqual(['claude', 'codex']);
+  });
+
   // §27.9.1 N9b.5(e), #137 AC14 — the engine's gate-decision bound.
   it('defaults the auto-gate decision bound to 300 000 ms and parses an override', () => {
     expect(resolveRuntimeConfig({}).autoGateDecisionMs).toBe(300_000);
@@ -51,6 +64,15 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '0.1' }).autoGateDecisionMs).toBe(1);
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '1e12' }).autoGateDecisionMs).toBe(2_147_483_647);
     expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '2147483648' }).autoGateDecisionMs).toBe(2_147_483_647);
+  });
+
+  it('reads the Waiting lookup bound from APP_WAITING_LOOKUP_TIMEOUT_MS, with a positive default it falls back to on garbage', () => {
+    const fallback = resolveRuntimeConfig({}).waitingLookupTimeoutMs;
+    expect({
+      defaultIsPositive: Number.isInteger(fallback) && fallback > 0,
+      override: resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: '2500' }).waitingLookupTimeoutMs,
+      garbage: ['nope', '0', '-5', ''].map((raw) => resolveRuntimeConfig({ APP_WAITING_LOOKUP_TIMEOUT_MS: raw }).waitingLookupTimeoutMs),
+    }).toEqual({ defaultIsPositive: true, override: 2500, garbage: [fallback, fallback, fallback, fallback] });
   });
 
   it('enables shell integration by default and opts out only on exactly "0"', () => {

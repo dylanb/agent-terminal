@@ -81,6 +81,7 @@ export function watchableDirs(root: string): string[] {
 function gitNonIgnoredDirs(gitRoot: string): string[] | null {
   let out: string;
   try {
+    // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
     out = execFileSync('git', ['-C', gitRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
       encoding: 'utf8',
       maxBuffer: GIT_LS_FILES_MAX_BYTES,

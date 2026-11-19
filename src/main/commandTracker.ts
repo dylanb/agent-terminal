@@ -53,6 +53,8 @@ export interface CommandTrackerDeps {
 
 export interface CommandTracker {
   summaries(): CommandSpanSummary[];
+  /** Whether the shell has shown its prompt (OSC 133;A) at least once; the first one fires a change. */
+  shellPrompted(): boolean;
   /** Drop finished commands, keeping any still-running one (§16.2); disposes the dropped markers. */
   clear(): void;
   capture(id: string): CommandCapture | undefined;
@@ -67,6 +69,7 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
   const now = deps.now ?? Date.now;
   const spans: Span[] = [];
   let pendingB: Mark | null = null;
+  let prompted = false;
   const changeCbs = new Set<() => void>();
 
   function emitChange() {
@@ -156,7 +159,9 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
   }
 
   function onPromptStart() {
-    /* OSC 133;A — prompt start; no state to record this phase. */
+    if (prompted) return;
+    prompted = true;
+    emitChange();
   }
 
   function onCommandStart() {
@@ -222,6 +227,7 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
   });
 
   return {
+    shellPrompted: () => prompted,
     summaries() {
       return spans.map((s) => ({
         id: s.id,

@@ -1,3 +1,4 @@
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { execFileSync } from 'node:child_process';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { existsSync, readFileSync, readdirSync, renameSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -26,6 +27,7 @@ function machine() {
   const home = temp('mcp-entry-home-'); const appHome = temp('mcp-entry-app-'); const repo = temp('mcp-entry-repo-');
   const config = seedIsolatedClaudeConfig('mcp-entry-config-'); roots.push(config);
   const { binDir, logFile } = seedFakeGhGit('mcp-entry-bin-'); roots.push(binDir);
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.git')); mkdirSync(join(repo, '.agent-terminal/loop'), { recursive: true });
   writeFileSync(join(repo, '.git/HEAD'), 'ref: refs/heads/main\n');
   const hold = join(home, 'hold');
@@ -245,14 +247,14 @@ for (const loop of [false, true]) for (const viaMcp of [false, true]) {
       }
       else await page.locator('#flow-strip .flow-control').click();
     }
-    await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('next');
+    await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Next');
     const matching = entries(m).filter(e => loop ? e.type === 'command' && gateDecisionKind(e.cmd ?? '')?.kind === 'decision' : e.type === 'step.entered' && e.step === 'next');
     expect.soft(matching).toHaveLength(1);
     if (viaMcp) expect.soft(event).toEqual(matching[0] ?? 'missing decision');
     else { expect.soft(matching[0]?.mcp).toBeUndefined(); expect.soft(calls(m, 'approve')).toEqual([]); }
     const offset = entries(m).length;
     await page.locator('#flow-strip .flow-control').click();
-    await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('last');
+    await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Last');
     const ui = entries(m).slice(offset).filter(e => e.type === 'step.entered' && e.step === 'last');
     expect.soft(ui).toHaveLength(1); expect.soft(ui[0]?.mcp).toBeUndefined();
   });
@@ -523,7 +525,7 @@ test('MCP audit: a failed human approval side effect records the returned neithe
   const call = expectCall(m, 'approve', 'side-effect-failed', 'human', text);
   expect.soft(call?.mcp?.reason).toBe(JSON.parse(answer(result).message).message);
   const after = await current(m); expect.soft(after.gate).toEqual(state.gate);
-  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('plan');
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Plan');
 });
 
 test('MCP audit: closing the window records a held human prompt with no calls or Stop', { tag: '@ownapp' }, async () => {
@@ -555,7 +557,7 @@ for (const boundary of ['UI start', 'UI terminate', 'replacement run'] as const)
     else {
       const original = parseAuditStream(readFileSync(firstFile, 'utf8')).events;
       expect(original.filter(e => e.type === 'mcp.prompt' && e.text === text)).toHaveLength(1);
-      expect(original.at(-1)?.type).toBe('flow.terminated');
+      expect(original.filter(e => e.type !== 'step.tokens').at(-1)?.type).toBe('flow.terminated');
       if (boundary === 'replacement run') {
         const next = auditFiles(m).find(file => file !== firstFile)!;
         expect(parseAuditStream(readFileSync(next, 'utf8')).events.filter(e => e.type === 'mcp.prompt' && e.text === text)).toEqual([]);

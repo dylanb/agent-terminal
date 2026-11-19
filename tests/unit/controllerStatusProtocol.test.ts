@@ -63,3 +63,29 @@ it('replaces an oversized status with a fallback that carries neither title nor 
   expect(JSON.stringify(fallback)).not.toMatch(/must not survive/);
   expect(fallback.type === 'status' ? [fallback.work.title, fallback.work.branch] : []).toEqual([undefined, undefined]);
 });
+
+it.each([
+  ['one command', { program: 'node', others: 0 }],
+  ['several commands', { program: 'pnpm', others: 2 }],
+])('accepts a Waiting status naming %s and delivers it unchanged', (_, waiting) => {
+  const delivered = (() => {
+    try { return parseControllerMessage(statusFrame({ activity: 'waiting', waiting })); } catch (error) { return `rejected: ${String(error)}`; }
+  })();
+  expect(delivered).toEqual({ version: 2, type: 'status', work: { ...workStatus(), activity: 'waiting', waiting } });
+});
+
+it.each([
+  ['Waiting with no value', { activity: 'waiting' }],
+  ['Waiting with a null value', { activity: 'waiting', waiting: null }],
+  ['an empty program', { activity: 'waiting', waiting: { program: '', others: 0 } }],
+  ['a numeric program', { activity: 'waiting', waiting: { program: 7, others: 0 } }],
+  ['a negative count', { activity: 'waiting', waiting: { program: 'node', others: -1 } }],
+  ['a fractional count', { activity: 'waiting', waiting: { program: 'node', others: 0.5 } }],
+  ['a missing count', { activity: 'waiting', waiting: { program: 'node' } }],
+  ['an array value', { activity: 'waiting', waiting: ['node', 0] }],
+  ['a value beside Working', { activity: 'active', waiting: { program: 'node', others: 0 } }],
+  ['a value beside Idle', { activity: 'quiet', waiting: { program: 'node', others: 0 } }],
+  ['a value beside Activity unavailable', { activity: 'unavailable', waiting: { program: 'node', others: 0 } }],
+])('rejects a status carrying %s at the wire boundary', (_, extra) => {
+  expect(() => parseControllerMessage(statusFrame(extra))).toThrow();
+});

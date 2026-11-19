@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import { displayGitHubRepository, originFetchGitHubRepository, originPushForkRepository } from './githubRepository';
 import { isUnderAppStateDir } from './appStateDirs';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import type {
@@ -48,22 +49,34 @@ const LANG_BY_EXT: Record<string, string> = {
 };
 
 function defaultGit(args: string[], cwd: string): string {
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 
 const execFileAsync = promisify(execFile);
 
 /** The current branch's PR base branch name from GitHub, or null when there is no PR / gh is
- *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). */
-async function defaultPrBaseName(root: string): Promise<string | null> {
+ *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). The PR is
+ *  looked up by the branch's name in the repository display reads ask (`displayGitHubRepository`). */
+export async function readPrBaseName(root: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], {
+    const { selector } = await displayGitHubRepository(root);
+    const branch = defaultGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], root).trim();
+    if (branch.length === 0) return null;
+    // A branch in another repository than the one asked is that repository owner's PR head, which gh names as
+    // <owner>:<branch>: origin's when the read asks upstream, else the fork origin pushes to.
+    const origin = await originFetchGitHubRepository(root);
+    const fork = origin.selector !== selector ? origin : await originPushForkRepository(root);
+    const head = fork === null ? branch : `${fork.owner}:${branch}`;
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', head, '--repo', selector, '--json', 'baseRefName'], {
       cwd: root,
       encoding: 'utf8',
       timeout: 5000,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return stdout.trim() || null;
+    const viewed: unknown = JSON.parse(stdout);
+    const name = typeof viewed === 'object' && viewed !== null ? (viewed as Record<string, unknown>).baseRefName : undefined;
+    return typeof name === 'string' && name.length > 0 ? name : null;
   } catch {
     return null;
   }
@@ -139,7 +152,7 @@ const lastWarmAttempt = new Map<string, number>();
  *  connectivity restored — mid-session is still picked up. */
 export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<boolean> {
   const git = deps.git ?? defaultGit;
-  const fetchBase = deps.prBaseName ?? defaultPrBaseName;
+  const fetchBase = deps.prBaseName ?? readPrBaseName;
   const now = deps.now ?? Date.now;
   const key = branchKey(root, git);
   if (warmedKeys.has(key)) return false;

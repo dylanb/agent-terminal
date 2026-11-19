@@ -3,7 +3,7 @@ import * as outcomes from '../../src/main/mcpFlowOutcome';
 import type { FlowStateView } from '../../src/shared/ipc';
 import { toolResult } from '../../src/main/mcpTools';
 
-const view = (status: FlowStateView['status']): FlowStateView => ({ stepName: 'plan', steps: ['plan'], position: 1, total: 1, status, runStarted: status === 'not_started' ? 'never-started' : 'started' });
+const view = (status: FlowStateView['status']): FlowStateView => ({ stepName: 'plan', steps: ['plan'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status, runStarted: status === 'not_started' ? 'never-started' : 'started' });
 const answer = (value: unknown) => toolResult({ kind: 'answered', value });
 it('a refused start names the reason and is not reported as taken', () => {
   const result = answer(outcomes.startedAnswer?.({ ...view('not_started'), notice: 'another window holds this worktree' }, null));

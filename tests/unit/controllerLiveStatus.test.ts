@@ -2,13 +2,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { bringForwardIn, cardIn, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { statusService, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
+import { statusService, statusTerminal, type WorkStatusOverrides } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
 const DIRECTORY = statusTerminal().launchDirectory;
 
-function mount(work: Partial<WorkStatus> = {}, tag = 'main') {
+function mount(work: WorkStatusOverrides = {}, tag = 'main') {
   const parent = document.createElement(tag);
   document.body.append(parent);
   const { host, service, dispose } = mountControllerPanes({ terminals: [statusTerminal(work)], parent });
@@ -23,7 +23,7 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
       expect.soft(text()).toContain('/fixed/worktree');
       expect.soft(text()).toContain('repository');
       expect.soft(text()).toContain('feature-dev');
-      expect.soft(text()).toContain('implement');
+      expect.soft(text()).toContain('Implement');
       expect.soft(text()).toContain('#219');
       expect.soft(text()).toContain('Show live controller status');
     } finally { component.dispose(); }
@@ -58,7 +58,7 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
     try {
       expect.soft(text()).toContain('#219');
       expect.soft(text()).toMatch(new RegExp(`title ${availability}`, 'i'));
-      expect.soft(text()).toContain('implement');
+      expect.soft(text()).toContain('Implement');
     } finally { component.dispose(); }
   });
 
@@ -110,7 +110,7 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
       })]);
       expect.soft(status()).toBe('Idle');
       expect.soft(text()).toContain('new-flow');
-      expect.soft(text()).toContain('verify');
+      expect.soft(text()).toContain('Verify');
       expect.soft(text()).toContain('#220');
       expect.soft(text()).toContain('New issue');
       expect.soft(text()).not.toMatch(/Old halt|Old error|#219|feature-dev|implement|human/i);

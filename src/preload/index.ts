@@ -13,6 +13,8 @@ import {
   type ClaudeCodeIntegrationResult,
   type ExamplesApi,
   type SetupApi,
+  type HostedAgentState,
+  type SetupAgentStateChangedMsg,
   type SetupDismissReply,
   type SetupStatusReply,
   type InstallExamplesPreview,
@@ -22,6 +24,8 @@ import {
   type FlowApi,
   type FlowBootstrapErrorMsg,
   type FlowAppBootstrapConflictMsg,
+  type FlowAdoptTicketChoiceMsg,
+  type ResolveAdoptTicketResult,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
   type ActiveFlowWriteResult,
@@ -201,6 +205,20 @@ const flowApi: FlowApi = {
       wipe,
       ...target,
     }),
+  onAdoptTicketChoice: (cb) => {
+    const handler = (_e: unknown, msg: FlowAdoptTicketChoiceMsg): void =>
+      cb({
+        repoKey: msg.repoKey,
+        step: msg.step,
+        pr: msg.pr,
+        choiceId: msg.choiceId,
+        tickets: msg.tickets.map((t) => ({ repo: t.repo, number: t.number })),
+      });
+    ipcRenderer.on(CH.flowOnAdoptTicketChoice, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnAdoptTicketChoice, handler);
+  },
+  resolveAdoptTicket: (repoKey, step, choiceId, answer) =>
+    ipcRenderer.invoke(CH.flowResolveAdoptTicket, { sessionId: SESSION_ID, repoKey, step, choiceId, answer }) as Promise<ResolveAdoptTicketResult>,
   onEpicPromotionPreview: (cb) => {
     const handler = (_e: unknown, msg: FlowEpicPromotionPreviewMsg): void =>
       cb({ repoKey: msg.repoKey, step: msg.step, epic: msg.epic, pr: msg.pr, subTickets: msg.subTickets });
@@ -249,6 +267,12 @@ export const examplesApi: ExamplesApi = {
 export const setupApi: SetupApi = {
   status: (repoKey) => ipcRenderer.invoke(CH.setupStatus, { sessionId: SESSION_ID, repoKey }) as Promise<SetupStatusReply>,
   dismiss: (dismissal) => ipcRenderer.invoke(CH.setupDismiss, { sessionId: SESSION_ID, dismissal }) as Promise<SetupDismissReply>,
+  agentState: () => ipcRenderer.invoke(CH.setupAgentState, { sessionId: SESSION_ID }) as Promise<HostedAgentState>,
+  onAgentStateChanged: (cb) => {
+    const h = (_e: unknown, m: SetupAgentStateChangedMsg): void => cb(m.state);
+    ipcRenderer.on(CH.setupAgentStateChanged, h);
+    return () => ipcRenderer.removeListener(CH.setupAgentStateChanged, h);
+  },
 };
 
 if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {

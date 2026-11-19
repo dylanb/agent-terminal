@@ -1,3 +1,4 @@
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { electron, controllerOf } from './registeredElectron';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -61,6 +62,7 @@ function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; rev
   writeFileSync(join(config, '.claude.json'), JSON.stringify(USER_STATE, null, 2));
   writeFileSync(join(config, 'settings.json'), JSON.stringify(USER_SETTINGS, null, 2));
   const repo = temp('agent-term-e2e-mcp-repo-');
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.git'));
   if (opts.gitignore !== false) writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   const { binDir, logFile: ghLog } = seedFakeGhGit('agent-term-e2e-mcp-bin-');
@@ -440,7 +442,7 @@ test("an engine-driven session lists the tools, reads its window in the engine's
   const atGate = await typedRead();
   const shownOptions = await page.locator('#loop-panel [data-gate-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-gate-option') ?? ''));
   const gateTurn = /^turn_key: (\S+)$/m.exec(readFileSync(runStateFile, 'utf8'))?.[1];
-  const shownStep = await page.locator('#flow-strip .stn.active .nm').textContent();
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Plan');
   const shownDeciding = (await page.locator('#loop-panel [data-auto-deciding]').count()) > 0;
   const shownReasons = await page.locator('#loop-panel').evaluate((panel) => {
     const row = (attr: string): string[] => {
@@ -449,7 +451,7 @@ test("an engine-driven session lists the tools, reads its window in the engine's
     };
     return [...[...panel.querySelectorAll('[data-auto-halt-reason]')].map((li) => li.textContent ?? ''), ...row('data-loop-verdict'), ...row('data-loop-verdict-reason')];
   });
-  const shownSteps = (await page.locator('#flow-strip .stn .nm').allTextContents()).slice(1, -1);
+  expect((await page.locator('#flow-strip .stn .nm').allTextContents()).slice(1, -1)).toEqual(['Plan', 'Done']);
   const shownInProgress = (await page.locator('#flow-strip .stn.active').count()) > 0;
   const shownTerminate = await page.locator('#flow-strip .flow-terminate').isVisible();
   const reportsDir = join(m.repo, '.agent-terminal', 'loop', 'reports');
@@ -483,8 +485,8 @@ test("an engine-driven session lists the tools, reads its window in the engine's
   }).toEqual({
     repo: { key: m.repo },
     selected: pickerSelected,
-    step: shownStep,
-    steps: shownSteps,
+    step: 'plan',
+    steps: ['plan', 'done'],
     inProgress: shownInProgress,
     runStarted: shownTerminate,
     gate: { step: 'plan', turn: gateTurn, options: [...shownOptions].sort(), reasons: shownReasons, engineDeciding: shownDeciding },
@@ -496,7 +498,7 @@ test("an engine-driven session lists the tools, reads its window in the engine's
 
   await page.locator('#loop-panel [data-gate-option="approve"]').click();
   await expect.poll(() => controllerOf(app as ElectronApplication).loopMessage()?.reason ?? '', { timeout: 15_000 }).toContain('no PR to mark ready');
-  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('done', { timeout: 10_000 });
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Done', { timeout: 10_000 });
   const pastLoop = await typedRead();
   expect.soft({ step: pastLoop?.flow?.step, loopMessage: pastLoop?.loopMessage, roundReport: pastLoop?.roundReport }).toEqual({
     step: 'done',
@@ -681,7 +683,7 @@ test("tracer: a typed approve in the engine-driven session closes the gate and a
   const todo = await approveTurn(m, insertTodoAndSubmit, approveCall(AT_THE_GATE, 'repo'));
   const afterTodo = await shown();
   const typed = await approveTurn(m, typeCommand, approveCall(AT_THE_GATE));
-  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('done', { timeout: 15_000 });
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Done', { timeout: 15_000 });
   expect.soft({
     engineTurns: [...new Set(engineTurns)],
     todo,
@@ -923,7 +925,7 @@ test('MCP slice 3: request changes delivers feedback and shows the new round wit
   const result = await slice3Call(m, 'request_changes', { ...AT_THE_GATE, feedback });
   expect.soft(outcomeOf(result)).toBe('taken');
   await expect.soft.poll(() => (load(readFileSync(runFile, 'utf8')) as { round: number }).round, { timeout: 10_000 }).toBeGreaterThan(before.round);
-  expect.soft(await page.locator('#flow-strip .stn.active .nm').textContent()).toBe('plan');
+  expect.soft(await page.locator('#flow-strip .stn.active .nm').textContent()).toBe('Plan');
   await expect.soft.poll(() => readFileSync(join(m.repo, '.agent-terminal', 'injected-log'), 'utf8').split('\n').filter(line => !line.startsWith('mcp ')).join('\n'), { timeout: 10_000 }).toContain(feedback);
 });
 
@@ -953,7 +955,7 @@ test('MCP slice 3: terminate uses the current todo count, clears todos and captu
   writeFileSync(join(m.repo, '.agent-terminal/todos.json'), JSON.stringify(distinctTodos(m.repo, ['active', 'done'])));
   await slice3Session(m);
   await page.locator('#flow-strip .flow-control').click();
-  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Prepare');
   await page.evaluate(() => window.monitor.capture({ text: 'capture owned by this run', range: null, source: 'selection' }));
   await expect.poll(() => page.evaluate(() => window.monitor.replay()).then(events => events.some(e => e.text === 'capture owned by this run'))).toBe(true);
   const auditDir = join(m.appHome, '.agent-terminal/audit', basename(m.repo));
@@ -961,7 +963,7 @@ test('MCP slice 3: terminate uses the current todo count, clears todos and captu
   const auditFile = join(auditDir, readdirSync(auditDir)[0]);
   const result = await slice3Call(m, 'terminate', { expectedTodoCount: '$read_state.terminateTodoCount' });
   expect.soft(outcomeOf(result)).toBe('taken');
-  await expect.soft.poll(() => parseAuditStream(readFileSync(auditFile, 'utf8')).events.at(-1)?.type).toBe('flow.terminated');
+  await expect.soft.poll(() => parseAuditStream(readFileSync(auditFile, 'utf8')).events.filter(e => e.type !== 'step.tokens').at(-1)?.type).toBe('flow.terminated');
   await expect.soft.poll(() => page.evaluate(() => window.monitor.replay())).toEqual([]);
   await expect.soft(page.locator('#flow-strip .flow-control')).toHaveText('Start');
   await approveTurn(m, typeCommand, 'mcp read_state {}');
@@ -972,10 +974,10 @@ test('MCP slice 3: terminate uses the current todo count, clears todos and captu
 test('MCP slice 3: a step-only approve advances the manual step and refreshes the strip', { tag: '@ownapp' }, async () => {
   const m = machine(); slice3Manual(m);
   await slice3Session(m); await page.locator('#flow-strip .flow-control').click();
-  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Prepare');
   const result = await slice3Call(m, 'approve', { step: '$read_state.gate.step' });
   expect.soft(outcomeOf(result)).toBe('taken');
-  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('finish');
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Finish');
 });
 
 test('MCP slice 3: start with a ticket begins real pickup and reports it without opening typed inputs', { tag: '@ownapp' }, async () => {

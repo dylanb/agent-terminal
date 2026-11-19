@@ -4,12 +4,12 @@ import { createGithubRefs, ghArgs, parseGithubRef } from '../../src/main/githubR
 // §24.2.3 T7 — the best-effort GitHub ref resolver shells out to `gh` and NEVER throws: any failure
 // (no gh, not a repo, offline, malformed) degrades to null so the popout shows the bare number.
 
-describe('ghArgs — the gh sub-command per ref kind', () => {
+describe('ghArgs — the gh sub-command per ref kind, naming the repository', () => {
   it('builds an issue view request for a ticket', () => {
-    expect(ghArgs('issue', 25)).toEqual(['issue', 'view', '25', '--json', 'title,body,url']);
+    expect(ghArgs('issue', 25, 'github.com/o/r')).toEqual(['issue', 'view', '25', '--repo', 'github.com/o/r', '--json', 'title,body,url']);
   });
   it('builds a pr view request for a PR', () => {
-    expect(ghArgs('pr', 29)).toEqual(['pr', 'view', '29', '--json', 'title,body,url']);
+    expect(ghArgs('pr', 29, 'github.com/o/r')).toEqual(['pr', 'view', '29', '--repo', 'github.com/o/r', '--json', 'title,body,url']);
   });
 });
 

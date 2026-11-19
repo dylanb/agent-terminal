@@ -142,6 +142,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
       `${head}^{commit}`, //     non-commit operand would diff instead of failing toward the check firing
     ];
   }
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const numstatOut = await runBuffer(
     'git',
     ['diff', '--numstat', ...shared, '--end-of-options', ...revisions],
@@ -149,6 +150,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     'frozen-tests diff failed',
     options,
   );
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const removedOut = await runBuffer(
     'git',
     ['diff', '--name-only', '--diff-filter=DT', ...shared, '--end-of-options', ...revisions],
@@ -183,6 +185,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
   // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   await run(
     'git',
     ['rev-parse', '--verify', '--end-of-options', `${baseline}^{commit}`],
@@ -193,6 +196,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // baseline (degrade). An ls-tree failure — the tree/blob unreadable, e.g. a partial clone missing the object —
   // is NOT absence; it propagates and rejects (fail toward firing), as does a read of a path that
   // ls-tree just proved is present.
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const listed = await run(
     'git',
     ['ls-tree', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
@@ -211,6 +215,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   }
   // Size FIRST (cat-file -s): an over-cap blob classifies as malformed "too large" identically to the
   // working-tree loader (MAX_CAPABILITIES_BYTES shared), and never exceeds the subprocess stdout buffer below.
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const sizeOut = await run(
     'git',
     ['cat-file', '-s', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
@@ -221,6 +226,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   if (!Number.isInteger(size) || size > MAX_CAPABILITIES_BYTES) {
     return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
   }
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const blob = await runBuffer(
     'git',
     ['cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
@@ -295,12 +301,14 @@ export async function workingTreeTestPaths(query: {
   const { repoDir, testGlobs } = query;
   if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
 
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const trackedOut = await runBuffer(
     'git',
     ['diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
     repoDir,
     'working-tree tests: git diff failed',
   );
+  // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
   const untrackedOut = await runBuffer(
     'git',
     ['ls-files', '-o', '--exclude-standard', '-z'],

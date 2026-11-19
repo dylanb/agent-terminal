@@ -5,19 +5,36 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { exampleDecisionFile } from '../../src/shared/flowBranch';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
+import { stepLibraryDir } from '../../src/main/stepLibrary';
+import { agentWorkingDir, claudeCodeProjectLogDir, codexSessionsDir } from '../../src/main/agentUsage/logRoots';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { FAKE_SPAWN_ARM, fakeSpawnShell } from './fakeProcesses';
+import {
+  FAKE_AT,
+  FAKE_CWD,
+  FAKE_TOTAL,
+  claudeCodeSessionFile,
+  claudeCodeUsageLine,
+  codexRolloutFile,
+  codexSessionMetaLine,
+  codexTokenCountLine,
+  codexUsage,
+  type CodexForm,
+  type TokensWithoutCacheWrite,
+} from '../helpers/agentUsageLogs';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -70,6 +87,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // against AND the baseline `<sha>^{commit}` resolve baselineCapabilities does — the canned bootstrap/flow
     // rev-parse arms below (and the plain `rev-parse HEAD` the drive uses) never take that form, so they keep
     // their scripted answer; a blanket rev-parse delegation breaks the drive (the loop never starts).
+    // §27.4 — whether git would hide the reviewers the app is about to write is asked of real git, by its exact form.
+    `if [ "$1" = "-C" ] && [ "$3" = "check-ignore" ]; then exec ${realGit} "$@"; fi\n` +
     (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files|ls-tree|cat-file) exec ${realGit} "$@";; esac\n` : '') +
     (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
     // §28.5.1 — the frozen baseline's branch key: `rev-parse --abbrev-ref HEAD` (commit adapter's capture +
@@ -139,7 +158,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","baseRefName":"main","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
     // The open PR a branch already has, answered only to a `--head` lookup and only when the knob is set, so a pickup's
     // own conflict probe (run without it) still sees a free branch.
     'if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ -n "$FAKE_GH_BRANCH_PR" ] && [[ " $* " = *" --head "* ]]; then printf \'[{"number":%s,"url":"https://github.com/fake/repo/pull/%s","isCrossRepository":false}]\\n\' "$FAKE_GH_BRANCH_PR" "$FAKE_GH_BRANCH_PR"; exit 0; fi\n' +
@@ -163,10 +182,11 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
     // sub-ticket's label set is independently assertable.
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; echo "$value" >> "$FAKE_GHGIT_LOG.issue-label.$3"; exit 0; fi\n' +
-    // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
+    // As gh does, `pr create --body-file -` reads the whole body before it answers, so the app's write never meets
+    // a closed pipe. The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale.
-    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then case " $* " in *" --body-file - "*) cat > /dev/null;; esac; [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo "[]"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.pr-label"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then echo "$3" > "$FAKE_GHGIT_LOG.pr-ready"; exit 0; fi\n' +
@@ -264,7 +284,126 @@ export interface StepScript {
   consolidateAttempts?: string[];
   // Shell run before the done-signal of this step's n-th turn of each kind (index = n-1).
   extraShell?: { work?: string[]; review?: string[]; consolidate?: string[] };
+  // What this step's n-th turn of each kind bills (index = n-1), logged before its done-signal; needs the fake's
+  // `usage` option.
+  usage?: { work?: FakeBill[]; review?: FakeBill[]; consolidate?: FakeBill[] };
   logInjected?: boolean;
+}
+
+// ---- Token usage the fake agent logs (#29) ----
+
+/** One billed call; `cacheWrite` is left out of a call an earlier Codex (no cache-write figure) bills. */
+export interface FakeCall {
+  tokens: TokensWithoutCacheWrite & { cacheWrite?: number };
+  /** A reviewer subagent's call: Claude Code logs it in the session's `subagents/agent-<id>.jsonl`. */
+  subagent?: string;
+  /** Claude Code: the call repeated on this many lines (one per streamed block). Default 1. */
+  lines?: number;
+}
+export type FakeBill = FakeCall[];
+
+/** The roots the fake logs under, the same ones the app reads. `codexCwd` is what a Codex session records as its
+ *  working directory: by default its own (`null`: none at all). */
+export interface FakeUsageLogs {
+  claudeConfigRoot: string;
+  codexHome: string;
+  worktree: string;
+  codexForm: CodexForm;
+  codexCwd?: string | null;
+}
+
+/** The environment that points the app at the roots the fake logs under: spread it into the launch env, so the two
+ *  can never name different roots. */
+export const agentLogEnv = (usage: FakeUsageLogs): { CLAUDE_CONFIG_DIR: string; CODEX_HOME: string } => ({
+  CLAUDE_CONFIG_DIR: usage.claudeConfigRoot,
+  CODEX_HOME: usage.codexHome,
+});
+
+interface LogFolders {
+  claudeDir: string;
+  codexDir: string;
+  codexForm: CodexForm;
+  codexCwd?: string | null;
+}
+
+const logFolders = (usage: FakeUsageLogs): LogFolders => ({
+  claudeDir: claudeCodeProjectLogDir(usage.claudeConfigRoot, agentWorkingDir(usage.worktree)),
+  codexDir: codexSessionsDir(usage.codexHome),
+  codexForm: usage.codexForm,
+  codexCwd: usage.codexCwd,
+});
+
+export interface FakeAgentOptions {
+  usage?: FakeUsageLogs;
+  /** Also installs the fake under these names, so the app sees a real agent's command and the fake bills in that
+   *  agent's log form. */
+  names?: ('claude' | 'codex')[];
+  /** A line the operator types to the fake, and what it bills in answer: the operator's own conversation. */
+  conversation?: Record<string, FakeBill>;
+}
+
+const FAKE_BILL = join(__dirname, 'fakeBill.cjs');
+const FAKE_PID = '__FAKE_PID__';
+// Each run of a bill is a new API call, so a retried turn or a line typed twice bills again.
+const FAKE_RUN = '__FAKE_RUN__';
+const FAKE_CLAUDE_SESSION = 'fake-claude-session';
+const placeholders = { at: FAKE_AT, cwd: FAKE_CWD, total: FAKE_TOTAL, pid: FAKE_PID, run: FAKE_RUN };
+
+/** A bill that fails ends the agent, so a test whose fixture is wrong fails there rather than on missing spend. */
+const fakeBillSh = (binDir: string, action: 'start' | 'bill', payload: object): string =>
+  `{ node ${shellQuote(FAKE_BILL)} "$(basename "$0")" "$$" ${action} '${b64(JSON.stringify({ placeholders, stateDir: binDir, ...payload }))}' || exit 2; }`;
+
+const codexCwdOf = (logs: LogFolders): string | null => (logs.codexCwd === undefined ? FAKE_CWD : logs.codexCwd);
+
+function codexBillRecords(logs: LogFolders, bill: FakeBill): { records: { last: Record<string, number>; line: string }[] } | { error: string } {
+  try {
+    return {
+      records: bill.map((call) => {
+        const last = codexUsage(logs.codexForm, call.tokens);
+        return { last, line: codexTokenCountLine({ timestamp: FAKE_AT, total: FAKE_TOTAL, last }) };
+      }),
+    };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The shell that logs `bill` in the form of the agent the fake was invoked as. */
+function billSh(binDir: string, logs: LogFolders, bill: FakeBill): string {
+  const claude = bill.map((c, call) => {
+    const id = `fake-${FAKE_RUN}-${call}`;
+    const tokens = { ...c.tokens, cacheWrite: c.tokens.cacheWrite ?? 0 };
+    const sessionId = FAKE_CLAUDE_SESSION;
+    return {
+      file: join(logs.claudeDir, claudeCodeSessionFile(sessionId, c.subagent)),
+      lines: Array.from({ length: c.lines ?? 1 }, (_, block) =>
+        claudeCodeUsageLine({ id, timestamp: FAKE_AT, tokens, sessionId, agentId: c.subagent, cwd: FAKE_CWD, block }),
+      ),
+    };
+  });
+  return fakeBillSh(binDir, 'bill', { claude, codex: codexBillRecords(logs, bill) });
+}
+
+/** The shell a fake invoked as `codex` runs as it starts: Codex opens its rollout file when a session starts. */
+const codexStartSh = (binDir: string, logs: LogFolders): string =>
+  fakeBillSh(binDir, 'start', {
+    codex: {
+      file: codexRolloutFile(logs.codexDir, Date.now(), `fake-${FAKE_PID}`),
+      meta: codexSessionMetaLine({ timestamp: FAKE_AT, id: `fake-${FAKE_PID}`, cwd: codexCwdOf(logs), form: logs.codexForm }),
+    },
+  });
+
+function withUsage(binDir: string, logs: LogFolders | undefined, step: StepScript): StepScript {
+  if (step.usage === undefined) return step;
+  if (logs === undefined) throw new Error('a step bills token usage, but the fake agent was seeded without its usage logs');
+  if (step.work === 'noop' && (step.usage.work?.length ?? 0) > 0) throw new Error('a noop work turn runs no shell, so its usage would never be billed');
+  const turns = (kind: 'work' | 'review' | 'consolidate'): string[] | undefined => {
+    const bills = step.usage?.[kind] ?? [];
+    const extra = step.extraShell?.[kind] ?? [];
+    const n = Math.max(bills.length, extra.length);
+    return n === 0 ? undefined : Array.from({ length: n }, (_, i) => [bills[i] === undefined ? '' : billSh(binDir, logs, bills[i]), extra[i] ?? ''].filter((s) => s.length > 0).join('; ') || ':');
+  };
+  return { ...step, extraShell: { work: turns('work'), review: turns('review'), consolidate: turns('consolidate') } };
 }
 
 const turnCountFn = (binDir: string): string => {
@@ -422,8 +561,15 @@ const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
 // REVIEW-AND-FIX prompt it writes the round report + the review done-file. It records the boundary commands and
 // bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
-export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>): void {
-  const scripts = Object.entries(steps);
+export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>, options: FakeAgentOptions = {}): void {
+  const usage = options.usage === undefined ? undefined : logFolders(options.usage);
+  const scripts = Object.entries(steps).map(([id, s]): [string, StepScript] => [id, withUsage(binDir, usage, s)]);
+  if (usage === undefined && options.conversation !== undefined) throw new Error('the fake agent bills a conversation, but was seeded without its usage logs');
+  const conversationArms =
+    usage === undefined
+      ? ''
+      : Object.entries(options.conversation ?? {}).map(([line, bill]) => `    ${shellQuote(line)}) ${billSh(binDir, usage, bill)} ;;\n`).join('');
+  const codexStart = usage === undefined ? '' : `if [ "$(basename "$0")" = codex ]; then ${codexStartSh(binDir, usage)}; fi\n`;
   // A step id that prefixes another (`red`, `red-2`) must not capture its turns, so longer ids match first.
   const ordered = [...scripts].sort(([a], [b]) => b.length - a.length);
   const repairing = scripts.find(([, s]) => s.review === 'omit-then-repair')?.[1];
@@ -439,6 +585,8 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
+    fakeSpawnShell(binDir) +
+    codexStart +
     'while IFS= read -r line; do\n' +
     logInjected +
     '  [ -z "$line" ] && continue\n' +
@@ -447,16 +595,34 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     repairArm +
     '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${FAKE_SPAWN_ARM}\n` +
+    conversationArms +
     ordered.flatMap(([id, s]) => stepArms(id, s)).join('\n') +
     '\n  esac\n' +
     'done\n';
-  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+  for (const name of ['fake-agent', ...(options.names ?? [])]) writeFileSync(join(binDir, name), script, { mode: 0o755 });
 }
 
 /** The one-step call of `seedFakeAgentSteps`. */
 export function seedFakeAgentV2(binDir: string, opts: StepScript & { stepId: string }): void {
   const { stepId, ...step } = opts;
   seedFakeAgentSteps(binDir, { [stepId]: step });
+}
+
+// Shell for one scripted turn of an adopted-PR run, given through `StepScript.extraShell`.
+/** Commits `contents` at `path` on the checked-out branch: one fix commit. */
+export const agentCommitsFixSh = (path: string, contents: string, message: string): string =>
+  `mkdir -p "$(dirname ${shellQuote(path)})"; printf %s '${b64(contents)}' | base64 -d > ${shellQuote(path)}; ` +
+  `git add -- ${shellQuote(path)}; git commit -q -m ${shellQuote(message)}`;
+/** Appends the checked-out branch to `.agent-terminal/branches-seen`, one line per turn. */
+export const AGENT_LOGS_BRANCH_SH = 'mkdir -p .agent-terminal; git rev-parse --abbrev-ref HEAD >> .agent-terminal/branches-seen';
+/** Checks out `branch`, creating or resetting it at the current commit, so the next turn starts on it. */
+export const agentSwitchesBranchSh = (branch: string): string => `git checkout -q -B ${shellQuote(branch)}`;
+
+/** Copies the shipped step library to `root`'s library, where Install examples would leave it, for a test that
+ *  runs a shipped flow built from step references. */
+export function seedBundledStepLibrary(root: string): void {
+  cpSync(join(process.cwd(), 'example', 'steps'), stepLibraryDir(root), { recursive: true });
 }
 
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {
@@ -494,6 +660,59 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
   if (swapped === withCompletion) throw new Error('seedCompletionGateConfig: plan-loop gh gate not found to swap for commit');
   writeFileSync(defPath, swapped);
   return cfg;
+}
+
+export const DECIDING_STEP = 'triage';
+const DECISION_FILE = 'verdict.json';
+const GROOM_ROSTER = (load(readFileSync(join(exampleConfigDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'), 'utf8')) as { reviewers: { persona: string }[] })
+  .reviewers.map((r) => r.persona);
+
+// Clone the example config and give its groom-loop a JSON `verdict` output named as its decision output.
+export function seedDecisionConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'groom-loop', 'groom-loop.yaml');
+  const def = load(readFileSync(defPath, 'utf8')) as { outputs: { id: string; path: string }[] } & Record<string, unknown>;
+  def.outputs.push({ id: 'verdict', path: DECISION_FILE });
+  def.decision = { output: 'verdict' };
+  writeFileSync(defPath, dump(def));
+  return cfg;
+}
+
+/** The fake agent of the `triage` groom-loop step: its work turn writes the groomed ticket and the decision file. */
+export function decidingAgent(value: string, note?: string): StepScript & { stepId: string } {
+  const decision = exampleDecisionFile(value, note);
+  const rel = `.agent-terminal/loop/artifacts/${DECISION_FILE}`;
+  return {
+    stepId: DECIDING_STEP,
+    artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md',
+    work: 'complete',
+    roster: GROOM_ROSTER,
+    extraShell: { work: [`mkdir -p "$(dirname ${rel})"; printf %s '${b64(decision)}' | base64 -d > ${rel}`] },
+  };
+}
+
+/** Clone the example config and give its groom-goal-loop a JSON `verdict` output named as its decision output. */
+export function seedGoalDecisionConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'groom-goal-loop', 'groom-goal-loop.yaml');
+  const def = load(readFileSync(defPath, 'utf8')) as { outputs: { id: string; path: string }[] } & Record<string, unknown>;
+  def.outputs.push({ id: 'verdict', path: DECISION_FILE });
+  def.decision = { output: 'verdict' };
+  writeFileSync(defPath, dump(def));
+  return cfg;
+}
+
+/** The `/goal` arm of the `triage` groom-goal-loop step: writes the groomed ticket, its report and the decision
+ *  file, then finishes the goal and runs the decision check its prompt hands it. */
+export function goalDecidingAgent(value: string, note?: string): string {
+  const rel = `.agent-terminal/loop/artifacts/${DECISION_FILE}`;
+  return (
+    `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker(DECIDING_STEP)])}; ` +
+    `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ` +
+    `printf %s '${b64(exampleDecisionFile(value, note))}' | base64 -d > ${rel}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`
+  );
 }
 // ---- §28.10 — chain e2e budgets ----
 // A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the

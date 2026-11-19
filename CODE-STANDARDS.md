@@ -75,8 +75,21 @@ be found by hand, and a test can keep passing against a message the app no longe
 needs a registered terminal uses `connectScriptedTerminal` (`tests/helpers/scriptedControllerTerminal.ts`).
 The exception is a test whose subject *is* the wire format — version negotiation, malformed or fragmented
 frames, the parser's accept/reject rules — where the typed-in bytes are the contract; those files are
-listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. A `no-restricted-syntax` rule there flags a literal
+listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. The `local/protocol-constants` lint rule there flags a literal
 `version` or `minor` on a message a controller test builds.
+
+## A lint check is its own rule; a restriction rule has one owner per file
+
+A lint check that `eslint.config.mjs` adds for a set of files is its own named rule, built with
+`selectorRule` there and enabled as `local/<name>`, never one more selector list in a
+`no-restricted-syntax` block. In ESLint's flat config a rule that takes options is set, not merged: the last
+block that names a file replaces every earlier block's options for that rule, so a second
+`no-restricted-syntax` (or `no-restricted-properties`, `-imports`, `-globals`) block over files an earlier
+block already covers silently switches the earlier checks off there. The controller tests lost the
+sort-control check that way, unseen, because each block had to repeat every earlier list and one repeat was
+missed. Named rules add up instead. A core `no-restricted-*` rule stays fine for files no other block sets
+it for; `tests/unit/lintRestrictionOwnership.test.ts` fails when two blocks set the same one for any file in
+the repository.
 
 ## An injection seam names a domain concept, not the shape of what backs it
 
@@ -142,6 +155,13 @@ redness gets pre-explained as "the environment" and stops being a signal, which 
 behind a red bar. A failing, unrunnable or broken suite is never normalized or deferred to CI; only when
 the Podman harness itself cannot run is it grounds to stop and escalate.
 
+In an agent-loop flow, *done* is the ticket's end (spec §28.8 item 4). A build step (infra, RED, GREEN and
+refactor, and `simple-dev-v1`'s dev step) shows a run of the unit, integration and `browser` suites plus the
+e2e specs for its slice or increment, if it has one, and those that cover the files it changed (a spec that
+uses a changed harness, fixture or fake covers it), all passing except the new or edited tests a RED expects
+to fail by assertion. The full Podman e2e runs at the integration-slice gate and at finalization, and the test
+proof runs everything before a PR is ready or merges.
+
 ## Untrusted data crosses a boundary as data, never as syntax
 
 Anything crossing a process, shell, or OS boundary into a place the far side interprets is carried as a
@@ -149,6 +169,10 @@ structured value — env var, `argv` element, quoted literal — **never concate
 side parses** (CWE-78). Instances: paste-breakout sanitization at the injection seam (§7.5/§9.3), and the
 §23.5 launch target crossing the OS boundary as a distinct env value rather than spliced into a command
 line. When the boundary is a POSIX shell, the enforcement is the shell-quoting rule below.
+
+A `gh` PR, issue or comment body is free text of any length, so it travels on stdin (`--body-file -`, or
+`--input -` for `gh api`), never as an `argv` element: Linux caps one argument at 131,072 bytes. The
+`local/no-gh-body-argv` ESLint rule enforces this over `src/` and `scripts/`.
 
 ## Git in a checked-out repository — `src/main/gitHardening.ts`, never a second copy
 
@@ -159,6 +183,9 @@ outranks any repository value. So a new `git` call that runs in a checked-out re
 copy. This is a floor, not complete hardening. Each caller still neutralizes its own command's execution
 surfaces (textconv and external diff, filter and merge drivers, and so on), and a call that reaches the network
 adds protocol and credential hardening on top. Existing callers stay as they are; this rule governs new work.
+The `local/git-hardening` ESLint rule enforces it over `src/`: a call whose first argument is `'git'` must lead
+its argv with a spread of `coreExecHardeningArgs(…)` or `bootstrapProtectedArgs(…)`, directly or through a
+`const` holding one. Each older caller carries a line-level exemption that states its reason.
 
 ## Shell quoting — `src/shared/shellQuote.ts`, never hand-rolled
 
@@ -190,6 +217,22 @@ Confinement then holds **inside** the resolved jail either way: `confinedRealPat
 lexical escape (CWE-22), a symlink the caller would follow out (CWE-59), and a later swap that redirects
 the read (CWE-367). It lives in `src/main/`, not `src/shared/`, because it needs `node:fs` and `src/shared/`
 must stay renderer-importable.
+
+## Who can write a path — `src/main/ownerOnlyPath.ts`, never inline
+
+Code that trusts a location not to be swapped by another local user (a folder it reuses, a file the app will
+launch, a private directory it keeps a socket in) decides it through this module, never an inline mode or owner
+test. Three inline copies of this check had drifted apart: one checked the owner and no ancestors, two checked
+ancestors and no owner, and each walked symlinks differently. A path is safe only when the user or root owns it
+and no group or other user can write it, because a path's owner can always replace it.
+
+- `ownerOnlyChain(start, uid, stopAt?)` judges the real folder and every real ancestor, so a symlink cannot hide
+  an open folder (CWE-59).
+- `ownerOnlyPath(p, uid)` judges one file.
+- `isPrivateDirectory(stats, uid)` is the stricter check for a directory only the user may even read.
+
+Each result names its outcome (`ownerOnly`, `othersCanWrite`, `ownedByAnother`, `unreadable`), and a caller
+handles every one: the fix a user is told differs by outcome, and an unreadable path fails closed.
 
 ## Errno narrowing and error messages — `src/main/errno.ts`, never inline
 
@@ -225,6 +268,16 @@ to `iteration - baseline >= cap` flips the safe direction, so a planted baseline
 (or `NaN` / `±Inf`) makes the backstop **never fire** — unbounded autonomous iteration from one line of
 untrusted YAML. Each layer gets its own RED test: the reader over the hostile numeric family (`-1`, `NaN`,
 `±Inf`, non-integer), the decision over the relational violation.
+
+## A GitHub read checks that the answer is the one it asked for
+
+`gh` answers whatever its arguments resolve to: a redirected repository, a renamed one, or a default `--repo`
+the caller did not intend. So a read of one GitHub object (a pull request, an issue, a comment) checks the
+answer's identity before using any field of it: the number it asked for, and a URL in the repository it asked.
+An answer that fails either check is refused with a reason naming what was asked, never read as a near miss.
+The parser takes what was asked as a parameter, so the check cannot be skipped by a caller. The pattern to copy
+is `parseGitHubPullRequest` in `src/main/githubPullRequest.ts`, which also refuses a state, a branch or a
+closing ticket it cannot read. Existing reads stay as they are; this rule governs new work.
 
 ## An agent-produced artifact contract — one vocabulary, a minimal predicate, a self-check
 
@@ -268,7 +321,9 @@ and leaves a pre-existing one **byte-for-byte unchanged**.
 
 This generalizes: production never **silently** rewrites a user's tooling config — `.git/`, editor
 configs, shell rc files — to tidy its own state. The exemption is an **explicit, user-invoked install
-action** (§23.5; the §18.1 install-examples action and its destinations), and it is an exemption from
+action** (§23.5; the §18.1 install-examples action and its destinations) or a run's own reviewer install
+(§27.4: one app-owned line, `/.claude/agents/*--*.md`, in the repository's `info/exclude`, and the reviewer
+files it hides, written when the operator starts or restarts a run, or a reviewed turn is checked), and it is an exemption from
 *silence*, not from care: it writes only where the user asked, asks before replacing a file it did not
 create, leaves a declined file byte-for-byte unchanged, and never deletes. Writing into a directory another
 tool owns — `~/.claude/skills`, `~/.claude/commands` — is permitted on exactly those terms and no others.
@@ -405,6 +460,23 @@ The RED test provokes the failure at each boundary: a rejection, a throw before 
 throw inside the handler's own work, such as a subscriber. It asserts the fallback and the recorded reason.
 Vitest fails a run on an unhandled rejection, so an escape fails the test even where no assertion is reached.
 
+## Background polling has a bounded lifecycle
+
+A background poller MUST bound each lookup and request cancellation when its bound expires, when polling
+is no longer needed, or when the poller is disposed. Cancellation is a request, not proof that the
+dependency stopped: a lookup that never settles must not prevent recovery, and a late result must not
+publish obsolete state or restart stopped polling. Clear pending timers when stopping and make results
+from abandoned attempts inert, including after polling starts again.
+
+Schedule the next lookup only after the previous attempt settles or is abandoned, with the polling gap
+measured from that point. A repeating timer that starts more lookups while earlier ones remain pending
+can accumulate work when the dependency slows down. `src/main/waitingDetector.ts` is the live example;
+the mechanism used to identify an attempt is not part of the contract.
+
+RED tests supply a dependency that never settles and one that answers after cancellation. Assert the
+observable fallback and recovery after timeout, and that late answers cannot replace current state or
+restart polling after shutdown. Cover stopping and restarting while an older attempt is still pending.
+
 ## Never silently swallow an error whose consequence is a state the user cannot recover from
 
 The opposite of the best-effort rule above: there, a failure in an *inessential* effect must be contained;
@@ -434,6 +506,16 @@ otherwise a caller that arrives with the flag already set performs a wipe the po
 deleted and its PR closed regardless of `on_conflict`, because the policy was consulted only on the path
 that *asked*). The confirm-first rule for hard-to-reverse and outward-facing actions stands on top of this,
 not instead of it.
+
+## An outward side effect that writes more than once runs every refusal before its first write
+
+A gate effect that makes several outward writes (a push, then a PR, then a comment) decides every refusal it
+can before it makes the first one: the state of the branch on GitHub, whether its PR exists, whether the
+comment fits. A refusal discovered between two writes leaves a half-published result on GitHub that the next
+attempt must reconcile, and the operator sees a partial outcome nothing in the app named. Read what the
+refusals need once, in the check phase, and have the write phase use that answer instead of reading it again.
+A write can still fail on its own; that failure is reported, and a retry finds the earlier writes and continues
+from them. `publish-pr-review` (`src/main/publishPrReview.ts`) is the reference.
 
 ## Every entry in the run log must be true
 
@@ -521,6 +603,16 @@ ceiling, and a **worker that cannot tear down**. A worker-teardown timeout belon
 cannot absorb it: Playwright reports `1 error was not a part of any test` and exits non-zero with every test
 green. Generally: when a shared fixture is expensive and only *some* tests can use it, make it opt-out and
 pin the opt-out.
+
+## An e2e test that checks what the screen shows gets there by pressing the control
+
+When an e2e test asserts what the UI shows after an action, it takes that action through the UI: it presses
+the control, types into the field, picks the option. Calling the preload API directly (`window.flow.*`,
+`window.term.*`) skips the renderer's own path from the press to the repaint, so the test can pass while the
+control is broken, or fail because the screen was never told to repaint. The Restart test in `app.spec.ts`
+flaked for exactly that reason until it pressed the strip's Advance control. Calling the API remains fine for
+setup the assertion does not depend on, such as bringing a run to the step under test. Existing tests stay
+as they are; this rule governs new work.
 
 ## Test runs own their GUI windows through cleanup
 

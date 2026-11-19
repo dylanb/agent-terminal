@@ -11,7 +11,7 @@ import { resolveWindowIconPath } from '../../src/main/appIcon';
 import { cardCounts, statusSummary } from '../../src/shared/controllerCardClassification';
 import { directoryCards } from '../../src/shared/controllerCards';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, workStatus } from '../helpers/controllerStatusFixture';
+import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, withActivity, workStatus } from '../helpers/controllerStatusFixture';
 
 const at = (id: string, launchDirectory: string, overrides: Partial<ControllerTerminal> = {}): ControllerTerminal =>
   ({ id, launchDirectory, repositoryRoot: launchDirectory, work: workStatus({ activity: 'active' }), ...overrides });
@@ -23,7 +23,7 @@ const disconnected = (id: string, launchDirectory: string) => at(id, launchDirec
 /** Six cards whose compared counts all differ: connected 5, errors 3 (1 disconnected), needs a human 2. */
 function conflictMix(): ControllerTerminal[] {
   const { members, unrelated } = directoryConflictFixture();
-  return [...members, { ...unrelated, work: { ...unrelated.work, activity: 'quiet' } }, STATUS_CASES['needs-human'].terminal, STATUS_CASES.oversized.terminal, STATUS_CASES.disconnected.terminal, STATUS_CASES.working.terminal];
+  return [...members, { ...unrelated, work: withActivity(unrelated.work!, 'quiet') }, STATUS_CASES['needs-human'].terminal, STATUS_CASES.oversized.terminal, STATUS_CASES.disconnected.terminal, STATUS_CASES.working.terminal];
 }
 
 describe('the tray view', () => {

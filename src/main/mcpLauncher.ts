@@ -3,7 +3,7 @@ import { MCP_HOOK_ARG, MCP_LAUNCHER_NAME, MCP_WINDOW_ENV, MCP_WINDOW_EXEC_ENV, M
 import { shellQuote } from '../shared/shellQuote';
 import { atomicWriteFileSync } from './atomicFile';
 import { bundledScript, NODE_MODE_ASSIGNMENT, nodeModeCommand } from './nodeMode';
-import type { LaunchInvocation } from './cliShim';
+export interface McpInvocation { execPath: string; appArgs: string[] }
 
 export const MCP_ENTRY = 'mcp';
 
@@ -20,7 +20,7 @@ export function mcpLaunch(appHome: string): McpLaunch {
   return { command: join(appHome, '.agent-terminal', 'claude-code', MCP_LAUNCHER_NAME), args: [] };
 }
 
-export async function refreshMcpLauncher(appHome: string, invocation: LaunchInvocation): Promise<McpLaunch> {
+export async function refreshMcpLauncher(appHome: string, invocation: McpInvocation): Promise<McpLaunch> {
   const launch = mcpLaunch(appHome);
   const ownBuild = `"$${MCP_WINDOW_EXEC_ENV}"`;
   const script = [

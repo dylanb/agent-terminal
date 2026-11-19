@@ -50,7 +50,7 @@ export function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunSt
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
-      bootstrap: over.bootstrap ?? null,
+      pickup: over.bootstrap ?? null,
     }),
     assembleReport: (_r, report) => {
       rec.assembles.push(report.path);
@@ -111,6 +111,9 @@ export function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunSt
     reopenStep: () => null,
     sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => ({ undo: () => true }),
+    auditDecision: () => undefined,
     ...over,
   };
   return { deps, rec };

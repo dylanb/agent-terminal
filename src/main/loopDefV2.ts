@@ -151,6 +151,18 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
+/** A pickup that adopts the existing pull request the step's `pr`-typed input names, instead of opening one for a
+ *  ticket. */
+export interface AdoptPickupV2 {
+  adopt: 'pr';
+}
+
+export type PickupV2 = PickupContractV2 | AdoptPickupV2;
+
+export function isAdoptPickup(pickup: PickupV2): pickup is AdoptPickupV2 {
+  return 'adopt' in pickup;
+}
+
 /** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
  *  full-catalog sweep. Closed set, recognized by exact string. */
 export const POLISH_POLICIES = ['fix', 'defer'] as const;
@@ -185,12 +197,17 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2 | null;
+  pickup: PickupV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
   /** §27.3 */
   brief?: string;
+  decision?: { output: string; path: string; rel: string };
+}
+
+export function decisionOutput(def: LoopDefV2): ArtifactBinding | undefined {
+  return def.decision === undefined ? undefined : { id: def.decision.output, path: def.decision.path, rel: def.decision.rel };
 }
 
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
@@ -205,9 +222,16 @@ export interface LoopDefV2Context {
   flow?: string;
 }
 
+export interface LoopDefLocation {
+  defDir: string;
+  defPath: string;
+}
+
 /** §27.8. */
-function flowLoopsDir(loopsRoot: string, flow: string): string | null {
-  return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
+export function loopDefLocation(loopsRoot: string, name: string, flow: string | null): LoopDefLocation | null {
+  if (!isSafePathSegment(name) || (flow !== null && !isSafePathSegment(flow))) return null;
+  const defDir = flow === null ? path.join(loopsRoot, name) : path.join(loopsRoot, flow, name);
+  return { defDir, defPath: path.join(defDir, `${name}.yaml`) };
 }
 
 const ALLOWED_TOP_KEYS = new Set([
@@ -224,6 +248,7 @@ const ALLOWED_TOP_KEYS = new Set([
   'outputs',
   'exec',
   'brief',
+  'decision',
 ]);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
@@ -277,6 +302,18 @@ function confineArtifact(repoDir: string, pattern: string, what: string): { path
   // rather than def content (§27.8) — a symlink to a name carrying a control character passes the check above.
   if (CONTROL_CHAR.test(rel)) fail(`${what} path resolves through a name containing a control character`);
   return { path: confined, rel };
+}
+
+function confineDecisionFile(repoDir: string, pattern: string): { path: string; rel: string } {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
+  if (jail === null) fail('decision output loop area is unresolvable');
+  const declared = path.resolve(jail, pattern);
+  const folder = confinedRealPath(jail, path.dirname(declared));
+  if (folder === null) fail(`decision output path escapes the artifacts subtree: ${pattern}`);
+  const file = path.join(folder, path.basename(declared));
+  const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, file).split(path.sep)].join('/');
+  if (CONTROL_CHAR.test(rel)) fail('decision output path resolves through a name containing a control character');
+  return { path: file, rel };
 }
 
 function requireSegment(value: unknown, what: string): string {
@@ -387,9 +424,15 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   });
 }
 
-function toPickup(raw: unknown): PickupContractV2 | null {
+function toPickup(raw: unknown): PickupV2 | null {
   if (raw === undefined) return null;
   const pickup = requireRecord(raw, 'pickup');
+  if ('adopt' in pickup) {
+    if (pickup.adopt !== 'pr') fail(`pickup adopt must be pr: ${String(pickup.adopt)}`);
+    const stray = Object.keys(pickup).find((key) => key !== 'adopt');
+    if (stray !== undefined) fail(`pickup adopt: pr takes no other key: ${stray}`);
+    return { adopt: 'pr' };
+  }
   return {
     initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
     branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
@@ -490,6 +533,13 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   if (workCompletion !== undefined && requiresResultBinding(workCompletion) && !outputs.some((o) => o.id === workArtifact)) {
     fail(`work.completion: ${workCompletion} requires work.artifact "${workArtifact}" to name an output binding`);
   }
+  let decision: LoopDefV2['decision'];
+  if (rec.decision !== undefined) {
+    const output = requireString(requireRecord(rec.decision, 'decision').output, 'decision output');
+    const declared = (rec.outputs as Record<string, unknown>[] | undefined)?.find((o) => o.id === output);
+    if (declared === undefined) fail(`decision.output "${output}" is not an output`);
+    decision = { output, ...confineDecisionFile(repoDir, requireString(declared.path, `output ${output} path`)) };
+  }
 
   return {
     version: LOOP_DEF_V2_VERSION,
@@ -513,6 +563,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     outputs,
     exec,
     ...(brief !== undefined ? { brief } : {}),
+    ...(decision !== undefined ? { decision } : {}),
   };
 }
 
@@ -577,15 +628,12 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     const jail = resolveOwnedDirJail(root);
     return jail === null ? [] : [{ root, tierName, jail }];
   });
-  const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
-    const defDir = path.join(dir, name);
-    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+  const candidateIn = (tier: (typeof tierCandidates)[number], flow: string | null): DefCandidate[] => {
+    const at = loopDefLocation(tier.root, name, flow);
+    return at === null ? [] : [{ tierRoot: tier.root, ...at, tierName: tier.tierName, jail: tier.jail }];
   };
-  for (const tier of tierCandidates) {
-    const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);
-    if (flowDir !== null) candidates.push(candidateIn(tier, flowDir));
-  }
-  for (const tier of tierCandidates) candidates.push(candidateIn(tier, tier.root));
+  if (ctx.flow !== undefined) for (const tier of tierCandidates) candidates.push(...candidateIn(tier, ctx.flow));
+  for (const tier of tierCandidates) candidates.push(...candidateIn(tier, null));
 
   for (const { tierRoot, defDir, defPath, tierName, jail } of candidates) {
     const confinedDefPath = confinedRealPathResult(jail, defPath);

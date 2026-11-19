@@ -3,7 +3,7 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { APP_ICONS } from './src/main/appIcon';
 import { copyDevIcon } from './src/main/appIconBuild';
-import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2 } from './src/main/exampleAssetsBuild';
+import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2, copyExampleSteps } from './src/main/exampleAssetsBuild';
 import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
 import { MCP_ENTRY } from './src/main/mcpLauncher';
 
@@ -26,6 +26,7 @@ function copyDevAssetsPlugin(): Plugin {
       copyExampleLoopsV2(rootDir, outDir);
       copyExampleCommands(rootDir, outDir);
       copyExampleCodexSkills(rootDir, outDir);
+      copyExampleSteps(rootDir, outDir);
     },
   };
 }

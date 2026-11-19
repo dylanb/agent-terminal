@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { syncDockedPanel } from '../../src/renderer/src/dockedPanelSync';
 import { createLoopPanel } from '../../src/renderer/src/loopPanel';
-import type { FlowLoopView } from '../../src/shared/ipc';
+import type { FlowLoopView, FlowTokensView } from '../../src/shared/ipc';
+import { RUN_TOTAL_ROW, panelTokenTablesIn, tokenCellIn } from '../helpers/tokenCountsUi';
 
 const loop = (over: Partial<FlowLoopView> = {}): FlowLoopView => ({
   status: 'awaiting-human-pr-approval',
@@ -31,8 +32,8 @@ describe('syncDockedPanel', () => {
     panel.render(loop(), 'build');
     host.querySelector<HTMLElement>('[data-loop-close]')!.focus();
     let focusInPanelAtClose: boolean | null = null;
-    syncDockedPanel(null, '', undefined, {
-      render: (l, t, r) => panel.render(l, t, r),
+    syncDockedPanel(null, '', undefined, undefined, {
+      render: (l, t, r, k) => panel.render(l, t, r, k),
       closePanel: () => {
         focusInPanelAtClose = host.contains(document.activeElement);
       },
@@ -46,7 +47,7 @@ describe('syncDockedPanel', () => {
     const panel = createLoopPanel(host);
     const closePanel = vi.fn();
     const syncExpanded = vi.fn();
-    syncDockedPanel(loop(), 'build', undefined, { render: (l, t, r) => panel.render(l, t, r), closePanel, syncExpanded });
+    syncDockedPanel(loop(), 'build', undefined, undefined, { render: (l, t, r, k) => panel.render(l, t, r, k), closePanel, syncExpanded });
     expect(closePanel).not.toHaveBeenCalled();
     expect(syncExpanded).toHaveBeenCalledTimes(1);
     expect(host.querySelector('.ldl')).not.toBeNull();
@@ -55,8 +56,33 @@ describe('syncDockedPanel', () => {
   it('treats refs-only (no loop) as content', () => {
     const panel = createLoopPanel(host);
     const closePanel = vi.fn();
-    syncDockedPanel(null, 'plan', { ticket: 25 }, { render: (l, t, r) => panel.render(l, t, r), closePanel, syncExpanded: vi.fn() });
+    syncDockedPanel(null, 'plan', { ticket: 25 }, undefined, { render: (l, t, r, k) => panel.render(l, t, r, k), closePanel, syncExpanded: vi.fn() });
     expect(closePanel).not.toHaveBeenCalled();
     expect(host.querySelector('.refs')).not.toBeNull();
+  });
+
+  const TOKENS: { steps: string[]; tokens: FlowTokensView } = {
+    steps: ['plan', 'build'],
+    tokens: {
+      steps: [{ state: 'counted', billed: true, kinds: { cacheRead: { reported: 'all', n: 61_204 }, cacheWrite: { reported: 'all', n: 3_017 }, input: { reported: 'all', n: 402 }, output: { reported: 'all', n: 88 } } }, null],
+      counting: 0,
+      run: { state: 'counted', someStepsUnavailable: false, kinds: { cacheRead: { reported: 'all', n: 61_204 }, cacheWrite: { reported: 'all', n: 3_017 }, input: { reported: 'all', n: 402 }, output: { reported: 'all', n: 88 } } },
+    },
+  };
+
+  it('hands the step names and counts to the panel, which shows them in its token table', () => {
+    const panel = createLoopPanel(host);
+    syncDockedPanel(loop(), 'plan', undefined, TOKENS, { render: (l, t, r, k) => panel.render(l, t, r, k), closePanel: vi.fn(), syncExpanded: vi.fn() });
+    const text = (row: string): string => (tokenCellIn(host, row, 'cacheRead').textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect({ plan: text('plan'), build: text('build'), run: text(RUN_TOTAL_ROW) }).toEqual({ plan: '61,204 counting', build: '—', run: '61,204' });
+  });
+
+  it('counts alone are not content: with no loop and no refs it still closes and clears the panel', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'plan', undefined, TOKENS);
+    const shownBefore = panelTokenTablesIn(host).length;
+    const closePanel = vi.fn();
+    syncDockedPanel(null, 'plan', undefined, TOKENS, { render: (l, t, r, k) => panel.render(l, t, r, k), closePanel, syncExpanded: vi.fn() });
+    expect({ shownBefore, closed: closePanel.mock.calls.length, children: host.childElementCount }).toEqual({ shownBefore: 1, closed: 1, children: 0 });
   });
 });

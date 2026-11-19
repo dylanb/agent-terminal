@@ -354,3 +354,30 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
   });
 
 });
+
+describe('composeReviewAndFixPrompt: a deciding step is told where its decision goes', () => {
+  const base = {
+    roster: reviewRoster(def()),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/2.json',
+    round: 2,
+    turnKey: 'review-triage',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
+  };
+  const decision = { rel: '.agent-terminal/loop/artifacts/d.json', values: ['confirmed', 'rejected'], checkCommand: 'DECISION-CHECK-CMD' };
+
+  it("a deciding round's prompt names its decision file, each value and the check command", () => {
+    const prompt = composeReviewAndFixPrompt({ ...base, decision });
+    expect(prompt).toContain(decision.rel);
+    expect(prompt).toContain('confirmed');
+    expect(prompt).toContain('rejected');
+    expect(prompt).toContain('DECISION-CHECK-CMD');
+  });
+
+  it('a round with no decision names no decision file and no decision check', () => {
+    const prompt = composeReviewAndFixPrompt(base);
+    expect(prompt).not.toContain(decision.rel);
+    expect(prompt).not.toContain('DECISION-CHECK-CMD');
+  });
+});

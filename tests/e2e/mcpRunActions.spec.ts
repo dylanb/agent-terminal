@@ -1,3 +1,4 @@
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ function machine() {
   const home = temp('mcp-entry-home-'); const appHome = temp('mcp-entry-app-'); const repo = temp('mcp-entry-repo-');
   const config = seedIsolatedClaudeConfig('mcp-entry-config-'); roots.push(config);
   const { binDir, logFile } = seedFakeGhGit('mcp-entry-bin-'); roots.push(binDir);
+  installBundledRunReviewers(repo);
   mkdirSync(join(repo, '.git')); mkdirSync(join(repo, '.agent-terminal/loop'), { recursive: true });
   writeFileSync(join(repo, '.git/HEAD'), 'ref: refs/heads/main\n');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: '.agent-terminal/loop/artifacts/plan.md', work: 'complete', review: 'full' });
@@ -83,10 +85,10 @@ for (const mode of ['supplied', 'missing', 'invalid', 'resolved'] as const) {
       expect.soft({ error: result.error, reason: /not valid in the current state/i.test(result.message), namesInput: result.message.includes('next-ticket') }).toEqual({ error: true, reason: true, namesInput: true });
       expect.soft(read(m.logFile)).not.toContain('gh pr ready');
       expect.soft({ run: read(runFile), state: read(stateFile) }).toEqual({ run: before.run, state: before.state });
-      expect.soft(await page.locator('#flow-strip .stn.active .nm').textContent()).toBe('plan');
+      expect.soft(await page.locator('#flow-strip .stn.active .nm').textContent()).toBe('Plan');
     } else {
       expect.soft(result).toMatchObject({ error: false });
-      await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('next');
+      await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Next');
       const persisted = load(read(stateFile)) as { inputs?: Record<string, string> } | null;
       expect.soft(persisted?.inputs?.['next-ticket']).toBe('322');
       expect.soft(read(m.logFile)).toContain('gh pr ready 321');
@@ -114,7 +116,7 @@ for (const tool of ['start', 'approve'] as const) {
     writeFileSync(defPath, dump(def));
     writeFileSync(`${m.logFile}.local-branch`, 'plan-loop/issue-322\n'); writeFileSync(`${m.logFile}.remote-branch`, 'plan-loop/issue-322\n');
     await launch(m, { FAKE_GIT_BRANCH_EXISTS: '1' });
-    if (tool === 'approve') { await page.locator('#flow-strip .flow-control').click(); await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare'); }
+    if (tool === 'approve') { await page.locator('#flow-strip .flow-control').click(); await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Prepare'); }
     const result = answer(await call(m, tool, { ...(tool === 'approve' ? { step: '$read_state.gate.step' } : {}), inputs: { ticket: '322' } }));
     expect.soft({ error: result.error, namesPickup: /pickup|conflict|confirmation/i.test(result.message), pending: /started|waiting/i.test(result.message) }).toEqual({ error: false, namesPickup: true, pending: true });
     const dialog = page.locator('#flow-confirm-host .flow-modal');
@@ -174,7 +176,7 @@ test('MCP selects a listed single-loop catalog entry and starts that loop instea
   await expect.soft(page.locator('#flow-picker').getByRole('button', { name: /flow/i })).toHaveText('Flow: single-loop-choice');
   expect.soft(answer(await call(m, 'start', { inputs: {} }))).toMatchObject({ error: false });
   await expect.soft.poll(() => read(join(m.repo, '.agent-terminal/loop/run-state.yaml')), { timeout: 15_000 }).toContain('verdict: clean');
-  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('plan');
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Plan');
 });
 
 test('MCP approve pickup failure shows its blocking error and rolls back one step in the window and next read', { tag: '@ownapp' }, async () => {
@@ -187,16 +189,43 @@ test('MCP approve pickup failure shows its blocking error and rolls back one ste
   writeFileSync(`${m.logFile}.local-branch`, 'plan-loop/issue-322\n');
   await launch(m, { FAKE_GIT_BRANCH_EXISTS: '1' });
   await page.locator('#flow-strip .flow-control').click();
-  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Prepare');
   const result = answer(await call(m, 'approve', { step: '$read_state.gate.step', inputs: { ticket: '322' } }));
   expect.soft({ error: result.error, started: /pickup.*started/i.test(result.message) }).toEqual({ error: false, started: true });
   const dialog = page.locator('#flow-error-host .flow-modal');
   await expect.soft(dialog).toBeVisible();
   await expect.soft(dialog).toContainText('plan-loop/issue-322');
-  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('prepare');
+  await expect.soft(page.locator('#flow-strip .stn.active .nm')).toHaveText('Prepare');
   const persisted = load(read(join(m.repo, '.agent-terminal/flow-state.yaml'))) as { step?: string; inputs?: Record<string, string> };
   expect.soft(persisted).toMatchObject({ step: 'prepare', inputs: { ticket: '322' } });
   if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Dismiss' }).click();
   const current = JSON.parse(answer(await prompt(m, 'mcp read_state {}')).message);
   expect.soft(current).toMatchObject({ flow: { step: 'prepare', runStarted: true }, gate: { step: 'prepare', turn: null } });
+});
+
+
+test('MCP branch entry validates and enters the selected branch before accepting its gate', { tag: '@ownapp' }, async () => {
+  const m = machine();
+  writeFileSync(join(m.repo, '.agent-terminal/flow.yaml'), dump({ name: 'branch-input', steps: [
+    { id: 'plan', kind: 'loop', loop: 'plan-loop', loop_namespace: 'app', decides: ['left', 'right'] },
+    { id: 'left', kind: 'manual', when: { plan: 'left' }, inputs: [{ name: 'left-ticket', type: 'github-ticket', required: true }] },
+    { id: 'right', kind: 'manual', when: { plan: 'right' }, inputs: [{ name: 'right-ticket', type: 'github-ticket', required: true }] },
+  ] }));
+  const defPath = join(m.config, 'loops-v2/plan-loop/plan-loop.yaml');
+  const def = load(read(defPath)) as { pickup?: unknown; outputs: { id: string; path: string }[]; decision?: { output: string }; gate: unknown[] };
+  delete def.pickup;
+  def.outputs.push({ id: 'branch', path: 'branch.json' });
+  def.decision = { output: 'branch' };
+  def.gate = [{ option: 'approve', side_effects: [] }];
+  writeFileSync(defPath, dump(def));
+  await launch(m); await page.locator('#flow-strip .flow-control').click();
+  const runFile = join(m.repo, '.agent-terminal/loop/run-state.yaml');
+  await expect.poll(() => read(runFile), { timeout: 40_000 }).toContain('verdict: clean');
+  writeFileSync(join(m.repo, '.agent-terminal/loop/artifacts/branch.json'), JSON.stringify({ decision: 'right' }));
+  const result = answer(await call(m, 'approve', { step: '$read_state.gate.step', turn: '$read_state.gate.turn', inputs: { 'right-ticket': '322' } }));
+  expect(result).toMatchObject({ error: false });
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('Right');
+  const saved = load(read(join(m.repo, '.agent-terminal/flow-state.yaml'))) as { inputs: Record<string, string> };
+  expect(saved.inputs['right-ticket']).toBe('322');
+  expect(saved.inputs['left-ticket']).toBeUndefined();
 });

@@ -8,7 +8,7 @@ const REPO = '/work/repo-a';
 
 const flowView = (over: Partial<FlowStateView>): FlowStateView => ({
   stepName: 'plan',
-  steps: ['plan', 'build', 'done'],
+  steps: ['plan', 'build', 'done'], stepRuns: ['runs', 'runs', 'runs'], decisions: {},
   position: 1,
   total: 3,
   status: 'in_progress',

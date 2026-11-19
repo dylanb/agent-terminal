@@ -6,10 +6,11 @@ export const CONTROLLER_MAX_STATUS_BYTES = 1024 * 1024;
 
 // §23.6
 export const CONTROLLER_PROTOCOL_MAJOR = 2;
-export const CONTROLLER_PROTOCOL_MINOR = 3;
+export const CONTROLLER_PROTOCOL_MINOR = 4;
 /** The first minor whose peers carry `loopMessage` in status and understand `dismiss-loop-message`. */
 export const CONTROLLER_LOOP_MESSAGE_MINOR = 1;
 export const CONTROLLER_IDENTITY_MINOR = 3;
+export const CONTROLLER_WAITING_MINOR = 4;
 export const CONTROLLER_SUPPORTED_MAJORS: ControllerVersionRange = { min: 2, max: 2 };
 
 export class ControllerVersionMismatch extends Error {

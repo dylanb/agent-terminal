@@ -13,6 +13,9 @@ clipboard works.
 ```sh
 ./scripts/e2e-podman.sh              # whole suite
 ./scripts/e2e-podman.sh "Terminate"  # filter (-g) passed to playwright
+./scripts/e2e-podman.sh 'flowPicker\.spec\.ts|autoGate\.spec\.ts'
+                                     # only those spec files: -g matches the full test title,
+                                     # which includes the spec's path
 E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
                                      # red-check run (§28.5.2): runs the tests listed in
                                      # <dir>/select.txt, writes a JSON report to <dir>/report.json
@@ -66,13 +69,17 @@ podman machine start
   exits and mask the result (see `e2e/entrypoint.sh`).
 - `--shm-size=1g` avoids Chromium's `/dev/shm` crashes; `--cap-add=SYS_ADMIN` lets the
   Chromium sandbox run under rootless Podman.
-- The startup setup check raises a blocking popup in any repository that is not set up for agent loops, and
-  every e2e launch's isolated home would trip it. So both launch paths (`tests/e2e/registeredElectron.ts` and
+- The setup check shows a setup needed button in the status bar in any directory that is not set up for agent
+  loops, and every e2e launch's isolated home would trip it. So both launch paths (`tests/e2e/registeredElectron.ts` and
   `tests/e2e/controllerHarness.ts`) start the app with `APP_SETUP_CHECK=off` unless the test's own `env` sets
   `APP_SETUP_CHECK`. A test that exercises the check passes `APP_SETUP_CHECK: 'on'` in its launch `env`, as
   `tests/e2e/setupCheck.spec.ts` does through `createSetupCheckMachine()`. A case that restarts the app
   passes the same home folder and config dirs to every launch, so state the first launch wrote is still
   there after the restart.
+
+- An agent counts as at the terminal's prompt only when its program name is in `APP_AGENT_COMMANDS` (§27.2). The
+  suite's scripted agents run as `fake-agent`, so `playwright.config.ts` sets `APP_AGENT_COMMANDS` to
+  `claude,codex,fake-agent` for every launch unless the environment already sets it.
 
 ## Coverage caveat
 

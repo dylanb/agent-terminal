@@ -12,6 +12,7 @@
 ### 22.3 Status strip
 
 - A compact read-out in the rail shows step position (n/total and name), gate state and loop progress. The full step timeline and the gate controls expand from it, one click away.
+- With token counts shown (§27.16), the rail's step list carries each step's total, and the run total sits under it.
 
 #### 22.3.1 The status bar
 
@@ -22,6 +23,8 @@ Three parts, all **coexisting** — the bar never suppresses one to show another
 1. **The title.** Precedence **PR → ticket → user-typed**. A ref shows its number immediately (it rides `flow:state`) and upgrades in place to the GitHub title (best-effort; see §24.2.3 for the repo-identity rule); on failure the number stays, and the control is **not** offered as operable until a URL actually resolves. A **user title** is typed in place, persists per worktree, and is **outranked but never discarded** when a ref supplies one — it returns if the refs go away.
 2. **The engine activity.** The only phrase with a live producer is the bootstrap phrase (`Bootstrapping #<n>`, §27.10) + spinner; nothing is shown for the remainder of a turn — the strip carries no busy signal of its own.
 3. **The attention state** (§24.2.3 T4) — the bar turns red while, and only while, the loop is blocked on a human. There is nothing to dismiss: it clears when the loop leaves the human-needed family, and an `auto` gate the engine is still deciding is not in it (§27.9.1 N9b.5(e)). The alert **is** the control, so activating it opens the panel and lands focus on the first available target: a gate decision, the recovery **Retry** in the error state, or the panel's **Close** control as its stable entry point when neither action exists.
+
+Before the title, the bar also shows the setup check's **setup needed** button while the terminal's directory fails a setup condition (§29.1). It is the setup check's own control, not a fourth part of the bar.
 
 **The name belongs to the worktree, not to a flow.** A directory whose `flow.yaml` is missing or malformed is a flow **load-error** — which is *most directories* — and it has no PR and no ticket either, so the user title is the only name it can ever have. It is therefore nameable like any other: the name persists on `flow-state.yaml` independently of the progression, and a broken `flow.yaml` still cannot clobber a good on-disk progression, because naming writes **only** the name.
 

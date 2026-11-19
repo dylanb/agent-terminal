@@ -37,7 +37,7 @@ be built. Those are two increments planned as one: split them into dependency-or
 This is a finding even though increment count and size are otherwise the planner's call.
 
 Grade the `## Fit` block against the code and the increments, rule by rule: no RED/GREEN dependency, at most 400
-changed lines, no new test infrastructure, not an epic. A fitting plan has one increment, so a `Simple-dev fit: yes`
+changed lines, no new test infrastructure, not an epic. A fitting plan has one increment, so a `Light-path fit: yes`
 with more than one increment contradicts itself. A `yes` that the increments, the size estimate or the code
 contradict is a finding, and so is a `no` that does not name each failing rule with its
 evidence. A `no` is never a finding in itself: the operator decides whether to go on in this flow.

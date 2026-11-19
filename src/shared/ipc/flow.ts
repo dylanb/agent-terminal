@@ -1,11 +1,13 @@
-import type { AppBootstrapConflictTarget } from '../appBootstrap';
+import type { AppBootstrapConflictTarget, TicketRef } from '../appBootstrap';
 import type { ConsolidatorVerdict } from '../consolidatorOutput';
+import type { FlowDecision, StepRun } from '../flowBranch';
 import type { StartednessSignal } from '../flowStarted';
 import type { AutoHaltReason, FailedEffectState } from '../gateAuthority';
 import type { LoopActivity } from '../loopActivity';
 import type { HeldRunView } from '../runHold';
 import type { RunIdentity } from '../runIdentity';
-import type { AgentState } from './monitor';
+import type { WaitingValue } from '../waiting';
+import type { RunTokens, StepTokens } from '../tokenCounts';
 import type { ChannelSpecs, SessionId } from './session';
 
 export const FLOW_CHANNELS = {
@@ -81,6 +83,14 @@ export const FLOW_CHANNELS = {
     name: 'flow:resolveAppBootstrapConflict',
     does: 'The renderer answers a branch conflict for the step it names, either wiping the conflicting branch or leaving it.',
   },
+  flowOnAdoptTicketChoice: {
+    name: 'flow:onAdoptTicketChoice',
+    does: 'Main asks the operator which of the tickets a pull request closes is the primary ticket of the run adopting it.',
+  },
+  flowResolveAdoptTicket: {
+    name: 'flow:resolveAdoptTicket',
+    does: 'The renderer answers one ticket-choice offer with the ticket the operator picked, or with Cancel, and learns whether main accepted it.',
+  },
   flowOnEpicPromotionPreview: {
     name: 'flow:onEpicPromotionPreview',
     does: 'Main shows the operator every GitHub change an epic promotion will make, before it runs.',
@@ -133,12 +143,14 @@ export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
 /** The live, derived status of an in-progress step (§22.3 / §24.2.2 S5): a pure function of the
  *  flow state, the repo's todo list, and the §8.3 agent activity. `ready` (every todo is done) is
  *  the gate-readiness signal. Present only while `status === 'in_progress'`. */
-export interface FlowDerived {
-  activity: AgentState;
+export type FlowDerived = (
+  | { activity: 'active'; waiting: null }
+  | { activity: 'quiet'; waiting: WaitingValue | null }
+) & {
   todosDone: number;
   todosTotal: number;
   ready: boolean;
-}
+};
 
 /** §27.9.1 */
 export interface FlowAutoGateView {
@@ -265,9 +277,17 @@ export interface FlowInputSpec {
  *  view when entering a step whose `bootstrap` needs an input that isn't resolved yet. `inputs` are
  *  the fields to collect; `bootstrap` names the command they feed (e.g. `agent-loop pickup`) for the
  *  modal's helper text. The renderer opens its modal, collects values, and calls `flow:provideInput`. */
+export interface FlowInputRefusal {
+  input: string;
+  notice: string;
+  values: Record<string, string>;
+}
+
 export interface FlowPrompt {
   inputs: FlowInputSpec[];
   bootstrap: string;
+  /** Present when main refused the last submission: `notice` explains why `input` was refused, and `values` are what was typed. */
+  refusal?: FlowInputRefusal;
 }
 
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
@@ -276,9 +296,13 @@ export interface FlowPrompt {
  *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
   stepName: string;
-  /** Every step's name, in flow order (§24.2.3 T1) — the §22.3 rail renders one station per entry;
-   *  `stepName` is `steps[position - 1]`. Empty on an `error` view (no steps to show). */
+  /** Every step's name, in flow order (§24.2.3 T1), skipped and undecided ones included; the §22.3 rail
+   *  shows the entries `stepRuns` lets it. `stepName` is `steps[position - 1]`. Empty on an `error` view. */
   steps: string[];
+  /** Whether each entry of `steps` runs on the path decided so far; `position` still indexes `steps`. */
+  stepRuns: StepRun[];
+  /** Each deciding step's latest decision, keyed by step id. */
+  decisions: Record<string, FlowDecision>;
   position: number;
   total: number;
   status: FlowStatus;
@@ -322,13 +346,29 @@ export interface FlowStateView {
   runHold?: HeldRunView;
   /** §27.13 — present while the run is held for the operator to confirm its ticket and pull request. */
   pickupConfirm?: PickupConfirmView;
+  /** Present on every non-error view while the "Show token counts" setting is on. */
+  tokens?: FlowTokensView;
+}
+
+export interface FlowTokensView {
+  /** Aligned with `FlowStateView.steps`; `null` is a dash: a step not entered in this run, or any step before the
+   *  repo's logs are first read. */
+  steps: (StepTokens | null)[];
+  /** The step whose window is open; `null` before the repo's logs are first read. */
+  counting: number | null;
+  /** `null`, a dash, while no step is entered or before the repo's logs are first read. */
+  run: RunTokens | null;
 }
 
 
 /** §27.13 */
 export type PickupConfirmView =
   | { run: RunIdentity; state: 'looking' }
-  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
+  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[]; adopted?: AdoptedPickupConfirm };
+
+/** An adopting run's confirm: the primary ticket its start recorded, shown read-only, or why it cannot be
+ *  recovered. The confirm sends the primary's number; its repository stays in main's record. */
+export type AdoptedPickupConfirm = { recoverable: true; primary: TicketRef } | { recoverable: false; reason: string };
 
 /** §6 — the run is named so a confirm can only release the hold the operator was shown. */
 export interface FlowConfirmRunPickupMsg {
@@ -383,6 +423,32 @@ export interface FlowResolveAppBootstrapConflictMsg
   step: string;
   wipe: boolean;
 }
+
+/** §6/§27.10 — the tickets a pull request closes, offered for the adopting run's primary. `choiceId` ties an answer
+ *  to this offer alone. */
+export interface FlowAdoptTicketChoiceMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  pr: number;
+  choiceId: string;
+  tickets: TicketRef[];
+}
+
+export type AdoptTicketOffer = Omit<FlowAdoptTicketChoiceMsg, 'sessionId'>;
+
+export type AdoptTicketAnswer = { kind: 'ticket'; ticket: TicketRef } | { kind: 'cancel' };
+
+/** §6/§27.10. */
+export interface FlowResolveAdoptTicketMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  choiceId: string;
+  answer: AdoptTicketAnswer;
+}
+
+export type ResolveAdoptTicketResult = { ok: true } | { ok: false; reason: string };
 
 /** §6/§28.7 — the confirm-first preview naming every GitHub mutation the operator authorizes by confirming:
  *  the sub-tickets promotion will create, plus the epic tracking-issue edit and the epic PR close. `epic`/`pr`
@@ -682,6 +748,10 @@ export interface FlowApi {
     wipe: boolean,
     target: AppBootstrapConflictTarget,
   ): void;
+  /** §6/§27.10. */
+  onAdoptTicketChoice(cb: (offer: AdoptTicketOffer) => void): () => void;
+  /** §6/§27.10. */
+  resolveAdoptTicket(repoKey: string, step: string, choiceId: string, answer: AdoptTicketAnswer): Promise<ResolveAdoptTicketResult>;
   /** §6/§28.7 — subscribe to the epic-promotion confirm-first preview (main → renderer). Returns unsubscribe. */
   onEpicPromotionPreview(
     cb: (preview: { repoKey: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }) => void,

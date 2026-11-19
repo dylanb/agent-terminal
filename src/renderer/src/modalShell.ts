@@ -104,15 +104,23 @@ export function createModalShell(
             ...modal.querySelectorAll<HTMLElement>('a[href],button,input,textarea,select,[tabindex]'),
           ].filter((el) => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1');
           if (f.length === 0) return;
+          // A named radio group is one tab stop, held by its checked radio, so its first or last radio stands
+          // for the whole group (WAI-ARIA APG radio group).
+          const radioGroup = (el: Element | null): HTMLInputElement[] =>
+            el instanceof HTMLInputElement && el.type === 'radio' && el.name !== ''
+              ? f.filter((o): o is HTMLInputElement => o instanceof HTMLInputElement && o.type === 'radio' && o.name === el.name)
+              : [];
+          const isStop = (active: Element | null, stop: HTMLElement): boolean => active === stop || radioGroup(stop).includes(active as HTMLInputElement);
+          const stopFocus = (stop: HTMLElement): HTMLElement => radioGroup(stop).find((r) => r.checked) ?? stop;
           const first = f[0];
           const last = f[f.length - 1];
           const active = doc.activeElement;
-          if (e.shiftKey && (active === first || active === modal)) {
+          if (e.shiftKey && (isStop(active, first) || active === modal)) {
             e.preventDefault();
-            last.focus();
-          } else if (!e.shiftKey && active === last) {
+            stopFocus(last).focus();
+          } else if (!e.shiftKey && isStop(active, last)) {
             e.preventDefault();
-            first.focus();
+            stopFocus(first).focus();
           }
         }
       });

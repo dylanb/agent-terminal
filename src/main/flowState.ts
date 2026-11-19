@@ -10,6 +10,7 @@ import { FLOW_HOME_SUBDIR } from './flowHome';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
 import { errMsg } from './errno';
 import type { FlowStatus } from '../shared/ipc';
+import { decisionNote, type FlowDecision } from '../shared/flowBranch';
 import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
 
@@ -32,6 +33,13 @@ export interface PersistedFlowState {
    *  reached), so a relaunch resumes the correct impl-slice instead of restarting the loop. Keyed by step
    *  id; each value a positive integer. Absent for a flow with no repeat steps or none yet reached. */
   repeatCounts?: Record<string, number>;
+  decisions?: Record<string, PersistedDecision>;
+}
+
+/** A decision an approve records names the gate turn it was recorded at, and counts only once that turn's accept
+ *  has persisted; Advance off the step drops the name (§18.2). */
+export interface PersistedDecision extends FlowDecision {
+  gateTurn?: string;
 }
 
 export interface FlowStateStore {
@@ -52,7 +60,7 @@ const AGENT_DIR = FLOW_HOME_SUBDIR;
 const STATE_LEAF = 'flow-state.yaml';
 const STATE_REL = path.join(AGENT_DIR, STATE_LEAF);
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
-const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'flow', 'title', 'repeat_counts']);
+const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'flow', 'title', 'repeat_counts', 'decisions']);
 
 /** The legality gate for a persisted progression's `status`: the one vocabulary the store's `decode` and the
  *  `worktreeStartedness` safety accessor both classify against, so a status one reader rejects the other cannot
@@ -102,6 +110,48 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   const out: Record<string, number> = Object.create(null); // null-proto: a `__proto__` key stores as own data
   for (const [k, v] of Object.entries(raw)) if (isRepeatCount(v)) out[k] = v;
   return Object.keys(out).length > 0 ? out : null;
+}
+
+const isGateTurn = (v: unknown): v is string => isStringValue(v) && v.length > 0;
+
+function readDecision(raw: unknown): PersistedDecision | null {
+  if (!isRecord(raw) || !isStringValue(raw.value)) return null;
+  if (raw.gate_turn !== undefined && !isGateTurn(raw.gate_turn)) return null;
+  const note = isStringValue(raw.note) ? decisionNote(raw.note) : null;
+  return {
+    value: raw.value,
+    ...(note?.ok === true && note.note !== undefined ? { note: note.note } : {}),
+    ...(isGateTurn(raw.gate_turn) ? { gateTurn: raw.gate_turn } : {}),
+  };
+}
+
+const isExactNote = (v: unknown): boolean => {
+  if (!isStringValue(v)) return false;
+  const note = decisionNote(v);
+  return note.ok && note.note === v;
+};
+
+const isExactDecision = (v: unknown): boolean =>
+  isRecord(v) &&
+  isStringValue(v.value) &&
+  Object.keys(v).every((key) => key === 'value' || (key === 'note' && isExactNote(v.note)) || (key === 'gate_turn' && isGateTurn(v.gate_turn)));
+
+function readDecisions(raw: unknown): Record<string, PersistedDecision> | null {
+  if (!isRecord(raw)) return null;
+  const out: Record<string, PersistedDecision> = Object.create(null); // null-proto: a `__proto__` key stores as own data
+  for (const [k, v] of Object.entries(raw)) {
+    const decision = readDecision(v);
+    if (decision !== null) out[k] = decision;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function writtenDecisions(decisions: Record<string, PersistedDecision>): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = Object.create(null);
+  for (const [step, { value, note, gateTurn }] of Object.entries(decisions)) {
+    out[step] = { value, ...(note !== undefined ? { note } : {}), ...(gateTurn !== undefined ? { gate_turn: gateTurn } : {}) };
+  }
+  return out;
 }
 
 /** §18.7.6 (CWE-400) — the progression read is byte-bounded like the pointer's. */
@@ -161,6 +211,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     const flow = readFlowName(doc.flow);
     const title = normalizeTitle(doc.title);
     const repeatCounts = readRepeatCounts(doc.repeat_counts);
+    const decisions = readDecisions(doc.decisions);
     return {
       step: doc.step,
       status: doc.status as FlowStatus,
@@ -169,6 +220,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(flow !== null ? { flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(repeatCounts ? { repeatCounts } : {}),
+      ...(decisions ? { decisions } : {}),
     };
   };
 
@@ -181,6 +233,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     if (doc.flow !== undefined && readFlowName(doc.flow) === null) return null;
     if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
     if (doc.repeat_counts !== undefined && !(isRecord(doc.repeat_counts) && Object.values(doc.repeat_counts).every(isRepeatCount))) return null;
+    if (doc.decisions !== undefined && !(isRecord(doc.decisions) && Object.values(doc.decisions).every(isExactDecision))) return null;
     return progression;
   };
 
@@ -192,6 +245,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const write = (state: PersistedFlowState): void => {
     const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
     const hasRepeatCounts = state.repeatCounts && Object.keys(state.repeatCounts).length > 0;
+    const hasDecisions = state.decisions && Object.keys(state.decisions).length > 0;
     const title = normalizeTitle(state.title);
     persist({
       step: state.step,
@@ -201,6 +255,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(state.flow !== undefined ? { flow: state.flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(hasRepeatCounts ? { repeat_counts: state.repeatCounts } : {}),
+      ...(hasDecisions ? { decisions: writtenDecisions(state.decisions ?? {}) } : {}),
     });
   };
 

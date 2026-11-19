@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ControllerClearOutcome, ControllerTerminal, ControllerTimelineEntry, ControllerWorkStatus } from '../shared/ipc';
 import type { NotificationCondition } from '../shared/controllerProtocol';
-import { ACTIVITY_WORDS } from '../shared/controllerCardClassification';
+import { ACTIVITY_WORDS, TIMELINE_ACTIVITY } from '../shared/controllerCardClassification';
 
 const TIMELINE_LIMIT = 3;
 const REQUEST_RAISED_TEXT = 'Request raised';
@@ -27,7 +27,8 @@ function flowChange(previous: ControllerWorkStatus['flow'], next: ControllerWork
 function statusChanges(previous: ControllerWorkStatus | undefined, next: ControllerWorkStatus): string[] {
   if (!previous) return [];
   const changes: string[] = [];
-  if (previous.activity !== next.activity) changes.push(ACTIVITY_WORDS[next.activity]);
+  const shown = TIMELINE_ACTIVITY[next.activity];
+  if (TIMELINE_ACTIVITY[previous.activity] !== shown) changes.push(ACTIVITY_WORDS[shown]);
   if (!previous.error !== !next.error) changes.push(next.error ? 'Flow error' : 'Flow error cleared');
   if (previous.attention && !next.attention) changes.push('Request cleared');
   const flow = flowChange(previous.flow, next.flow);

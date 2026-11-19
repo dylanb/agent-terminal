@@ -16,6 +16,7 @@ import {
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
   isValidSetupDismiss,
+  isValidSetupAgentState,
   isValidSetupStatus,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
@@ -25,6 +26,7 @@ import {
   isValidFlowAppBackToRed,
   isValidFlowArmInterrupt,
   isValidFlowResolveAppBootstrapConflict,
+  isValidFlowResolveAdoptTicket,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -198,6 +200,15 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
       relativeRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 'relative' }),
       notAnObject: isValidSetupStatus('/repo'),
     }).toEqual({ noSession: false, otherSession: false, noRepoKey: false, numberRepoKey: false, relativeRepoKey: false, notAnObject: false });
+  });
+
+  it('accepts a setup:agentState on the live session only', () => {
+    expect({
+      live: isValidSetupAgentState({ sessionId: sid }),
+      noSession: isValidSetupAgentState({}),
+      otherSession: isValidSetupAgentState({ sessionId: 'other' }),
+      notAnObject: isValidSetupAgentState(sid),
+    }).toEqual({ live: true, noSession: false, otherSession: false, notAnObject: false });
   });
 
   it('accepts a setup:dismiss of either kind on the live session, and rejects a malformed one', () => {
@@ -399,6 +410,24 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: [0] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: ['1'] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: 321 })).toBe(false);
+  });
+
+  it('accepts a ticket-choice answer naming a ticket or Cancel for one offer, and refuses any other shape (#304 AC 4)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'review', choiceId: 'offer-1', answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 177 } } };
+    expect.soft(isValidFlowResolveAdoptTicket(base)).toBe(true);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'cancel' } })).toBe(true);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, sessionId: 'other' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, repoKey: 'relative' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, step: '' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, choiceId: '' })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, choiceId: 7 })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: undefined })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'wipe' } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket' } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 0 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork', number: 1.5 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor', number: 177 } } })).toBe(false);
+    expect.soft(isValidFlowResolveAdoptTicket({ ...base, answer: { kind: 'ticket', ticket: { repo: 'contributor/fork/extra', number: 177 } } })).toBe(false);
   });
 
   it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {

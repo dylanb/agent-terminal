@@ -1,6 +1,7 @@
 // A2 (#133) §18.7.3 — the run-scoped flow-definition resolver; pointer/catalogEntry are injected seams
 // (CLAUDE.md injection-seam rule).
 
+import { createStepLibrary, runtimeStepTiers, type FlowSourceTier, type StepLibrary } from './stepLibrary';
 import path from 'node:path';
 import {
   FLOW_DEF_FILE,
@@ -96,7 +97,7 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
         const entry = deps.catalogEntry(pointer.id);
         if (entry.ok) {
           return {
-            load: loadCatalogEntryDefinition(entry.flowDir),
+            load: loadCatalogEntryDefinition(entry.flowDir, runtimeSteps(localDir, globalDir, entry.tier)),
             binding: { source: 'catalog', tier: entry.tier, id: pointer.id },
           };
         }
@@ -125,8 +126,12 @@ function catalogRefusal(id: string, cause: CatalogRefusalCause): string {
   return `Selected flow "${id}" ${CATALOG_REFUSAL_DETAIL[cause]}; pick another flow or use the default.`;
 }
 
-function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
-  return loadUntrustedFlowDefinition(path.join(flowDir, FLOW_DEF_FILE));
+function loadCatalogEntryDefinition(flowDir: string, steps: StepLibrary): FlowLoad {
+  return loadUntrustedFlowDefinition(path.join(flowDir, FLOW_DEF_FILE), steps);
+}
+
+function runtimeSteps(localDir: string, globalDir: string, source: FlowSourceTier): StepLibrary {
+  return createStepLibrary(runtimeStepTiers(localDir, globalDir, source));
 }
 
 /** §18.7.3 */
@@ -142,12 +147,12 @@ export function resolveBoundSource(
       // §18.1 error state, never a silent swap to a different source.
       const entry = catalogEntry(disposition.id, disposition.tier);
       if (!entry.ok || entry.tier !== disposition.tier) return { load: lostBindingHold() };
-      return { load: loadCatalogEntryDefinition(entry.flowDir), binding: disposition };
+      return { load: loadCatalogEntryDefinition(entry.flowDir, runtimeSteps(localDir, globalDir, entry.tier)), binding: disposition };
     }
     case 'non-catalog':
       return localFirst(localDir, globalDir, disposition);
     case 'fallback':
-      return { load: loadFlowDefinition(globalDir), binding: disposition };
+      return { load: loadFlowDefinition(globalDir, runtimeSteps(localDir, globalDir, 'global')), binding: disposition };
     default:
       // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
       // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.

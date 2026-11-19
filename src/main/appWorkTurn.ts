@@ -10,13 +10,14 @@ import type { BoundaryPolicy, LoopDefV2, SelfCheck } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
-import { ticketPromptLines } from '../shared/currentTicket';
+import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
 import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
 import { exampleLoopCapabilities, LOOP_CAPABILITIES_FILENAME } from '../shared/loopCapabilities';
+import { DECISION_NOTE_MAX, exampleDecisionFile } from '../shared/flowBranch';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -102,6 +103,8 @@ export interface AppWorkPromptReq {
    *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
    *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
   ticket?: number;
+  /** An adopting run's intent and change, presented in place of a ticket run's ticket and flow documents. */
+  adoption?: AdoptedRunRefs;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
   sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
@@ -114,6 +117,13 @@ export interface AppWorkPromptReq {
   reportSections?: ReportSectionTarget[];
   /** §29 */
   selfCheck?: { kind: SelfCheck; checkCommand: string };
+  decision?: DecisionPrompt;
+}
+
+export interface DecisionPrompt {
+  rel: string;
+  values: readonly string[];
+  checkCommand: string;
 }
 
 /** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
@@ -283,6 +293,19 @@ const SELF_CHECK_LINES: Record<SelfCheck, (checkCommand: string) => string[]> = 
 /** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
 const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
 
+export function decisionLines(d: DecisionPrompt, moment?: string): string[] {
+  return [
+    '',
+    `DECISION: this step decides which path the flow takes. Write your decision to ${d.rel}, choosing exactly one of: ${d.values.join(', ')}.`,
+    'The file is JSON, for example:',
+    '',
+    `    ${exampleDecisionFile(d.values[0])}`,
+    '',
+    `A "note" field is optional: a short reason of at most ${DECISION_NOTE_MAX} characters.`,
+    ...checkerLines(d.checkCommand, 'decision file', moment),
+  ];
+}
+
 /** Compose the §27 work-turn prompt (§27.3): the loop brief and the def's recipe body, then — for a
  *  file-producing turn — the instruction to end the artifact with the completion marker, then the shared
  *  done-signal instruction pointing at the §27 done-file (and, for a file-producing turn, verifying the
@@ -294,8 +317,9 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
-  if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
-  parts.push(...flowDocumentLines(), ...designCheckLines());
+  if (req.adoption !== undefined) parts.push(...adoptedRunLines(req.adoption));
+  else parts.push(...(req.ticket !== undefined ? ticketPromptLines(req.ticket) : []), ...flowDocumentLines());
+  parts.push(...designCheckLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
@@ -305,6 +329,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
     );
   }
+  if (req.decision !== undefined) parts.push(...decisionLines(req.decision, resultCheckMoment(req)));
   if (req.reportSections !== undefined) parts.push(...reportSectionLines(req.reportSections));
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
   // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no

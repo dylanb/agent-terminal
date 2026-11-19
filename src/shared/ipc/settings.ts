@@ -39,6 +39,7 @@ export interface UiSettings {
   keymapProfile: KeymapProfileSetting;
   /** Per-action chord overrides merged over the profile (§7.7); absent when none are set. */
   keymapOverrides?: Partial<Record<KeyActionId, Chord[]>>;
+  showTokenCounts: boolean;
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -47,6 +48,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
   theme: 'light',
   artifactTreeWidth: 248,
   keymapProfile: 'auto',
+  showTokenCounts: false,
 };
 
 export interface UiSetSettingsMsg {

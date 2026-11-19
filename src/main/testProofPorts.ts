@@ -8,7 +8,7 @@ import { createGitHubRepositorySource, originGitHubRepository, repositoryHost } 
 import { openPullRequestsForBranch, type BranchPullRequest } from './pullRequestLookup';
 import type { BranchPullRequests, OpenPullRequest, ProofPublisher, ProofSuite, ProofSuites, ProofWorkingTree, SuiteResult, SuiteRun } from './testProof';
 import { readE2eEnvironment, readPackageVersion, readPlaywrightReport, readVitestReport, type ReportRead } from './testProofResults';
-import { isRecord } from './yamlRecord';
+import { createMarkedComments, type CommentRepository } from './markedComment';
 
 export const TEST_PROOF_COMMENT_MARKER = '<!-- agent-terminal:test-proof-summary -->';
 
@@ -16,8 +16,6 @@ const REPORT_DIR = ['.agent-terminal', 'test-proof'] as const;
 const VITEST_REPORT = 'vitest.json';
 const E2E_REPORT = 'report.json';
 const E2E_ENVIRONMENT = 'environment.json';
-// Listing whole bodies overflows runAppCommand's 1 MiB output buffer on a PR with long comments.
-const SUMMARY_LOOKUP_JQ = `.[] | {id, login: .user.login, marked: (.body | startswith(${JSON.stringify(TEST_PROOF_COMMENT_MARKER)}))}`;
 
 type Prepared = { ok: true; dir: string } | { ok: false; reason: string };
 
@@ -116,39 +114,22 @@ export function createProofSuites(root: string): ProofSuites {
 
 export function createProofPublisher(root: string): ProofPublisher {
   const repositories = createGitHubRepositorySource(root);
-  const api = async (args: string[]): Promise<string> => {
+  const commentRepository = async (): Promise<CommentRepository> => {
     const repository = await repositories.resolve();
-    return runAppCommand('gh', ['api', '--hostname', repositoryHost(repository), ...args], root);
+    return { host: repositoryHost(repository), owner: repository.owner, name: repository.name };
   };
-  const route = async (path: string): Promise<string> => {
-    const { owner, name } = await repositories.resolve();
-    return `repos/${owner}/${name}/${path}`;
-  };
-
-  const earlierSummary = async (pr: number, login: string): Promise<number | null> => {
-    const listed = await api(['--paginate', '--jq', SUMMARY_LOOKUP_JQ, `${await route(`issues/${pr}/comments`)}?per_page=100`]);
-    for (const line of listed.split('\n')) {
-      if (line === '') continue;
-      const comment: unknown = JSON.parse(line);
-      if (!isRecord(comment) || !Number.isSafeInteger(comment.id) || typeof comment.login !== 'string' || typeof comment.marked !== 'boolean') {
-        throw new Error(`a comment on PR #${pr} could not be read`);
-      }
-      if (comment.login === login && comment.marked) return comment.id as number;
-    }
-    return null;
-  };
-
+  const comments = createMarkedComments(root, commentRepository);
   return {
     async status(sha, check, description) {
-      await api([await route(`statuses/${sha}`), '-f', 'state=success', '-f', `context=${check}`, '-f', `description=${description}`]);
+      const { host, owner, name } = await commentRepository();
+      await runAppCommand(
+        'gh',
+        ['api', '--hostname', host, `repos/${owner}/${name}/statuses/${sha}`, '-f', 'state=success', '-f', `context=${check}`, '-f', `description=${description}`],
+        root,
+      );
     },
     async summary(pr, body) {
-      const user: unknown = JSON.parse(await api(['user']));
-      if (!isRecord(user) || typeof user.login !== 'string') throw new Error('gh api user did not name the logged-in user');
-      const marked = `${TEST_PROOF_COMMENT_MARKER}\n${body}`;
-      const earlier = await earlierSummary(pr, user.login);
-      if (earlier === null) await api([await route(`issues/${pr}/comments`), '-f', `body=${marked}`]);
-      else await api(['-X', 'PATCH', await route(`issues/comments/${earlier}`), '-f', `body=${marked}`]);
+      await (await comments.author()).upsert(pr, TEST_PROOF_COMMENT_MARKER, body);
     },
   };
 }
@@ -156,13 +137,16 @@ export function createProofPublisher(root: string): ProofPublisher {
 export function createProofWorkingTree(root: string): ProofWorkingTree {
   return {
     async dirtyPaths() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       const status = await runAppCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=normal'], root);
       return porcelainPaths(status);
     },
     async head() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       return parseAppGitObjectId(await runAppCommand('git', ['rev-parse', '--verify', 'HEAD'], root), 'HEAD');
     },
     async branch() {
+      // eslint-disable-next-line local/git-hardening -- predates the rule; existing callers stay as they are (CODE-STANDARDS.md)
       const current = (await runAppCommand('git', ['branch', '--show-current'], root)).trim();
       return current === '' ? null : current;
     },

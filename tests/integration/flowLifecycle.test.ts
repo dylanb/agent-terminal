@@ -24,7 +24,9 @@ import { createFlowLifecycle } from '../../src/main/flowLifecycle';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import type { FlowStateView } from '../../src/shared/ipc';
+import { parseAuditStream } from '../../src/shared/audit';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // A3 (#134) T6a / T6b — the flow lifecycle owns every Terminate's side effects and takes the worktree lock itself,
 // so the UI route and the engine ports alike are refused while a live or unidentifiable peer holds it; a rebind's
@@ -60,7 +62,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     const wt = fx.makeWorktree(opts.worktreeName ?? 'a3-lc-wt');
     const lockRoot = join(fx.outsideDir('a3-lc-locks'), 'locks');
     const audit = createAuditRunFixture(fx.outsideDir('a3-lc-audit'), 'global-fallback');
-    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
+    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home, repoOnlyDefTiers())(k) });
     const todos = createTodoStore({ maxDoneTodos: 10 });
     const notices = createPendingNotices();
     const effects = { monitorCleared: 0, flowChanged: 0, forgotten: [] as string[], released: [] as string[] };
@@ -71,7 +73,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       recovery: createHeldRunRecovery({
         lock,
         ...({
-          ...realHeldRunRecoveryDeps(home),
+          ...realHeldRunRecoveryDeps(home, repoOnlyDefTiers()),
           terminate: (k: string) => manager.terminate(k),
           selectIfUnlocked: gateModule.selectIfUnlocked,
         } satisfies Omit<HeldRunRecoveryDeps, 'lock'>),
@@ -84,6 +86,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       },
       endRun: () => {},
       recordTerminate: (k: string) => audit.recorder.recordTerminate(k),
+      recordRollback: (k, before, after) => audit.recorder.recordTransition(k, 'rollback', before, after),
       clearTodos: (k: string) => todos.clear(k),
       clearSliceBrief: (k: string) => clearSliceBrief(k),
       clearMonitor: () => effects.monitorCleared++,
@@ -107,7 +110,16 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, serializeLockHolder(currentLockHolder()));
     };
-    return { home, wt, lockRoot, audit, manager, todos, notices, effects, lifecycle, begin, progression, holdAsPeer };
+    const advance = (): void => {
+      const before = manager.state(wt);
+      audit.recorder.recordTransition(wt, 'advance', before, manager.advance(wt));
+    };
+    /** The run's lifecycle entries after its Start, as the §25 record holds them. */
+    const lifecycleAfterStart = (): unknown[] =>
+      parseAuditStream(readFileSync(audit.runFile(wt), 'utf8'))
+        .events.filter((e) => e.type === 'step.entered' || e.type === 'flow.status')
+        .map(({ ts: _ts, ...rest }) => rest);
+    return { home, wt, lockRoot, audit, manager, todos, notices, effects, lifecycle, begin, advance, lifecycleAfterStart, progression, holdAsPeer };
   }
 
   const RECONSTRUCTIONS = [
@@ -271,6 +283,38 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
   });
 
   describe('rollbackStep (a failed step bootstrap)', () => {
+    it('a rollback to the previous step records that step as entered again in the run\'s audit record', () => {
+      const r = rig();
+      r.begin();
+      r.advance();
+
+      expect(r.lifecycle.rollbackStep(r.wt, 's2')).toMatchObject({ status: 'in_progress', stepName: 's1' });
+
+      expect(r.lifecycleAfterStart()).toEqual([
+        { type: 'step.entered', step: 's2' },
+        { type: 'step.entered', step: 's1' },
+      ]);
+    });
+
+    it('a first-step rollback records the run going back to never-started in its audit record', () => {
+      const r = rig();
+      r.begin();
+
+      r.lifecycle.rollbackStep(r.wt, 's1');
+
+      expect(r.lifecycleAfterStart()).toEqual([{ type: 'flow.status', from: 'in_progress', to: 'not_started' }]);
+    });
+
+    it('a rollback for a step the flow is no longer at changes nothing and records nothing', () => {
+      const r = rig();
+      r.begin();
+      r.advance();
+
+      expect(r.lifecycle.rollbackStep(r.wt, 's1')).toMatchObject({ status: 'in_progress', stepName: 's2' });
+
+      expect(r.lifecycleAfterStart()).toEqual([{ type: 'step.entered', step: 's2' }]);
+    });
+
     it('a first-step rollback resets the run to never-started while holding the worktree lock: a live peer trying it then is refused as held', () => {
       let probe: ReturnType<typeof tryPeerLockDuring> | undefined;
       const r = rig({
@@ -292,8 +336,8 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       for (const attempt of probe?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
     });
 
-    it('is refused with the lock reason while a live peer holds the worktree lock, leaving the run begun and its record in place', () => {
-      const { wt, lifecycle, begin, progression, holdAsPeer, manager } = rig();
+    it('is refused with the lock reason while a live peer holds the worktree lock, leaving the run begun, its record in place and nothing audited', () => {
+      const { wt, lifecycle, begin, progression, holdAsPeer, manager, lifecycleAfterStart } = rig();
       begin();
       holdAsPeer();
       const before = progression();
@@ -307,6 +351,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(progression()).toBe(before);
       expect(readRunBinding(wt)).toEqual(record);
       expect(manager.state(wt)).toMatchObject({ status: 'in_progress', runStarted: 'started' });
+      expect(lifecycleAfterStart()).toEqual([]);
     });
 
     it('a rollback whose run record cannot be removed names Terminate as the way out, since nothing retries it', () => {
@@ -633,7 +678,7 @@ describe('the flow manager names why a Terminate was refused (A3 T6b)', () => {
     const home = fx.makeWorktree('a3-mgr-fail-home');
     fx.writeFlowHome(home, { name: 'g', stepIds: ['s1'] });
     const wt = fx.makeWorktree('a3-mgr-fail-wt');
-    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
+    const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home, repoOnlyDefTiers())(k) });
     expect(manager.start(wt).status).toBe('in_progress');
 
     expect(withReadOnlyFlowHome(wt, () => manager.terminate(wt))).toMatchObject({ outcome: 'refused', cause: 'failed' });

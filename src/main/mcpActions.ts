@@ -1,3 +1,4 @@
+import { decisionProblemText } from '../shared/flowBranch';
 import type { FlowInputValidation } from './flow';
 import { mcpTodo } from '../shared/mcpWindowState';
 import { outstandingTodoOrder } from '../shared/todoOrder';
@@ -81,6 +82,12 @@ function approveAnswer(outcome: GateApproveOutcome, at: string): McpOperationRes
       return neither('epic-promotion-blocked', `Not taken: epic promotion is blocked for the gate at ${at}; the window shows why.`);
     case 'refused':
       return neither('not-taken', `Not taken: the gate at ${at} moved on before the approve ran (${outcome.reason}). Read the state again.`);
+    case 'input-invalid':
+      return refusal('not-valid', outcome.reason);
+    case 'decision-held':
+      return neither('not-taken', `Not taken: the decision ${quote(outcome.value)} at ${at} needs a human decision.`);
+    case 'decision-invalid':
+      return neither('not-taken', `Not taken: ${decisionProblemText(outcome.problem)}. The gate at ${at} still waits.`);
     case 'refused-late':
       return neither('not-taken', `Not taken: the gate at ${at} was decided otherwise (${outcome.reasons.join(', ')}).`);
     case 'abandoned':
@@ -188,7 +195,7 @@ export function createMcpActions(deps: McpActionDeps): { execute(command: McpCom
     if (undecidable !== null) return refusal('not-valid', `the gate of ${shown} cannot be decided now: ${undecidable}`);
     const invalid = checkInputs(args, 'approve');
     if (invalid !== null) return invalid;
-    const outcome = await deps.gate.approve(target, args.inputs);
+    const outcome = await deps.gate.approve(target, args.inputs ?? {});
     const answer = approveAnswer(outcome, shown);
     if (outcome.kind === 'advanced') {
       const entry = deps.entryStatus(args.repo);

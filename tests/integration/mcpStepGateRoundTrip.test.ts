@@ -31,3 +31,30 @@ it('does not interpret a null turn as the identity of a loop gate', async () => 
 it.each(['request_changes', 'redo', 'polish', 'retry'])('%s still requires a string turn identity', tool => {
   expect(invalidToolArguments(tool, { window: 'window', repo: '/repo', step: 'plan', turn: null, ...(tool === 'request_changes' ? { feedback: 'revise' } : tool === 'redo' ? { instruction: 'revise' } : {}) })).toMatch(/turn/);
 });
+
+it('validates and saves inputs for the selected branch, excluding skipped steps', () => {
+  let entered: Record<string, string> = {};
+  const flow = createFlowMachine({ ok: true, flowDir: '/flow', definition: { name: 'branch', steps: [
+    { id: 'choice', kind: 'manual', decides: ['left', 'right'] },
+    { id: 'left', kind: 'manual', when: { step: 'choice', value: 'left' }, inputs: [{ name: 'leftValue', type: 'string', required: true }] },
+    { id: 'right', kind: 'manual', when: { step: 'choice', value: 'right' }, inputs: [{ name: 'rightValue', type: 'string', required: true }] },
+  ] } }, undefined, (_step, inputs) => { entered = inputs; });
+  flow.start();
+  flow.recordDecision('choice', { value: 'right' });
+  expect(flow.validateEntryInputs('approve', { rightValue: 'chosen' })).toEqual({ valid: true });
+  const result = flow.advance({ rightValue: 'chosen' });
+  expect(result.stepName).toBe('right');
+  expect(entered).toEqual({ rightValue: 'chosen' });
+});
+
+it('preflights a pending gate decision without recording it or advancing the flow', () => {
+  const flow = createFlowMachine({ ok: true, flowDir: '/flow', definition: { name: 'pending', steps: [
+    { id: 'choice', kind: 'manual', decides: ['left', 'right'] },
+    { id: 'left', kind: 'manual', when: { step: 'choice', value: 'left' }, inputs: [{ name: 'leftValue', type: 'string', required: true }] },
+    { id: 'right', kind: 'manual', when: { step: 'choice', value: 'right' }, inputs: [{ name: 'rightValue', type: 'string', required: true }] },
+  ] } });
+  flow.start();
+  expect(flow.validateEntryInputs('approve', { rightValue: 'chosen' }, { value: 'right' })).toEqual({ valid: true });
+  expect(flow.state().decisions).toEqual({});
+  expect(flow.advance().stepName).toBe('choice');
+});

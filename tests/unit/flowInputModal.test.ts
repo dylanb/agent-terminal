@@ -36,12 +36,21 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(f!.querySelector('input')).toBeTruthy();
     // The helper names the bound def's OWN bootstrap contract that runs on entry (AC 10), scoped to the
     // element aria-describedby resolves to — its accessible description — and cites no retired section (AC 9).
-    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
+    expect(host.querySelector('.flow-modal h3')?.textContent).toContain('Plan');
     expect(host.textContent).toContain('pickup');
     const helpId = f!.querySelector('input')!.getAttribute('aria-describedby')!;
     const help = host.querySelector(`#${helpId}`)!;
     expect(help.textContent).toContain("bound loop definition's own branch-and-draft-PR setup");
     expect(help.textContent).not.toContain('§');
+  });
+
+  it('names the step in sentence case in its title and description', () => {
+    createFlowInputModal(host).render(prompt(), 'plan-approve', vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    for (const text of [dialog.querySelector('h3')?.textContent ?? '', dialog.querySelector('.ph')?.textContent ?? '']) {
+      expect(text).toContain('Plan approve');
+      expect(text).not.toContain('plan-approve');
+    }
   });
 
   it('Confirm collects the typed values and calls submit with the name→value map', () => {
@@ -50,6 +59,24 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     (field('ticket')!.querySelector('input') as HTMLInputElement).value = '176';
     (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
     expect(submit).toHaveBeenCalledWith({ ticket: '176' });
+  });
+
+  it('shows a refusal inside the dialog as the refused field\'s error and keeps the typed values', () => {
+    createFlowInputModal(host).render(
+      prompt({
+        inputs: [{ name: 'ticket', type: 'github-ticket' }, { name: 'notes', type: 'free-text' }],
+        refusal: { input: 'ticket', notice: '"#43" is not an issue number.', values: { ticket: '#43', notes: 'keep me' } },
+      }),
+      'plan',
+      vi.fn(),
+    );
+    const ticket = field('ticket')!.querySelector('input') as HTMLInputElement;
+    expect(ticket.value).toBe('#43');
+    expect((field('notes')!.querySelector('input') as HTMLInputElement).value).toBe('keep me');
+    expect(ticket.getAttribute('aria-invalid')).toBe('true');
+    const described = (ticket.getAttribute('aria-describedby') ?? '').split(' ').map((id) => host.querySelector(`#${id}`)?.textContent ?? '');
+    expect(described).toContain('"#43" is not an issue number.');
+    expect(field('notes')!.querySelector('input')!.getAttribute('aria-invalid')).toBeNull();
   });
 
   it('collects an input named __proto__ as own data without prototype pollution', () => {

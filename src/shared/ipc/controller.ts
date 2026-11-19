@@ -1,5 +1,6 @@
 import type { ChannelSpecs, SessionId } from './session';
 import type { Theme } from './settings';
+import type { ControllerActivity } from '../waiting';
 
 export const CONTROLLER_CHANNELS = {
   subscribe: {
@@ -34,6 +35,14 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:setTheme',
     does: "The controller window saves its own theme choice, apart from agent-terminal's settings.",
   },
+  getSortMode: {
+    name: 'controller:getSortMode',
+    does: 'The controller window reads its own saved card order, which is attention order when nothing usable is saved.',
+  },
+  setSortMode: {
+    name: 'controller:setSortMode',
+    does: 'The controller window saves its card order, apart from its theme and window placement.',
+  },
   getAlwaysOnTop: {
     name: 'controller:getAlwaysOnTop',
     does: 'The controller window reads whether it is kept above other windows, which is on when main refuses the request.',
@@ -48,7 +57,11 @@ export const CONTROLLER_CHANNELS = {
   },
 } as const satisfies ChannelSpecs;
 
-export type ControllerWorkStatus = {
+export type ControllerWorkActivity = ControllerActivity | { readonly activity: 'unavailable'; readonly waiting?: never };
+
+export type ControllerWorkStatus = ControllerWorkActivity & ControllerWorkDetails;
+
+export type ControllerWorkDetails = {
   unavailableReason?: 'message-too-large';
   flow: { availability: 'loading' | 'unavailable' } | {
     availability: 'known'; name: string; step: string;
@@ -58,7 +71,6 @@ export type ControllerWorkStatus = {
     availability: 'known'; number: number;
     title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
   };
-  activity: 'active' | 'quiet' | 'unavailable';
   attention: null | { status: string; reasons: string[] };
   error: null | { reason: string };
   /** Absent when either peer's minor predates loop messages. */
@@ -96,6 +108,8 @@ export interface ControllerApi {
   dismissLoopMessage(terminalId: string, messageId: string): Promise<void>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;
+  getSortMode(): Promise<ControllerSortMode>;
+  setSortMode(sortMode: ControllerSortMode): Promise<void>;
   getAlwaysOnTop(): Promise<boolean>;
   setAlwaysOnTop(alwaysOnTop: boolean): Promise<boolean>;
   onAlwaysOnTopChanged(listener: (alwaysOnTop: boolean) => void): () => void;
@@ -108,6 +122,8 @@ export interface ControllerActivation { sessionId: SessionId; id: string }
 export interface ControllerLoopMessageDismissal { sessionId: SessionId; terminalId: string; messageId: string }
 export interface ControllerThemeRequest { sessionId: SessionId }
 export interface ControllerThemeChoice { sessionId: SessionId; theme: Theme }
+export interface ControllerSortModeRequest { sessionId: SessionId }
+export interface ControllerSortModeChoice { sessionId: SessionId; sortMode: ControllerSortMode }
 export interface ControllerAlwaysOnTopRequest { sessionId: SessionId }
 export interface ControllerAlwaysOnTopChoice { sessionId: SessionId; alwaysOnTop: boolean }
 
@@ -118,5 +134,9 @@ export interface ControllerIncompatibility {
   controllerVersions: ControllerVersionRange;
 }
 
+export type ControllerSortMode = 'attention' | 'recently-used';
+
 export const CONTROLLER_DEFAULT_THEME: Theme = 'light';
+export const CONTROLLER_DEFAULT_SORT_MODE: ControllerSortMode = 'attention';
+export const isControllerSortMode = (value: unknown): value is ControllerSortMode => value === 'attention' || value === 'recently-used';
 export const CONTROLLER_DEFAULT_ALWAYS_ON_TOP = true;

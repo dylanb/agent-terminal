@@ -10,6 +10,7 @@ import {
   composeLifecycleEndRun,
   composeLoopBindingResolve,
   composeObservedResolveDef,
+  composeStepDecisionRead,
   composeRecordFlowTransition,
   composeRunInProgressAt,
   composeStartTransition,
@@ -38,6 +39,7 @@ import { createGitRepoFixture } from '../helpers/gitRepo';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { createVirtualClock } from '../helpers/virtualClock';
+import { repoOnlyDefTiers } from '../helpers/defTiers';
 
 // §27.9.1 N9b.2, N9b.5(b), N9b.8 — #137 plan rows "Terminate ends the engine-held run", "Restart and Undo
 // keep authority", "Bind before entry", authority read from the run's bound flow, and a relaunch keeping it, driven through the production Start composition over the real flow manager, run resolver, flow
@@ -181,7 +183,7 @@ function makeRig(opts: RigOpts = {}): Rig {
 
   const clock = createVirtualClock(0);
   const recorder = createAuditRecorder({ root: auditRoot, now: () => new Date(T0 + 1_000), flowName: () => null });
-  const resolve = createRunResolver(globalDir);
+  const resolve = createRunResolver(globalDir, repoOnlyDefTiers());
   const held = new Map<string, StartRun>();
   const toRun = (r: { load: ReturnType<typeof resolve>['load']; binding?: DispositionRead }): StartRun | null =>
     r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
@@ -193,7 +195,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const gate = createAutoGate({
     audit: (dir, cmd, exit) => recorder.recordCommand(dir, 'gate', cmd, exit),
     resolveDef: (dir) => plantedResolution(dir),
-    currentRun: composeCurrentRun(globalDir),
+    currentRun: composeCurrentRun(globalDir, repoOnlyDefTiers()),
     runInProgressAt: opts.runInProgressAtThrows
       ? () => {
           throw new Error('flow-state could not be read');
@@ -207,6 +209,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     askAgentWhy: (question) => void asked.push(question),
     withdrawAgentQuestion: () => {},
     currentSlice: () => 1,
+    readStepDecision: composeStepDecisionRead(composeObservedResolveDef(ctxFor)),
   });
   const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({
@@ -219,7 +222,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const approveDepsFor = (): AppGateDecisionDeps => ({
     readRunState: (dir) => readAppLoopState(dir),
     resolveDef: (dir, name) => resolveLoopDefV2(name, ctxFor(dir)),
-    refs: () => ({ pr: null, ticket: null, bootstrap: null }),
+    refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' }),
     runPushSideEffect: async () => {},
@@ -242,6 +245,9 @@ function makeRig(opts: RigOpts = {}): Rig {
     reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
+    readStepDecision: () => ({ kind: 'none' }),
+    recordDecision: () => null,
+    auditDecision: () => {},
   });
   const engineApprove = composeEngineApprove(approveDepsFor, () => 'app');
   gate.attachApprove((dir, step, turnKey, decider) => {
@@ -262,6 +268,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     endRun: composeLifecycleEndRun(gate),
     releaseLoopTurn: () => {},
     recordTerminate: (repoKey) => recorder.recordTerminate(repoKey),
+    recordRollback: (repoKey, before, after) => recorder.recordTransition(repoKey, 'rollback', before, after),
     clearTodos: () => {},
     clearSliceBrief: () => {},
     clearMonitor: () => {},
@@ -659,7 +666,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
     const iEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('failed-effect')).length;
     const iBeforeEnd = iEntries();
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(iEntries()).toBe(iBeforeEnd + 1);
     expect(rig.errors).toEqual(['A gate side-effect failed earlier in this run: approve threw before settling']);
   });
@@ -940,7 +947,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
 
     const hEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('engine-input-missing')).length;
     const hBeforeEnd = hEntries();
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     const letters = (engineHalts(rig.gateEntries(T0)) ?? []).flatMap((c) => parseAutoHaltReasons(c) ?? []);
     expect(letters).not.toContain('failed-effect');
     expect(hEntries()).toBe(hBeforeEnd + 1);
@@ -957,7 +964,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const v = rig.view();
     expect(v.autoGate?.failedEffect?.state).toBe('unknown');
     expect(v.autoGate?.haltReasons.find((r) => r.reason === 'engine-input-missing')?.detail).toBe('the run\'s gate state is missing');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state is missing']);
   });
 
@@ -975,7 +982,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(before.flowStart(before.wt).status).toBe('in_progress');
     const rig = before.relaunch();
     await rig.reachGate('clean');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual([]);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();
   });
@@ -988,7 +995,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     writeFileSync(file, 'schema_version: [unclosed\n');
     const rig = before.relaunch();
     await rig.reachGate('clean');
-    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress', decisions: {} });
     expect(rig.errors).toEqual([]);
     expect(engineHalts(rig.gateEntries(T0)) ?? []).toEqual([]);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();

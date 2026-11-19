@@ -42,7 +42,7 @@ async function fixture() {
     await registered;
     const id = registry.terminals().filter(t => t.launchDirectory === directory && t.status !== 'disconnected').at(-1)!.id;
     let revision = 0;
-    let activity: ReturnType<typeof workStatus>['activity'] = 'active';
+    let activity: 'active' | 'quiet' | 'unavailable' = 'active';
     async function flush(attention: ReturnType<typeof workStatus>['attention'] = null, error: ReturnType<typeof workStatus>['error'] = null) {
       const number = 1000 + ++revision;
       peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ activity, attention, error, ticket: { availability: 'known', number, title: { availability: 'loading' } } }) }));

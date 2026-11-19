@@ -1,0 +1,22 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 28468,
+  "note": "Codex 0.167.0 (codex exec, started through its pnpm launcher, in a pty shell on macOS, default sandbox) running sleep 20 as its shell tool command; captured from outside the shell's tree once sleep was 3 s old",
+  "rows": [
+    "28951 28516 28951    0       00:03 sleep           ",
+    "28468 28466 28468 28516       00:10 zsh             ",
+    "28516 28468 28516 28516       00:08 codex           ",
+    "28948 28516 28948 28516       00:03 codex-code-mode-"
+  ],
+  "expected": {
+    "waiting": {
+      "program": "sleep",
+      "others": 0
+    }
+  }
+}

@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import path from 'node:path';
 import { createInstallExamples, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
 import type {
   DestRelativePath,
@@ -29,7 +28,7 @@ describe('install examples view — renders the flow-catalog result group (§18.
 
   const catalogResult: InstallExamplesResult = {
     ok: true,
-    created: [{ destination: FLOW_CATALOG, files: rels(path.join('feature-dev', 'flow.yaml')) }],
+    created: [{ destination: FLOW_CATALOG, files: rels('feature-dev/flow.yaml') }],
     overwritten: [],
     skipped: [],
     notInstalled: [],

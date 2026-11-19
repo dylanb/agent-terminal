@@ -2,6 +2,9 @@ import { defineConfig } from '@playwright/test';
 import { availableParallelism } from 'node:os';
 import { resolveE2eWorkers } from './playwright.workers';
 
+// The e2e suite's scripted agents run as `fake-agent`; every launch inherits this unless its own env sets it.
+process.env.APP_AGENT_COMMANDS ??= 'claude,codex,fake-agent';
+
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 60_000,
@@ -13,5 +16,7 @@ export default defineConfig({
   // Retry on CI (GitHub and Podman both set CI) to absorb load-class flakes; a bare local run keeps
   // a failure a failure so it is not silently masked during debugging.
   retries: process.env.CI ? 2 : 0,
+  // A committed test.only would narrow a CI run to the focused tests and still pass.
+  forbidOnly: !!process.env.CI,
   expect: { timeout: 10_000 },
 });

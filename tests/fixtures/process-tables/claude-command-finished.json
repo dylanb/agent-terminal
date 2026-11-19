@@ -1,0 +1,18 @@
+{
+  "platform": "darwin",
+  "psArgs": [
+    "-A",
+    "-o",
+    "pid=,ppid=,pgid=,tpgid=,etime=,ucomm="
+  ],
+  "shellPid": 32635,
+  "note": "Claude Code 2.1.319 (interactive, inside agent-terminal on macOS) between tool calls, after its last Bash command finished; only its same-group helper caffeinate runs. Captured from a process outside the shell's tree",
+  "rows": [
+    "24379 34407 34407 34407       02:04 caffeinate      ",
+    "32635 31901 32635 34407    07:22:19 zsh             ",
+    "34407 32635 34407 34407    07:22:04 2.1.319         "
+  ],
+  "expected": {
+    "waiting": null
+  }
+}

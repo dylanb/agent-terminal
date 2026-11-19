@@ -56,7 +56,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
       ph.textContent =
         held.branch === null
           ? 'This run is past its pickup, but the app has no saved pull request for it and no branch is checked out. Nothing in the run continues until you confirm its ticket and pull request.'
-          : `This run is past its pickup, but the app has no saved pull request for it. This is what it found for ${held.branch}. Nothing in the run continues until you confirm, or correct, these.`;
+          : `This run is past its pickup, but the app has no saved pull request for it. This is what it found for ${held.branch}. Nothing in the run continues until you confirm${held.adopted === undefined ? ', or correct,' : ''} these.`;
       body.append(ph);
       let describedBy = describedById;
       if (held.problems.length > 0) {
@@ -71,6 +71,21 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
         }
         body.append(list);
       }
+      const readOnlyField = (parent: HTMLElement, label: string, value: string): void => {
+        const field = d.createElement('div');
+        field.className = 'field';
+        const lab = d.createElement('div');
+        lab.className = 'flab';
+        const nm = d.createElement('span');
+        nm.className = 'nm';
+        nm.textContent = label;
+        lab.append(nm);
+        const text = d.createElement('p');
+        text.className = 'ph';
+        text.textContent = value;
+        field.append(lab, text);
+        parent.append(field);
+      };
       const numberField = (label: string, value: number | null): HTMLInputElement => {
         const field = d.createElement('div');
         field.className = 'field';
@@ -88,8 +103,23 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
         body.append(field);
         return input;
       };
-      const prInput = numberField('Pull request', held.pr);
-      const ticketInput = numberField('Ticket', held.ticket);
+      const { adopted } = held;
+      let numbers: () => { pr: number | null; ticket: number | null } | string;
+      let initialInput: HTMLInputElement | null = null;
+      if (adopted === undefined) {
+        const prInput = numberField('Pull request', held.pr);
+        const ticketInput = numberField('Ticket', held.ticket);
+        initialInput = prInput;
+        numbers = () => ({ pr: parseNumber(prInput.value), ticket: parseNumber(ticketInput.value) });
+      } else {
+        const values = d.createElement('div');
+        values.id = `${titleId}-values`;
+        readOnlyField(values, 'Pull request', held.pr === null ? 'unknown' : `#${held.pr}`);
+        readOnlyField(values, 'Primary ticket', adopted.recoverable ? `${adopted.primary.repo}#${adopted.primary.number}` : 'cannot be recovered');
+        body.append(values);
+        describedBy = `${describedBy} ${values.id}`;
+        numbers = () => (adopted.recoverable ? { pr: held.pr, ticket: adopted.primary.number } : adopted.reason);
+      }
       const error = d.createElement('p');
       error.className = 'ph';
       error.setAttribute('role', 'alert');
@@ -109,8 +139,12 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
         close();
       });
       footer.bind(ok, () => {
-        const pr = parseNumber(prInput.value);
-        const ticket = parseNumber(ticketInput.value);
+        const picked = numbers();
+        if (typeof picked === 'string') {
+          error.textContent = picked;
+          return;
+        }
+        const { pr, ticket } = picked;
         if (pr === null || ticket === null) {
           error.textContent = 'Enter the pull request and ticket as numbers.';
           return;
@@ -132,7 +166,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
       });
       foot.append(later, ok);
       card.append(foot);
-      const initialFocus = held.pr === null || held.problems.length > 0 ? prInput : ok;
+      const initialFocus = initialInput !== null && (held.pr === null || held.problems.length > 0) ? initialInput : ok;
       return { card, initialFocus, describedById: describedBy, grow: body, scroll: body, role: 'alertdialog' };
     }, opener);
   };

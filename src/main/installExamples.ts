@@ -1,6 +1,6 @@
 // §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
 
-import { lstatSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync, isWritableContainer } from './atomicFile';
@@ -14,14 +14,16 @@ import {
   resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
+  resolveExampleStepsDir,
 } from './exampleAssets';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
+import { STEP_DEF_EXT, stepLibraryDir } from './stepLibrary';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, readFlowDefinitionName } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
-import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
-import { retiredCatalogEntries, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
+import { movedClaudeReviewerAgents, retiredCatalogEntries, removeRetiredEntry, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
 import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import {
   INSTALL_DESTINATION_IDS,
@@ -34,6 +36,7 @@ import {
   type InstallExamplesResult,
   type InstallPreviewId,
   type RetiredExample,
+  type RetiredKind,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -182,6 +185,22 @@ function catalogFiles(catalogBundleDir: string): Plan {
   return out;
 }
 
+/** §18.2. Each member is a `<name>.yaml` whose name the step library resolver accepts, so the install never
+ *  seeds a definition no reference can name. `null` when the tree is absent, as for every bundle. */
+function stepFiles(stepsBundleDir: string): Plan {
+  if (absent(stepsBundleDir)) return null;
+  const entries = readDirEntries(stepsBundleDir);
+  if (entries.length === 0) throw new Error(`the bundled examples are damaged: the step library at ${stepsBundleDir} is empty`);
+  return entries.map((entry) => {
+    const abs = path.join(stepsBundleDir, entry.name);
+    if (!entry.isFile) throw bundleAnomaly(abs);
+    const name = entry.name.endsWith(STEP_DEF_EXT) ? entry.name.slice(0, -STEP_DEF_EXT.length) : '';
+    if (!isSafeCatalogId(name))
+      throw new Error(`the bundled examples are damaged: ${abs} is not a step definition with a valid name`);
+    return copyOf(destRelative(entry.name), abs);
+  });
+}
+
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
@@ -197,7 +216,7 @@ export interface InstallDestination {
   /** Set only on a destination that installs where its tool is: when this directory does not exist, the
    *  destination is skipped rather than created (§18.1). Unset, the destination always installs. */
   toolHome?: string;
-  /** §18.1. Unset on a destination no retired flow ever wrote to. */
+  /** §18.1. Unset on a destination where no older build left a retired flow's files or a moved loop's copy. */
   retired?: RetiredLister;
 }
 
@@ -251,6 +270,13 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     overwrite: { mode: 'confirm-overwrite' },
     retired: retiredCatalogEntries,
   },
+  stepLibrary: {
+    bundle: resolveExampleStepsDir,
+    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? stepLibraryDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: stepFiles,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
     target: ({ configDir }) => userConfigLoopsV2Dir(configDir),
@@ -266,13 +292,14 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
+  // §27.4 — each run installs its own Claude reviewers; this destination only offers to remove older copies.
   agents: {
     bundle: resolveExampleLoopsV2Dir,
     target: ({ configDir }) => userConfigAgentsDir(configDir),
     rootFix: CONFIG_ROOT_FIX,
-    plan: reviewerAgentFiles(CLAUDE_REVIEWER_AGENT),
+    plan: (loopsBundleDir) => (absent(loopsBundleDir) ? null : []),
     overwrite: { mode: 'confirm-overwrite' },
-    retired: retiredReviewerAgents(CLAUDE_REVIEWER_AGENT),
+    retired: movedClaudeReviewerAgents,
   },
   codexLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -357,7 +384,7 @@ interface ResolvedDestination {
   jail: string;
   files: ResolvedFile[];
   overwrite: InstallDestination['overwrite'];
-  retired: DestRelativePath[];
+  retired: { rel: DestRelativePath; kind: RetiredKind }[];
 }
 type Resolution =
   | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
@@ -417,7 +444,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       jail,
       files: resolved,
       overwrite: dest.overwrite,
-      retired: (dest.retired?.(jail) ?? []).map(destRelative),
+      retired: (dest.retired?.(jail, dest.bundleDir) ?? []).map((r) => ({ rel: destRelative(r.rel), kind: r.kind })),
     });
   }
   return { ok: true, destinations: out, notInstalled };
@@ -460,14 +487,14 @@ function installFileVerdict(file: InstallFileSnapshot): 'create' | 'replace' | '
 }
 
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
-  destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
+  destinations.flatMap((d) => d.retired.map((r) => ({ destination: d.id, rel: r.rel, kind: r.kind })));
 
-/** The retired flow the installed fallback flow.yaml still is, read by the loader that runs it (§18.7.3). */
+/** The retired flow the installed fallback flow.yaml still is (§18.7.3). */
 function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
   const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
   if (file === undefined) return null;
-  const load = loadFlowDefinitionFromFile(file.real);
-  return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
+  const name = readFlowDefinitionName(file.real);
+  return name !== null && RETIRED_FLOW_IDS.includes(name) ? name : null;
 }
 
 function hash(bytes: Buffer): string {
@@ -654,6 +681,7 @@ export function inspectExamplesCurrency(destinations: InstallDestination[]): Exa
 
 export interface ApplyOptions {
   removeRetired: boolean;
+  removeLeftover?: (jail: string, rel: string, kind: RetiredKind) => void;
 }
 
 function applyInstallExamplesWithAuthorization(
@@ -778,17 +806,17 @@ function applyInstallExamplesWithAuthorization(
   }
 
   if (options.removeRetired) {
+    const removeLeftover = options.removeLeftover ?? removeRetiredEntry;
     const offered = authorization === undefined ? null : new Set(authorization.retired.map((r) => snapshotKey(r.destination, r.rel)));
     for (const dest of resolution.destinations) {
-      for (const rel of dest.retired) {
+      for (const { rel, kind } of dest.retired) {
         if (offered !== null && !offered.has(snapshotKey(dest.id, rel))) continue;
         try {
-          // `rm` removes a symbolic link itself, never what it points at.
-          rmSync(path.join(dest.jail, rel), { recursive: true, force: true });
+          removeLeftover(dest.jail, rel, kind);
         } catch (e) {
-          return fail(`Could not remove the retired ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
+          return fail(`Could not remove the ${kind === 'retired-flow' ? 'retired' : 'old'} ${rel} from ${dest.targetDir}: ${errMsg(e)}`);
         }
-        removed.push({ destination: dest.id, rel });
+        removed.push({ destination: dest.id, rel, kind });
       }
     }
   }

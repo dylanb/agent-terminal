@@ -1,4 +1,5 @@
-import type { AgentState, ControllerLoopMessage, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
+import type { ControllerLoopMessage, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
+import type { ControllerActivity } from '../shared/waiting';
 import { isControllerIssueNumber } from '../shared/controllerStatus';
 import { statusBarTitleText, titleOf } from '../shared/statusBar';
 import { errMsg } from './errno';
@@ -9,7 +10,7 @@ export interface ControllerStatusSource {
   current(): {
     repoKey: string;
     flowName: string | null;
-    activity: AgentState;
+    activity: ControllerActivity;
     loopMessage: ControllerLoopMessage | null;
     view: Pick<FlowStateView, 'stepName' | 'status' | 'runStarted' | 'error'> & {
       refs?: { ticket?: number; pr?: number };
@@ -129,7 +130,7 @@ export function createControllerStatus(source: ControllerStatusSource, { branchR
           assignment: view.runStarted === 'indeterminate' ? 'unavailable' : view.runStarted === 'never-started' ? 'unassigned' : view.status === 'done' ? 'completed' : 'assigned',
         } : { availability: 'unavailable' },
         ticket: number !== undefined ? { availability: 'known', number, title: ticketTitleState } : { availability: known && view.runStarted !== 'indeterminate' && !invalidTicket ? 'none' : 'unavailable' },
-        activity,
+        ...activity,
         attention: loop?.humanNeeded ? { status: loop.status, reasons: [...new Set(reasons)] } : null,
         error: error ? { reason: error } : null,
         loopMessage: shownMessage,

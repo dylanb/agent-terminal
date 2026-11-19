@@ -10,7 +10,7 @@ import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { connectWebSocket, createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
 import { connectScriptedTerminal } from '../helpers/scriptedControllerTerminal';
-import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MINOR } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_IDENTITY_MINOR, CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_WAITING_MINOR } from '../../src/shared/controllerProtocol';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
@@ -248,4 +248,35 @@ it.each([CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_IDENTITY_MINOR - 1])('records
   await older.sendStatus(workStatus({ activity: 'quiet' }));
   await vi.waitFor(() => expect(terminal()?.work?.activity).toBe('quiet'));
   expect(terminal()?.timeline).toEqual([{ kind: 'status', text: expect.stringContaining('Idle'), receivedAt: expect.any(Number) }]);
+});
+
+const waiting = { program: 'node', others: 1 } as const;
+
+it.each([
+  { minor: undefined, shown: { activity: 'active' } },
+  { minor: CONTROLLER_WAITING_MINOR - 1, shown: { activity: 'active' } },
+  { minor: CONTROLLER_WAITING_MINOR, shown: { activity: 'waiting', waiting } },
+])('reports a Waiting terminal as Working with no label to a controller older than the Waiting minor, and as Waiting from it: minor $minor', async ({ minor, shown }) => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, ...(minor === undefined ? {} : { minor }), type: 'registered' });
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus({ activity: 'waiting', waiting })); return () => {}; }));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  const { activity, waiting: label } = controller.statuses[0].work;
+  expect({ activity, ...(label === undefined ? {} : { waiting: label }) }).toEqual(shown);
+});
+
+it('shows a Waiting terminal at the Waiting minor as Waiting, beside an older terminal it shows as before', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const current = await connectScriptedTerminal(root, { launchDirectory: '/work/waiting', repositoryRoot: null }, CONTROLLER_WAITING_MINOR);
+  cleanups.push(() => current.close());
+  const older = await connectScriptedTerminal(root, { launchDirectory: '/work/older-quiet', repositoryRoot: null }, CONTROLLER_WAITING_MINOR - 1);
+  cleanups.push(() => older.close());
+  await older.sendStatus(workStatus({ activity: 'quiet' }));
+  await current.sendStatus(workStatus({ activity: 'waiting', waiting }));
+  const work = (directory: string) => server.terminals().find(t => t.launchDirectory === directory)?.work;
+  await vi.waitFor(() => expect({ current: work('/work/waiting'), older: work('/work/older-quiet') })
+    .toEqual({ current: workStatus({ activity: 'waiting', waiting }), older: workStatus({ activity: 'quiet' }) }));
 });

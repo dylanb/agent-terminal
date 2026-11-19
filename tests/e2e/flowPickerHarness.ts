@@ -4,14 +4,15 @@ import { electron } from './registeredElectron';
 // across a relaunch so persisted state is what the relaunched app reads.
 
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { flowCatalogDir, type FlowInputDef } from '../../src/main/flow';
+import { FLOW_DEF_FILE, flowCatalogDir, type FlowInputDef } from '../../src/main/flow';
+import { stepLibraryDir } from '../../src/main/stepLibrary';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { shellQuote } from '../../src/shared/shellQuote';
 
@@ -23,12 +24,19 @@ export interface FlowPickerHarness {
   repo(prefix: string): string;
   seedGlobalEntry(id: string, stepIds: string[], inputs?: Record<string, FlowInputDef[]>): void;
   seedRepoEntry(repo: string, id: string, stepIds: string[], inputs?: Record<string, FlowInputDef[]>): void;
+  /** Write `<repo>/.agent-terminal/flows/<id>/flow.yaml` with exactly `flowYaml`. */
+  seedRepoEntryYaml(repo: string, id: string, flowYaml: string): void;
+  /** Write the repo-tier step definition `name` with exactly `stepYaml`. */
+  seedRepoStep(repo: string, name: string, stepYaml: string): void;
+  /** Write the global-tier step definition `name` with exactly `stepYaml`. */
+  seedGlobalStep(name: string, stepYaml: string): void;
   /** Seed the global fallback `<home>/.agent-terminal/flow.yaml`. */
   seedGlobalFallback(stepIds: string[]): void;
   /** Seed a local `<repo>/.agent-terminal/flow.yaml`. */
   seedLocalFlow(repo: string, stepIds: string[]): void;
   selectFlow(repo: string, id: string): void;
-  launch(): Promise<Page>;
+  /** `env` is added to the app's environment, e.g. a PATH that puts a fake agent first. */
+  launch(env?: Record<string, string>): Promise<Page>;
   /** Close the running app, keeping home, repos and user data, so a test can change persisted state before the
    *  next launch(). */
   close(): Promise<void>;
@@ -57,11 +65,11 @@ export function createFlowPickerHarness(): FlowPickerHarness {
 
   let launched: ElectronApplication | null = null;
 
-  const launch = async (): Promise<Page> => {
+  const launch = async (extraEnv: Record<string, string> = {}): Promise<Page> => {
     if (launched !== null) throw new Error('the harness app is already running; use relaunch()');
     const app = await electron.launch({
       args: ['out/main/index.js', `--user-data-dir=${userDataDir}`],
-      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: shellHome, APP_HOME_DIR: home, CLAUDE_CONFIG_DIR: exampleConfigDir },
+      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: shellHome, APP_HOME_DIR: home, CLAUDE_CONFIG_DIR: exampleConfigDir, ...extraEnv },
     });
     launched = app;
     running = { app, page: await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS }) };
@@ -88,6 +96,21 @@ export function createFlowPickerHarness(): FlowPickerHarness {
     },
     seedRepoEntry(repo, id, stepIds, inputs) {
       catalog.addEntryWithSteps(flowCatalogDir(repo), id, stepIds, inputs);
+    },
+    seedRepoEntryYaml(repo, id, flowYaml) {
+      const entry = join(flowCatalogDir(repo), id);
+      mkdirSync(entry, { recursive: true });
+      writeFileSync(join(entry, FLOW_DEF_FILE), flowYaml);
+    },
+    seedRepoStep(repo, name, stepYaml) {
+      const dir = stepLibraryDir(repo);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${name}.yaml`), stepYaml);
+    },
+    seedGlobalStep(name, stepYaml) {
+      const dir = stepLibraryDir(home);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${name}.yaml`), stepYaml);
     },
     seedGlobalFallback(stepIds) {
       wt.writeFlowHome(home, { name: 'global-fallback', stepIds });

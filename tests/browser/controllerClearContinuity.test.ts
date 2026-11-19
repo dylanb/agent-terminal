@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import type { ControllerTerminal, ControllerClearOutcome, ControllerClearTarget } from '../../src/shared/ipc';
 import { mountControllerPanes } from '../helpers/controllerMount';
-import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
+import { statusService, statusTerminal, withActivity } from '../helpers/controllerStatusFixture';
 import { cardIn, cardHeaderIn, clearHistoryIn, historyIn, timelineEntriesIn } from '../helpers/controllerCards';
 import { notificationItem, statusItem } from '../helpers/controllerHistory';
 import '../helpers/rendererTokens';
@@ -50,7 +50,7 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
       const h = mount();
       try {
         clearHistoryIn(h.card())?.focus();
-        h.service.publish([update === 'arrival' ? arrival(h.before) : { ...h.before, work: { ...h.before.work!, activity: 'quiet' } }]);
+        h.service.publish([update === 'arrival' ? arrival(h.before) : { ...h.before, work: withActivity(h.before.work!, 'quiet') }]);
         await painted();
         expect.soft(h.card().innerText).toContain('Earlier distinct');
         expect.soft(historyIn(h.card())).toBeUndefined();

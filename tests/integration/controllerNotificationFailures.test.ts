@@ -16,7 +16,7 @@ it.each(['capacity', 'throw', 'callback'] as const)('contains notification trans
   const registry = await startControllerTransport(home);
   const source = createLoopNotifier();
   const view = (status: string, humanNeeded = true): FlowStateView => ({
-    stepName: 'green', runStarted: 'started', steps: ['green'], position: 1, total: 1, status: 'in_progress',
+    stepName: 'green', runStarted: 'started', steps: ['green'], stepRuns: ['runs'], decisions: {}, position: 1, total: 1, status: 'in_progress',
     loop: { status, iteration: 1, humanNeeded, pr: null, branch: null, ready: false },
   });
   let disconnected: ControllerTerminal | undefined;

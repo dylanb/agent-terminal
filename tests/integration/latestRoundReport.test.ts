@@ -68,7 +68,7 @@ describe("the round report a session reads of its window's loop", () => {
 describe("the report read_state gives for its window's loop", () => {
   const atLoop = (loop: Partial<FlowLoopView>): FlowStateView => ({
     stepName: 'plan',
-    steps: ['plan', 'done'],
+    steps: ['plan', 'done'], stepRuns: ['runs', 'runs'], decisions: {},
     position: 1,
     total: 2,
     status: 'in_progress',

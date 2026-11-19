@@ -1,12 +1,12 @@
 import type { ClaudeCodeIntegrationResult } from '../shared/ipc';
-import type { LaunchInvocation } from './cliShim';
+import type { McpInvocation } from './mcpLauncher';
 import { errMsg } from './errno';
 import { CLAUDE_NOT_FOUND, findClaude, installMcpIntegration, removeMcpIntegration } from './mcpInstall';
 import { mcpLaunch, refreshMcpLauncher } from './mcpLauncher';
 
 export async function changeClaudeCodeIntegration(
   change: 'install' | 'remove',
-  ctx: { appHome: string; invocation: LaunchInvocation; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
+  ctx: { appHome: string; invocation: McpInvocation; env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
 ): Promise<ClaudeCodeIntegrationResult> {
   let launch = mcpLaunch(ctx.appHome);
   if (change === 'install') {

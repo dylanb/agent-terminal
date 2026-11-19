@@ -11,15 +11,21 @@ import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
+import { exampleConfigDir, seedBundledStepLibrary, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 
-export type AutoGateLoop = 'groom-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
+export type AutoGateLoop = 'groom-loop' | 'groom-goal-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
 export interface AutoGateStep {
   id: string;
   kind: 'loop' | 'manual';
   loop?: AutoGateLoop;
   authority?: 'human' | 'auto';
+  decides?: string[];
+  haltOnDecision?: string[];
+  when?: { step: string; value: string };
+  /** Gives a step of any kind the `ticket` input a `groom-loop` step always carries. */
+  ticketInput?: boolean;
 }
 
 /** The review roster a shipped example loop declares, for the fake agent's round reports. */
@@ -30,9 +36,9 @@ export function loopRoster(loop: AutoGateLoop): string[] {
   return personas;
 }
 
-/** The one flow builder for the auto-gate e2e. A `groom-loop` step always carries a required `github-ticket`
- *  input named `ticket` (pre-supplied by `seedAutoGateRepo`'s `ticket` option); an omitted `authority` writes no
- *  `gate_authority` key. */
+/** The one flow builder for the auto-gate e2e. A `groom-loop` or `groom-goal-loop` step, and a step marked `ticketInput`, carries a
+ *  required `github-ticket` input named `ticket` (pre-supplied by `seedAutoGateRepo`'s `ticket` option); an
+ *  omitted `authority` writes no `gate_authority` key. */
 export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): string {
   const lines = [`name: ${JSON.stringify(name)}`, 'steps:'];
   for (const s of steps) {
@@ -40,11 +46,14 @@ export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): str
     if (s.kind === 'loop') {
       if (s.loop === undefined) throw new Error(`autoGateFlowYaml: loop step "${s.id}" names no loop`);
       lines.push(`    loop: ${s.loop}`, '    loop_namespace: app');
-      if (s.loop === 'groom-loop') {
-        lines.push('    inputs:', '      - name: ticket', '        type: github-ticket', '        required: true');
-      }
+    }
+    if (s.loop === 'groom-loop' || s.loop === 'groom-goal-loop' || s.ticketInput === true) {
+      lines.push('    inputs:', '      - name: ticket', '        type: github-ticket', '        required: true');
     }
     if (s.authority !== undefined) lines.push(`    gate_authority: ${s.authority}`);
+    if (s.decides !== undefined) lines.push(`    decides: ${JSON.stringify(s.decides)}`);
+    if (s.haltOnDecision !== undefined) lines.push(`    halt_on_decision: ${JSON.stringify(s.haltOnDecision)}`);
+    if (s.when !== undefined) lines.push(`    when: ${JSON.stringify({ [s.when.step]: s.when.value })}`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -58,6 +67,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   git('init', '-q');
+  installBundledRunReviewers(dir);
   git('symbolic-ref', 'HEAD', 'refs/heads/plan-loop/issue-176');
   git('config', 'user.email', 't@t');
   git('config', 'user.name', 'T');
@@ -84,6 +94,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
 /** An operator-catalog flow (the global tier under `home`) made active for `repo`. */
 export function seedTrustedFlow(home: string, repo: string, id: string, yaml: string): void {
   writeCatalogEntry(home, id, yaml);
+  seedBundledStepLibrary(home);
   writeActiveFlow(repo, id);
 }
 
@@ -171,7 +182,22 @@ export function runIdentity(repo: string): AuditRunIdentity {
  *  `step`'s last entry window. A missing file, identity or step throws, so an empty read never satisfies a
  *  "none" assertion. */
 export function auditGateEntries(home: string, repo: string, opts: { run?: AuditRunIdentity; step?: string } = {}): GateEntry[] {
-  const run = opts.run ?? runIdentity(repo);
+  const { file, events } = runAuditEvents(home, repo, opts.run);
+  if (opts.step !== undefined) {
+    const lastStart = events.map((e) => e.type).lastIndexOf('flow.started');
+    return gateEntries(stepWindowEvents(events.slice(Math.max(lastStart, 0)), opts.step));
+  }
+  if (events.filter((e) => e.type === 'flow.started').length > 1) throw new Error(`auditGateEntries: ${file} holds more than one run (two Starts in one second)`);
+  return gateEntries(events);
+}
+
+/** The §25 `decision` events of the repo's current run, read like `auditGateEntries`. */
+export function auditDecisionEvents(home: string, repo: string): { step: string; value: string }[] {
+  return runAuditEvents(home, repo).events.flatMap((e) => (e.type === 'decision' ? [{ step: e.step, value: e.value }] : []));
+}
+
+function runAuditEvents(home: string, repo: string, given?: AuditRunIdentity): { file: string; events: AuditEvent[] } {
+  const run = given ?? runIdentity(repo);
   const file = auditFilePath(auditRootDir(home), repo, run.flow, new Date(run.startedAt));
   if (!existsSync(file)) throw new Error(`auditGateEntries: no audit file at ${file}`);
   const text = readFileSync(file, 'utf8');
@@ -180,12 +206,7 @@ export function auditGateEntries(home: string, repo: string, opts: { run?: Audit
   if (header === null || events.length !== documents - 1) {
     throw new Error(`auditGateEntries: ${file} has ${documents} documents but only ${events.length} events parse after its header`);
   }
-  if (opts.step !== undefined) {
-    const lastStart = events.map((e) => e.type).lastIndexOf('flow.started');
-    return gateEntries(stepWindowEvents(events.slice(Math.max(lastStart, 0)), opts.step));
-  }
-  if (events.filter((e) => e.type === 'flow.started').length > 1) throw new Error(`auditGateEntries: ${file} holds more than one run (two Starts in one second)`);
-  return gateEntries(events);
+  return { file, events };
 }
 
 function gateEntries(events: AuditEvent[]): GateEntry[] {
