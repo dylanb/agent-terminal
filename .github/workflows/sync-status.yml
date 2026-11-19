@@ -10,22 +10,28 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sync-status-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   report:
+    name: Report source divergence
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           # checkout's persisted GITHUB_TOKEN header is sent to every github.com URL and would override
           # the private source's token in SOFTWARE_FACTORY_URL.
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
 
       - run: node scripts/sync.mjs report >> "$GITHUB_STEP_SUMMARY"
         env:
-          SOFTWARE_FACTORY_URL: ${{ secrets.SOFTWARE_FACTORY_URL }}
+          # This scheduled read-only report uses the existing repository secret; it deploys nothing.
+          SOFTWARE_FACTORY_URL: ${{ secrets.SOFTWARE_FACTORY_URL }} # zizmor: ignore[secrets-outside-env]

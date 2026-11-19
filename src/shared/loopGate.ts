@@ -6,10 +6,32 @@
 // whether the panel renders clickable controls.
 
 import type { FlowLoopView } from './ipc';
+import { stripDisplayControlChars } from './controlChars';
 
 /** True when the view's gate options may be acted on (clickable decision controls). A producing engine
  *  marks a view display-only by opting in — setting `actionable: false` (the §27 run-less view); anything
  *  that does not opt in is actionable, so every hand-constructed awaiting-gate view keeps its controls. */
 export function loopGateActionable(view: Pick<FlowLoopView, 'actionable'>): boolean {
   return view.actionable !== false;
+}
+
+export function loopGateDecidable<V extends Pick<FlowLoopView, 'actionable' | 'appTurn' | 'gateOptions'>>(
+  view: V,
+): view is V & { appTurn: NonNullable<FlowLoopView['appTurn']>; gateOptions: string[] } {
+  return view.appTurn !== undefined && (view.gateOptions?.length ?? 0) > 0 && loopGateActionable(view);
+}
+
+export const LOOP_STATUS_ERROR = 'error';
+
+export function loopRouteOutTurn(view: Pick<FlowLoopView, 'status' | 'appTurn'>): NonNullable<FlowLoopView['appTurn']> | null {
+  return view.status === LOOP_STATUS_ERROR && view.appTurn !== undefined ? view.appTurn : null;
+}
+
+export function shownErrorReason(view: Pick<FlowLoopView, 'errorReason'>): string | null {
+  return view.errorReason ? stripDisplayControlChars(view.errorReason) : null;
+}
+
+export function shownVerdictRows(view: Pick<FlowLoopView, 'verdict' | 'verdictReason'>): { key: 'loopVerdict' | 'loopVerdictReason'; label: string; value: string | null }[] {
+  const row = (key: 'loopVerdict' | 'loopVerdictReason', label: string, value: string | undefined) => ({ key, label, value: value ? stripDisplayControlChars(value) : null });
+  return [row('loopVerdict', 'verdict', view.verdict), row('loopVerdictReason', 'verdict reason', view.verdictReason)];
 }

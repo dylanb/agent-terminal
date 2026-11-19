@@ -226,6 +226,9 @@ const WIRE_FORMAT_TESTS = [
 const EXPECTED_RESULTS_FIXTURES = [
   'tests/helpers/controllerStatusFixture.ts',
   'tests/helpers/controllerCards.ts',
+  'tests/helpers/fakeClaude.ts',
+  'tests/helpers/fakeClaudeHarness.ts',
+  'tests/helpers/todoFixtures.ts',
   'tests/helpers/adoptionGh.ts',
   'tests/helpers/outwardWrites.ts',
   'tests/helpers/processTable.ts',

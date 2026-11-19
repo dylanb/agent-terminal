@@ -7,6 +7,7 @@ import { listLoopFolders } from '../../src/main/loopFolders';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
 import { ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { SHARED_CONFIG_MARKER } from './fakeClaude';
 
 /** The phase loops a fixture flow binds by name and drives with a round-answering fake agent (§27.5). */
 export const ROUND_PHASE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'] as const;
@@ -53,6 +54,7 @@ export function seedSharedExampleConfig(): string {
   for (const loop of ROUND_PHASE_LOOPS) asReviewRounds(join(root, 'loops-v2', loop), loop);
   ownPlanLoopGate(join(root, 'loops-v2', 'plan-loop'));
   cpSync(join(process.cwd(), 'example', 'commands'), join(root, 'commands'), { recursive: true });
+  writeFileSync(join(root, SHARED_CONFIG_MARKER), root);
   return root;
 }
 

@@ -7,6 +7,7 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
+import { LOOP_STATUS_ERROR } from '../shared/loopGate';
 import type { FlowAutoGateView, FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { readEpicSubTicketsAtGate } from './epicPromotion';
@@ -18,7 +19,7 @@ import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
  *  a closed vocabulary of its own). `error` reuses the existing loop-error surface so the reason row renders. */
 export const APP_LOOP_STATUS_RUN_LESS = 'not-started';
-export const APP_LOOP_STATUS_ERROR = 'error';
+export const APP_LOOP_STATUS_ERROR = LOOP_STATUS_ERROR;
 /** The live §27 work-turn statuses the provider mirrors from the persisted run state (§27.12). Equal to the
  *  `AppLoopRunState` status values (appLoopState.ts) — one vocabulary the writer and this reader share. */
 export const APP_LOOP_STATUS_WORKING = 'working';

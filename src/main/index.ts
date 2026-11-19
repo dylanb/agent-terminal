@@ -1,3 +1,7 @@
+import { createMcpCallHandler } from './mcpCallHandler';
+import type { McpOperationResult } from './mcpActionResult';
+import { createMcpGateOperations } from './mcpGateOperations';
+import { decisionProblemText, type FlowDecision } from '../shared/flowBranch';
 import { stepInputTypes, submitTicketInputs } from './ticketInput';
 import { originGitHubRepository } from './githubRepository';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
@@ -5,6 +9,7 @@ import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -21,7 +26,7 @@ import {
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
-import { createInjector, DEFER_DEADLINE_MS } from './inject';
+import { createInjector, wrapForPaste, DEFER_DEADLINE_MS, type Injector } from './inject';
 import { catalogListResult, listCatalog } from './flowCatalogList';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
@@ -108,6 +113,7 @@ import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
 import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder, type AuditRecorder } from './auditRecorder';
+import { createMcpSessionAudit } from './mcpSessionAudit';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
@@ -142,6 +148,24 @@ import {
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
 import { createLoopMessages } from './loopMessages';
+import { changeClaudeCodeIntegration } from './mcpIntegration';
+import type { ClaudeCodeIntegrationResult } from '../shared/ipc';
+import { refreshMcpLauncher, resolveMcpScript } from './mcpLauncher';
+import { mcpBuildId } from './mcpBuildId';
+import { openWindowBridgeForLifetime, type WindowBridge } from './mcpWindowBridge';
+import { windowSessionEnv } from './mcpSessionEnv';
+import { catalogView, readLatestRoundReport, readWindowState } from './mcpWindowState';
+import type { McpWindowState } from '../shared/mcpWindowState';
+import type { McpCaller, WindowRequest } from '../shared/mcpBridge';
+import { MCP_HOOK_REPORT } from '../shared/mcp';
+import { createMcpActions } from './mcpActions';
+import { startedAnswer, terminatedAnswer } from './mcpFlowOutcome';
+import { createSessionTurns, readSessionLaunch } from './mcpSessionTurns';
+import { sessionRecipient } from './mcpSessionProcess';
+import { createPaneTransport } from './mcpPaneInjector';
+import { createMcpTodoDelivery } from './mcpTodoDelivery';
+import { isValidClaudeCodeIntegration } from './ipcValidation';
+import { errMsg } from './errno';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
@@ -158,7 +182,7 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isGateAccepted, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAdoptedPickup, writeAdoptedPickupIntent, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, createRoundReportReader, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isGateAccepted, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAdoptedPickup, writeAdoptedPickupIntent, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun, type ReachedPickupStep } from './runPickupConfirm';
@@ -172,7 +196,7 @@ import { isAdoptedPickup } from '../shared/appBootstrap';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
-import { runAppGateDecision as runAppGateDecisionImpl, recordOnFlow, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
+import { HUMAN_DECIDER, runAppApprove, runAppGateDecisionOutcome, runAppGateDecision as runAppGateDecisionImpl, recordOnFlow, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { clearDecisionFile, readFlowStepDecision } from './stepDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
@@ -185,6 +209,7 @@ import type { LoopBinding } from '../shared/loopNamespace';
 import {
   composeCurrentRun,
   composeEngineApprove,
+  composeHumanApprove,
   composeHumanDecisionRunners,
   composeLifecycleEndRun,
   composeLoopBindingResolve,
@@ -255,6 +280,13 @@ async function createWindow(): Promise<void> {
         cwd: process.cwd(),
         mainDir: __dirname,
       })));
+  const mcpScript = resolveMcpScript(__dirname);
+  const mcpInvocation = { execPath: process.execPath, appArgs: [mcpScript] };
+  const claudeCodeContext = { appHome: flowGlobalDir, invocation: mcpInvocation, env: process.env, platform: process.platform };
+  ipcMain.handle(CH.claudeCodeInstall, (_e, m): Promise<ClaudeCodeIntegrationResult> =>
+    isValidClaudeCodeIntegration(m) ? changeClaudeCodeIntegration('install', claudeCodeContext) : Promise.resolve({ ok: false, error: 'invalid install request' }));
+  ipcMain.handle(CH.claudeCodeRemove, (_e, m): Promise<ClaudeCodeIntegrationResult> =>
+    isValidClaudeCodeIntegration(m) ? changeClaudeCodeIntegration('remove', claudeCodeContext) : Promise.resolve({ ok: false, error: 'invalid remove request' }));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
   let finishRegistration!: (accepted: boolean) => void;
@@ -285,6 +317,8 @@ async function createWindow(): Promise<void> {
     finishRegistration(false);
     ipcMain.removeHandler(CH.startupReady);
     ipcMain.removeHandler(CH.cliInstall);
+    ipcMain.removeHandler(CH.claudeCodeInstall);
+    ipcMain.removeHandler(CH.claudeCodeRemove);
   });
   const target = resolveRendererTarget({
     isPackaged: app.isPackaged,
@@ -293,9 +327,24 @@ async function createWindow(): Promise<void> {
   if (target.kind === 'url') await win.loadURL(target.url);
   else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
   if (!await registration || win.isDestroyed()) return;
+  await refreshMcpLauncher(flowGlobalDir, mcpInvocation).catch((error: unknown) =>
+    console.error(`The Claude Code tools' launcher could not be refreshed: ${errMsg(error)}`));
+  let answerMcp: (request: WindowRequest, caller: McpCaller) => Promise<unknown> = async () => {
+    throw new Error('the window is still starting');
+  };
+  const mcpBridge: WindowBridge | null = await (async () => openWindowBridgeForLifetime({
+    appHome: flowGlobalDir,
+    build: mcpBuildId(mcpScript),
+    handle: (request, caller) => answerMcp(request, caller),
+    lifetime: { isClosed: () => win.isDestroyed(), onClosed: close => { win.once('closed', close); } },
+  }))().catch((error: unknown) => {
+    console.error(`The Claude Code tools are off in this window: ${errMsg(error)}`);
+    return null;
+  });
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
+    env: windowSessionEnv(process.env, mcpBridge?.endpoint ?? null, { execPath: process.execPath, script: mcpScript }),
   });
   if (win.isDestroyed()) {
     ptyProcess.kill();
@@ -341,6 +390,7 @@ async function createWindow(): Promise<void> {
   let agentActivity: AgentState = 'quiet';
   // §27.2/§27.3 — fired on each active→quiet flip so the app-loop engine can inject a deferred/retry
   // turn the moment the instance is injectable. Assigned once the engine exists (below); a no-op until.
+  let deliverMcpTodos: () => void = () => {};
   let notifyInjectable: () => void = () => {};
   let pushAgentState: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
@@ -377,7 +427,7 @@ async function createWindow(): Promise<void> {
       windowStatus.screen(status);
       waitingDetector.screen(status.agentState);
       pushAgentState();
-      if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
+      if (status.agentState === 'quiet') { notifyInjectable(); deliverMcpTodos(); }
     },
   });
 
@@ -505,11 +555,16 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  const inject = createInjector({
+  const writeInjection = createInjector({
     write: (data) => ptyIo.io.write(data),
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
+  const sessionTurns = createSessionTurns({ launchOf: readSessionLaunch, recipientOf: (pid, tmux) => sessionRecipient(pid, ptyProcess.pid, tmux)?.identity ?? null });
+  const inject: Injector = (text, opts) => {
+    sessionTurns.injected(text, { submitted: opts?.submit ?? false });
+    writeInjection(text, opts);
+  };
 
   // §27 activity readout — an in-flight bootstrap (before the app-loop run state exists) feeds the status
   // bar's activity via deriveLoopActivity; not authority, only display. Written by the §27 bootstrap
@@ -883,6 +938,7 @@ async function createWindow(): Promise<void> {
     },
     countsAtClose: (run, step, closedAt) => tokenMeter.countsAtClose(run, step, closedAt),
   });
+  const sessionAudit = createMcpSessionAudit({ sessions: sessionTurns, audit, repo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot) });
   const agentHosting = createAgentHosting({
     terminalRepo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot),
     currentRun: (repoKey) => readCurrentAuditRun(auditRootDir(flowGlobalDir), repoKey),
@@ -1221,7 +1277,7 @@ async function createWindow(): Promise<void> {
       pickupRecordPredatesRun.add(repoKey);
     },
     endRun: composeLifecycleEndRun(autoGate),
-    recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    recordTerminate: (repoKey) => { void recordHumanPrompts(); audit.recordTerminate(repoKey); },
     recordRollback: (repoKey, before, after) => recordTransitionAndSample(repoKey, 'rollback', before, after),
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
@@ -1269,11 +1325,12 @@ async function createWindow(): Promise<void> {
   // in_progress (advance throws otherwise, e.g. a flow the operator terminated while the gate resolved) and
   // run inside inTransition so the next step's entry actions fire in transition context, matching the manual
   // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
-  const autoAdvanceFlow = (repoKey: string): void => {
+  const autoAdvanceFlow = (repoKey: string, inputs?: Record<string, string>): void => {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return;
-    const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
+    const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey, inputs));
     recordFlowTransition(repoKey, 'advance', pre, view);
+    if (inputs) audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
   };
 
   // §28.4.2 — the human back-to-red gate control's flow half. A BACKWARD re-entry, so it borrows `undo`'s
@@ -1320,7 +1377,8 @@ async function createWindow(): Promise<void> {
 
   // One deps factory for both deciders' approve (§27.9.1 N9b.5(c)): the gh and commit ports bind their worktree at
   // construction, so each decision gets its own.
-  const approveDepsFor = (repoKey: string): AppGateDecisionDeps => ({
+  const approveDepsFor = (repoKey: string, inputs?: Record<string, string>): AppGateDecisionDeps => ({
+    ...(inputs !== undefined ? { validateEntryInputs: (repoDir: string, decision?: FlowDecision) => flow.validateEntryInputs(repoDir, 'approve', inputs, decision) } : {}),
     readRunState: (repoDir) => readAppLoopState(repoDir),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
     refs: (repoDir) => {
@@ -1339,7 +1397,7 @@ async function createWindow(): Promise<void> {
     },
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: assembleFlowReport,
-    advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
+    advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir, inputs)),
     readStepDecision: (repoDir, step, def) => readFlowStepDecision(resolveActiveDefinition(repoDir), step, def),
     recordDecision: recordOnFlow(flow),
     auditDecision: (repoDir, step, value) => audit.recordDecision(repoDir, step, value),
@@ -1420,12 +1478,16 @@ async function createWindow(): Promise<void> {
     return Promise.resolve(false);
   };
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
+  const approveGate = (repoKey: string, step: string, turnKey: string, inputs?: Record<string, string>) => runAppApprove(repoKey, step, turnKey, approveDepsFor(repoKey, inputs), HUMAN_DECIDER);
+  const humanApproveDeps = { pickupHold: pickupHoldRefusal, bindingOf: gateBindingOf, approve: approveGate };
+  const approveFromUi = composeHumanApprove(autoGate, { ...humanApproveDeps, onRefused: refuseGateDecision });
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
-    advance: (repoKey) => {
+    advance: (repoKey, inputs) => {
       const pre = withDerived(repoKey, flow.state(repoKey));
-      const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
+      const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey, inputs));
       recordFlowTransition(repoKey, 'advance', pre, view);
+      if (inputs) audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
       return view;
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
@@ -1456,6 +1518,8 @@ async function createWindow(): Promise<void> {
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
   // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.
   ptyProcess.onData((data) => {
+    void recordHumanPrompts();
+    todoDelivery.recipientChanged();
     outputGate.send(data);
     shadow.write(data);
   });
@@ -1481,6 +1545,177 @@ async function createWindow(): Promise<void> {
     (ms, run) => { setTimeout(run, ms); },
     () => app.quit(),
   ));
+
+  const listFlowCatalog = (repoKey: string): FlowCatalogListResult =>
+    catalogListResult(() => listCatalog({ worktreeDir: repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(repoKey, choices)));
+  const windowId = randomUUID();
+  const readRoundReport = createRoundReportReader((line) => console.error(line));
+  const latestRoundReport = (repoKey: string, view: FlowStateView): Promise<unknown> => readLatestRoundReport(repoKey, view, readRoundReport);
+  const mcpWindowSource = () => {
+    const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
+    const view = withDerived(repoKey, flow.state(repoKey));
+    const catalog = listFlowCatalog(repoKey);
+    refreshControllerStatus();
+    return {
+      windowId,
+      repoKey,
+      view,
+      loopMessage: currentWork?.loopMessage ?? null,
+      todos: todoStore.list(repoKey),
+      ...catalogView(catalog),
+    };
+  };
+  const readMcpWindowState = async (): Promise<McpWindowState> => {
+    const source = mcpWindowSource();
+    return readWindowState({ ...source, latestRoundReport: await latestRoundReport(source.repoKey, source.view) });
+  };
+  const inputTypeMap = (repoKey: string): Record<string, string> => {
+    const load = resolveActiveDefinition(repoKey);
+    return stepInputTypes(load.ok ? load.definition.steps.find(step => step.id === flow.state(repoKey).stepName) : undefined);
+  };
+  const startFlow = (repoKey: string, inputs?: Record<string, string>): FlowStateView => {
+        const started = worktreeLock.withWorktreeLock(repoKey, () =>
+          beginRunHere(repoKey, () => {
+            const installNotice = installRunReviewers(repoKey);
+            const started = flowStartTransition(repoKey, inputs);
+            if (inputs && started.status === 'in_progress') audit.recordInputs(repoKey, inputs, inputTypeMap(repoKey));
+            trustedAppBootstraps.delete(repoKey);
+            return trackLoop(repoKey, withNotice(withDerived(repoKey, started), installNotice));
+          }),
+        );
+        if (started.ok) return started.value;
+        return trackLoop(repoKey, { ...withDerived(repoKey, flow.state(repoKey)), notice: started.reason });
+  };
+  const advanceFlow = (repoKey: string, step: string | undefined, inputs?: Record<string, string>): FlowStateView => {
+        const pre = withDerived(repoKey, flow.state(repoKey));
+        const held = pickupHoldRefusal(repoKey);
+        if (held !== null) return trackLoop(repoKey, { ...pre, notice: held });
+        const awaits = flow.pendingDecision(repoKey);
+        if (awaits !== null) return trackLoop(repoKey, { ...pre, notice: undecidedAdvanceNotice(awaits) });
+        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
+        const view = humanRunners.advance(repoKey, step, inputs);
+        if (view === null) {
+          return trackLoop(repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
+        }
+        if (ready) return trackLoop(repoKey, view);
+        const notice = pre.loop
+          ? 'Advanced while the loop still needs you.'
+          : 'Advanced with todos still outstanding.';
+        return trackLoop(repoKey, { ...view, notice });
+  };
+  const chooseFlow = (repoKey: string, id: string) => {
+    const result = activeFlowGate.set(repoKey, id);
+    if (result.ok) pushFlowChanged();
+    return result;
+  };
+  const prepareAppTurnRoute = (repoKey: string): string | null => {
+    const held = pickupHoldRefusal(repoKey);
+    if (held !== null) { loopMessages.post('error', held); return held; }
+    if (appEngine.activeRepoDir() !== repoKey) appEngine.resume(repoKey);
+    armAppTurnDoneWatch(repoKey);
+    return null;
+  };
+  const routeAppTurn = (repoKey: string, step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate'): void => {
+    if (prepareAppTurnRoute(repoKey) === null) appEngine.routeOut(repoKey, step, turnKey, action);
+  };
+  const entryStatus = (repoKey: string): McpOperationResult | null => {
+    if (pickupConfirmations.view(repoKey)) return { kind: 'waiting-on-dialog', message: 'Waiting on pickup confirmation at the machine.' };
+    if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: 'Pickup started.' };
+    return null;
+  };
+  const entryOutcome = (repoKey: string, view: FlowStateView, verb: string): McpOperationResult => {
+    pushFlowChanged();
+    if (view.pickupConfirm) return { kind: 'waiting-on-dialog', message: `${verb}; waiting on pickup confirmation at the machine.` };
+    if (pickupInFlight?.repoKey === repoKey) return { kind: 'taken', message: `${verb}; pickup started.` };
+    return { kind: 'taken', message: `${verb}.${view.notice ? ` ${view.notice}` : ''}` };
+  };
+  const todoOperations: typeof todoStore = {
+    list: (repo) => todoStore.list(repo),
+    add: (repo, text, source) => changeTodos(repo, () => todoStore.add(repo, text, source)),
+    update: (repo, id, text) => changeTodos(repo, () => todoStore.update(repo, id, text)),
+    reorder: (repo, ids) => changeTodos(repo, () => todoStore.reorder(repo, ids)),
+    setStatus: (repo, id, status) => changeTodos(repo, () => todoStore.setStatus(repo, id, status)),
+    delete: (repo, id) => changeTodos(repo, () => todoStore.delete(repo, id)),
+    clear: (repo) => changeTodos(repo, () => todoStore.clear(repo)),
+  };
+  function changeTodos(repo: string, change: () => ReturnType<typeof todoStore.list>) {
+    const before = todoSnapshot(repo);
+    const list = change();
+    audit.recordTodoChange(repo, before, list);
+    send(CH.todoChanged, { sessionId: SESSION_ID, repoKey: repo });
+    pushFlowChanged();
+    return list;
+  }
+  const captureReport = () => captureLastReport(SESSION_ID, store, scanner);
+  const todoDelivery = createMcpTodoDelivery({
+    sessions: sessionTurns,
+    destination: (pid, tmux) => {
+      const recipient = sessionRecipient(pid, ptyProcess.pid, tmux);
+      if (!recipient) return null;
+      if (tmux !== undefined) return recipient.pane === undefined ? null : { identity: recipient.identity, ...createPaneTransport(tmux, recipient.pane) };
+      return { identity: recipient.identity,
+        paste: data => ptyIo.io.write(wrapForPaste(data, shadow.isBracketedPaste())),
+        write: data => ptyIo.io.write(data),
+      };
+    },
+    markSent: (repo, todo) => { todoOperations.setStatus(repo, todo, 'in_progress'); },
+    deliveryObserver: () => audit.deliveryObserver(), noteInjection: () => suppressor.noteInjection(),
+    reportDrop: reason => console.error('MCP todo delivery dropped:', reason),
+  });
+  deliverMcpTodos = () => todoDelivery.flush(agentActivity === 'quiet');
+  const mcpActions = createMcpActions({
+    todos: todoOperations,
+    captureReport: () => {
+      const events = captureReport();
+      if (events.length) send(CH.captureChanged, { sessionId: SESSION_ID, events });
+      return events;
+    },
+    sendTodo: todoDelivery.send,
+    windowId,
+    readState: readMcpWindowState,
+    readActionState: () => readWindowState({ ...mcpWindowSource(), latestRoundReport: null }),
+    entryStatus,
+    gate: createMcpGateOperations({
+      ...humanApproveDeps, autoGate,
+      decide: (repoKey, step, turnKey, option, note) => runAppGateDecisionOutcome(repoKey, step, turnKey, option, approveDepsFor(repoKey), note),
+    }),
+    validateEntryInputs: (repoKey, action, values) => {
+      if (action === 'start') return flow.validateEntryInputs(repoKey, action, values);
+      const state = flow.state(repoKey);
+      const run = readAppLoopState(repoKey);
+      const def = run && run.step === state.stepName ? observedResolveDef(repoKey, run.loop) : null;
+      const decision = readFlowStepDecision(resolveActiveDefinition(repoKey), state.stepName, def?.ok ? def.def : null);
+      if (decision.kind === 'invalid') return { valid: false, reason: decisionProblemText(decision.problem) };
+      return flow.validateEntryInputs(repoKey, action, values, decision.kind === 'ok' ? decision.decision : undefined);
+    },
+    chooseFlow,
+    retry: (repoKey, step, turnKey) => {
+      const reason = prepareAppTurnRoute(repoKey);
+      return reason === null ? appEngine.retry(repoKey, step, turnKey) : { taken: false, reason };
+    },
+    dismissLoopMessage: (id) => loopMessages.dismiss(id),
+    start: (repoKey, inputs) => {
+      const view = startFlow(repoKey, inputs);
+      pushFlowChanged();
+      return startedAnswer(view, entryStatus(repoKey));
+    },
+    advance: (repoKey, step, inputs) => entryOutcome(repoKey, advanceFlow(repoKey, step, inputs), 'Advanced'),
+    terminate: (repoKey) => {
+      const result = lifecycle.terminate(repoKey);
+      pushFlowChanged();
+      return terminatedAnswer(result);
+    },
+  });
+  function recordHumanPrompts(): Promise<void> {
+    return sessionAudit.observe();
+  }
+  const callMcp = createMcpCallHandler({ repo: () => cwdTracker.repoKey() ?? resolveRepoKey(launchRoot), sessions: sessionTurns, audit, actions: mcpActions });
+  answerMcp = async (request, caller) => {
+    if (request.tool !== MCP_HOOK_REPORT) return callMcp(request, caller);
+    if (caller.session !== null) await sessionAudit.report(caller.session, request.args, caller.tmux);
+    deliverMcpTodos();
+    return null;
+  };
 
   const disposeIpc = registerIpcListeners(
     ipcMain,
@@ -1526,14 +1761,7 @@ async function createWindow(): Promise<void> {
       // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
-        const held = pickupHoldRefusal(m.repoKey);
-        if (held !== null) {
-          loopMessages.post('error', held);
-          return;
-        }
-        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
-        armAppTurnDoneWatch(m.repoKey);
-        appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+        routeAppTurn(m.repoKey, m.step, m.turnKey, m.action);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
@@ -1592,12 +1820,15 @@ async function createWindow(): Promise<void> {
       // a duplicate rather than replace the single slot. Fail-closed to [], which the renderer reads as
       // "nothing captured, keep the prior report" (§6 live-session check).
       [CH.captureLast]: (_e, m) =>
-        isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
+        isValidCaptureLast(m) ? captureReport() : [],
       // §27.9/§27.13 / N5 / §6 / AC7 — approve, polish and back-to-red without a brief. The reply is whether the
       // decision landed, sent once main has finished acting on it, so the gate's controls hold until then.
       // Fail-closed to false.
-      [CH.flowAppGateDecision]: (_e, m) =>
-        isValidFlowAppGateDecision(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option) : false,
+      [CH.flowAppGateDecision]: async (_e, m) => {
+        if (!isValidFlowAppGateDecision(m)) return false;
+        if (m.option !== 'approve') return humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option);
+        return (await approveFromUi(m.repoKey, m.step, m.turnKey)).kind === 'advanced';
+      },
       // §27.9/AC4 — request-changes is TWO-way: it returns whether the round started so the
       // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
       [CH.flowAppRequestChanges]: (_e, m) =>
@@ -1615,38 +1846,11 @@ async function createWindow(): Promise<void> {
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
-      [CH.todoAdd]: (_e, m) => {
-        if (!isValidTodoAdd(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.add(m.repoKey, m.text, m.source);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
-      [CH.todoUpdate]: (_e, m) => {
-        if (!isValidTodoUpdate(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.update(m.repoKey, m.id, m.text);
-        audit.recordTodoChange(m.repoKey, before, list);
-        return list;
-      },
-      [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
-      [CH.todoSetStatus]: (_e, m) => {
-        if (!isValidTodoSetStatus(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.setStatus(m.repoKey, m.id, m.status);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
-      [CH.todoDelete]: (_e, m) => {
-        if (!isValidTodoDelete(m)) return [];
-        const before = todoSnapshot(m.repoKey);
-        const list = todoStore.delete(m.repoKey, m.id);
-        audit.recordTodoChange(m.repoKey, before, list);
-        pushFlowChanged();
-        return list;
-      },
+      [CH.todoAdd]: (_e, m) => isValidTodoAdd(m) ? todoOperations.add(m.repoKey, m.text, m.source) : [],
+      [CH.todoUpdate]: (_e, m) => isValidTodoUpdate(m) ? todoOperations.update(m.repoKey, m.id, m.text) : [],
+      [CH.todoReorder]: (_e, m) => isValidTodoReorder(m) ? todoOperations.reorder(m.repoKey, m.orderedIds) : [],
+      [CH.todoSetStatus]: (_e, m) => isValidTodoSetStatus(m) ? todoOperations.setStatus(m.repoKey, m.id, m.status) : [],
+      [CH.todoDelete]: (_e, m) => isValidTodoDelete(m) ? todoOperations.delete(m.repoKey, m.id) : [],
       // Artifact viewer (§20.1/§20.2): discover/read against the live cwd (see viewerCwd). Read is
       // path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
@@ -1664,38 +1868,14 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
-        const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          beginRunHere(m.repoKey, () => {
-            const installNotice = installRunReviewers(m.repoKey);
-            const started = flowStartTransition(m.repoKey);
-            trustedAppBootstraps.delete(m.repoKey);
-            return trackLoop(m.repoKey, withNotice(withDerived(m.repoKey, started), installNotice));
-          }),
-        );
-        if (started.ok) return started.value;
-        return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
+        return startFlow(m.repoKey);
       },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const pre = withDerived(m.repoKey, flow.state(m.repoKey));
-        const held = pickupHoldRefusal(m.repoKey);
-        if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
-        const awaits = flow.pendingDecision(m.repoKey);
-        if (awaits !== null) return trackLoop(m.repoKey, { ...pre, notice: undecidedAdvanceNotice(awaits) });
-        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = humanRunners.advance(m.repoKey, m.step);
-        if (view === null) {
-          return trackLoop(m.repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
-        }
-        if (ready) return trackLoop(m.repoKey, view);
-        const notice = pre.loop
-          ? 'Advanced while the loop still needs you.'
-          : 'Advanced with todos still outstanding.';
-        return trackLoop(m.repoKey, { ...view, notice });
+        return advanceFlow(m.repoKey, m.step);
       },
       [CH.flowRestart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
@@ -1767,9 +1947,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowSetActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:setActiveFlow request' };
         }
-        const result = activeFlowGate.set(m.repoKey, m.id);
-        if (result.ok) pushFlowChanged();
-        return result;
+        return chooseFlow(m.repoKey, m.id);
       },
       [CH.flowClearActiveFlow]: (_e, m) => {
         if (!isValidFlowClearActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
@@ -1783,9 +1961,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowListCatalog(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:listCatalog request' };
         }
-        return catalogListResult(() =>
-          listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
-        );
+        return listFlowCatalog(m.repoKey);
       },
       // §27.10 — the answer names its offer, so it can never pick for a start the operator was not shown.
       [CH.flowResolveAdoptTicket]: (_e, m): ResolveAdoptTicketResult => {
@@ -1850,11 +2026,23 @@ async function createWindow(): Promise<void> {
     },
   );
 
+  let auditClose: Promise<void> | undefined;
+  let auditClosed = false;
+  win.on('close', event => {
+    if (auditClosed) return;
+    event.preventDefault();
+    auditClose ??= sessionAudit.close().finally(() => {
+      auditClosed = true;
+      win.close();
+    });
+  });
+
   win.on('closed', () => {
     // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
       unregisterController,
+      () => todoDelivery.close(),
       () => disposeIpc(),
       () => ptyProcess.kill(),
       () => scanner.dispose(),

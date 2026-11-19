@@ -2,7 +2,8 @@ import { connect, type Socket } from 'node:net';
 import { createServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
-import { lstat, mkdir, unlink } from 'node:fs/promises';
+import { lstat, unlink } from 'node:fs/promises';
+import { preparePrivateDir } from './ownedDir';
 import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +12,6 @@ import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PR
 import { createControllerTimelines } from './controllerTimeline';
 import { createWorktreeLock, type LockRefusalWording } from './worktreeLock';
 import { isErrno } from './errno';
-import { isPrivateDirectory } from './ownerOnlyPath';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
@@ -39,9 +39,7 @@ export interface ControllerRegistry {
 export async function startControllerTransport(appHome: string): Promise<ControllerRegistry> {
   const endpoint = resolveControllerEndpoint(appHome);
   const directory = dirname(endpoint);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const directoryStat = await lstat(directory);
-  if (!isPrivateDirectory(directoryStat, process.getuid?.() ?? -1)) {
+  if (!await preparePrivateDir(directory)) {
     throw new Error('The controller endpoint directory must be owned by the current user with permissions 0700.');
   }
   const ownership = createWorktreeLock({ lockRoot: directory, wording: CONTROLLER_LOCK_WORDING }).acquire(endpoint);

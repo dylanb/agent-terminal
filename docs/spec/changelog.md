@@ -1,3 +1,37 @@
+## #322 — queued human messages in the audit (2026-11-17)
+
+The real-client overlap check exposed a missing queued message in the full-prompt audit. §30.5 now makes
+explicit that confirmed human messages within an existing turn are recorded separately and subsequent
+human-turn calls reference the latest message. Turn authorization remains tied to the original turn;
+queued messages cannot authorize an engine-started turn.
+
+## #322 — stable MCP todo results (2026-11-11)
+
+The operator requested closing the remaining module-interface leaks. §30.3 now specifies that todo
+mutation results use the same identity, text and status representation as `read_state`, in list order.
+Persistence metadata is kept internal. Flow input validation, retry outcomes and prompt-to-audit
+conversion were also encapsulated without changing their existing rules or audit record format.
+
+## #322 — accepted prompt and audit security limits (2026-11-10)
+
+The operator reaffirmed §30.4's human-turn eligibility limit: it is not per-action consent and does not
+separate actions influenced by untrusted content. §30.5 and the README now state that secrets must not be
+entered into prompts. Full-prompt audits have no secret detection or redaction; accidental secrets can
+persist. This documents the accepted operator responsibility without adding a filtering guarantee.
+
+## #322 — Claude Code can operate its own window through MCP
+
+§30 (new), v2.227: explicit user decision 1 extends the §27.9.1 human-decided gate to MCP calls during a
+human-started turn. Explicit user decision 2 extends §25 with full human prompts and attributed MCP calls
+only while a run is open, plus distinct send delivery outcomes. Existing action events carry provenance
+without duplicate call events; UI actions remain distinguishable and legacy streams remain readable.
+
+The 2026-11-07 install amendment permits explicit Install/Remove actions to register the integration's own
+user-scope server and hooks in Claude Code configuration, preserving other entries. It supersedes the original
+no-user-config-write restriction; repository and `.gitignore` writes remain forbidden. The accepted limits
+are one pending send per turn, crash-only loss before a prompt is recorded, current-turn attribution of
+background calls, and treating nested terminals as the window's terminal. Codex and other-window summaries
+remain in #323 and #324. No §5 shell-launch amendment is made.
 ## A run's Claude Code reviewers live in its run folder
 
 §27.4 and §18.1 (#94): Install examples no longer writes Claude Code reviewer sub-agents to the user's agents folder, which every Claude Code session loaded at about 13.5k tokens. Start and Restart install the run flow's reviewers in `<run folder>/.claude/agents`, and the check before each reviewed turn reinstalls anything missing or stale and asks for a session restart when the files are newer than the session. One app-owned line in the repository's `info/exclude` keeps them out of git. Install examples offers to remove the copies older builds installed. Codex reviewers are unchanged.

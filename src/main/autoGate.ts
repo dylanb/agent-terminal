@@ -351,6 +351,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       case 'blocked':
         halt(repoDir, run, d, [{ reason: 'epic-promotion' }]);
         return;
+      case 'input-invalid':
       case 'refused':
         halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: detail(outcome.reason) }]);
         return;

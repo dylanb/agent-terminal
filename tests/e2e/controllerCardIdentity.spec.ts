@@ -105,7 +105,7 @@ printf '{"title":"GITHUB_TICKET_TITLE_%s","body":"PRIVATE BODY","url":"https://g
       if (/^\S/.test(line)) inInputs = line.startsWith('inputs:');
       return !inInputs;
     }).join('\n');
-    expect(withoutInputs).not.toContain('219');
+    expect(withoutInputs).not.toMatch(/(?<!\d)219(?!\d)/);
     writeFileSync(stateFile, withoutInputs);
     await expect.soft(header, 'user title returns once the ref is gone').toContainText(userTitle, { timeout: STATUS_BUDGET_MS });
     await expect.soft(header, 'GitHub title is gone with the ref').not.toContainText('GITHUB_TICKET_TITLE_219');

@@ -3,6 +3,7 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
+import { terminateOffered } from '../shared/terminateCount';
 import { isIssueNumber } from '../shared/issueNumber';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -14,7 +15,6 @@ import { createFlowStateStore, type FlowStateStore, type PersistedDecision } fro
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf, runRecordRead } from './runHoldRead';
-import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
@@ -439,7 +439,24 @@ export interface RunIdentity {
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
+export type FlowInputValidation = { valid: true } | { valid: false; reason: string };
+
+function validateEntryValues(declared: { name: string; type: string; required: boolean; value?: string }[], values: Record<string, string>): FlowInputValidation {
+  for (const name of Object.keys(values)) {
+    if (!declared.some(input => input.name === name)) return { valid: false, reason: `input ${JSON.stringify(name)} is not declared by the step being entered.` };
+  }
+  for (const input of declared) {
+    const supplied = Object.hasOwn(values, input.name);
+    if (!input.required && !supplied) continue;
+    const value = supplied ? values[input.name] : input.value;
+    if (!value?.trim()) return { valid: false, reason: `provide the required input ${JSON.stringify(input.name)}.` };
+    if ((input.type === 'github-ticket' || input.type === 'pr') && !/^[1-9]\d*$/.test(value)) return { valid: false, reason: `input ${JSON.stringify(input.name)} must be a positive issue or pull request number.` };
+  }
+  return { valid: true };
+}
+
 export interface FlowMachine {
+  validateEntryInputs(action: 'start' | 'approve', values: Record<string, string>, decision?: FlowDecision): FlowInputValidation;
   state(): MachineView;
   /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
@@ -449,10 +466,9 @@ export interface FlowMachine {
   sliceStartStep(): string | null;
   /** not_started → in_progress; throws on any other current status (inert in the error state). The run's
    *  identity (§27.9.1) takes `startedAt` (default: now) and this definition's name, kept until a reset. */
-  start(at?: { startedAt: number }): MachineView;
-  /** Moves to the next step the recorded decisions do not rule out, or to done when none is left. Stays put
-   *  while that step is still undecided. Throws unless in_progress (inert in the error state). */
-  advance(): MachineView;
+  start(at?: { startedAt: number; inputs?: Record<string, string> }): MachineView;
+  /** in_progress → done; throws on any other current status (inert in the error state). */
+  advance(inputs?: Record<string, string>): MachineView;
   /** The step whose missing decision keeps advance() from moving, or null when it would move. */
   pendingDecision(): string | null;
   /** Records the value the current step decided, returning what the step held before; null, recording nothing,
@@ -560,6 +576,7 @@ export function createFlowMachine(
     const view = (): MachineView => errorView(load.error, store?.readTitle() ?? null);
     return {
       state: view,
+      validateEntryInputs: (_action, values) => validateEntryValues([], values),
       currentSlice: () => 1, // an error-state flow (no definition) has no slices
       sliceStartStep: () => null,
       start: view,
@@ -790,9 +807,10 @@ export function createFlowMachine(
     });
   };
 
-  const nextMove = (): { kind: 'loop-back' | 'enter'; to: number } | { kind: 'done' } | { kind: 'undecided'; awaits: string } => {
+  const nextMove = (pendingDecision?: FlowDecision): { kind: 'loop-back' | 'enter'; to: number } | { kind: 'done' } | { kind: 'undecided'; awaits: string } => {
     const step = current();
     const taken = counted();
+    if (pendingDecision !== undefined && step.decides?.includes(pendingDecision.value)) taken[step.id] = pendingDecision;
     if (step.decides !== undefined && !Object.prototype.hasOwnProperty.call(taken, step.id)) return { kind: 'undecided', awaits: step.id };
     // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
     if (step.repeat) {
@@ -826,6 +844,15 @@ export function createFlowMachine(
   };
 
   return {
+    validateEntryInputs: (action, values, decision) => {
+      hydrate();
+      const move = action === 'start' ? { kind: 'enter' as const, to: index } : nextMove(decision);
+      if (move.kind === 'undecided') return { valid: false, reason: `The decision at ${move.awaits} is required before inputs for the next step can be validated.` };
+      const step = move.kind === 'done' ? undefined : steps[move.to];
+      return validateEntryValues((step?.inputs ?? []).map(input => ({
+        name: input.name, type: input.type, required: input.required, value: Object.hasOwn(inputs, input.name) ? inputs[input.name] : undefined,
+      })), values);
+    },
     state: () => {
       hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
       return view();
@@ -838,15 +865,17 @@ export function createFlowMachine(
     sliceStartStep: () => returnStep,
     start: (at) => {
       requireStatus('not_started', 'start');
+      inputs = { ...inputs, ...at?.inputs };
       status = 'in_progress';
       identity = { startedAt: at?.startedAt ?? Date.now(), flow: def.name };
       persist();
       return enter(view());
     },
-    advance: () => {
+    advance: (values) => {
       requireStatus('in_progress', 'advance');
       const move = nextMove();
       if (move.kind === 'undecided') return view();
+      inputs = { ...inputs, ...values };
       settleDecisions();
       if (move.kind === 'done') {
         status = 'done';
@@ -974,9 +1003,10 @@ export function createFlowMachine(
  * is created until a transition writes.
  */
 export interface FlowManager {
+  validateEntryInputs(repoKey: string, action: 'start' | 'approve', values: Record<string, string>, decision?: FlowDecision): FlowInputValidation;
   state(repoKey: string): FlowStateView;
-  start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition }): FlowStateView;
-  advance(repoKey: string): FlowStateView;
+  start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition; inputs?: Record<string, string> }): FlowStateView;
+  advance(repoKey: string, inputs?: Record<string, string>): FlowStateView;
   /** The step whose missing decision keeps a repo's Advance from moving, or null when it would move. */
   pendingDecision(repoKey: string): string | null;
   recordDecision(repoKey: string, stepId: string, gateTurn: string, decision: FlowDecision): RecordedFlowDecision | null;
@@ -1086,6 +1116,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
+    validateEntryInputs: (k, action, values, decision) => machineFor(k).machine.validateEntryInputs(action, values, decision),
     start: (k, opts) => {
       // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
       // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
@@ -1108,7 +1139,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
           return stateWithNotice(k, `The run could not be started: ${errMsg(e)}`);
         }
       }
-      const at = opts ? { startedAt: opts.startedAt } : undefined;
+      const at = opts ? { startedAt: opts.startedAt, inputs: opts.inputs } : undefined;
       const view = opts?.run ? machine.start(at) : machineView(k, (m) => m.start(at));
       if (begins && !hadMarker && view.status !== 'in_progress') {
         try {
@@ -1119,7 +1150,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       }
       return withRunStarted(k, view);
     },
-    advance: (k) => viewOf(k, (m) => m.advance()),
+    advance: (k, inputs) => viewOf(k, (m) => m.advance(inputs)),
     pendingDecision: (k) => machineFor(k).machine.pendingDecision(),
     recordDecision: (k, stepId, gateTurn, decision) => machineFor(k).machine.recordDecision(stepId, decision, gateTurn),
     withdrawDecision: (k, stepId, recorded) => machineFor(k).machine.withdrawDecision(stepId, recorded),
@@ -1164,9 +1195,10 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       const { machine } = machineFor(k);
       const status = machine.state().status;
       try {
-        if (status === 'in_progress' || status === 'done') machine.terminate();
-        else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
-        else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
+        const runStarted = status === 'error' ? worktreeStartedness(k) : 'started';
+        if (!terminateOffered({ status, runStarted })) return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
+        if (status === 'error') makeStore(k).clearProgression();
+        else machine.terminate();
       } catch (e) {
         const reason = displaySafeEcho(`The run could not be terminated: ${errMsg(e)}`, MAX_ECHOED_REASON_LENGTH);
         return { outcome: 'refused', cause: 'failed', reason, view: stateWithNotice(k, reason) };

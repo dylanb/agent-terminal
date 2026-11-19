@@ -38,6 +38,12 @@ import {
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
+export function seedIsolatedClaudeConfig(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, dir, { recursive: true });
+  return dir;
+}
+
 // The bound on every shim hold, well below the 60 s test ceiling, so a hold nobody releases fails its test on
 // that test's own assertion. Logs `held <pid> <argv>` first, then `released <pid>`, or `expired <pid>` and
 // fails the call.

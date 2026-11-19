@@ -65,6 +65,7 @@ const SELF_CHECK_ARTIFACT_CHECK: Record<SelfCheck, ArtifactCheck> = {
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
+export type AppRetryOutcome = { taken: true } | { taken: false; reason: string };
 
 /** §19.2/§27.10 */
 export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
@@ -266,6 +267,7 @@ export interface AppLoopEngine {
   onAgentWaitElapsed(): void;
   /** The §27-only error route-out, acting on the payload's step+turn identity, never ambient state (§6). */
   routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): void;
+  retry(repoDir: string, stepId: string, turnKey: string): AppRetryOutcome;
   /** §27.9/§19.4 (AC4) — a request-changes gate decision: re-enter the review-and-fix turn at round+1
    *  carrying the operator's `feedback` alongside the reviewers' findings, over the def's full catalog (fresh
    *  eyes). Acts only on the persisted gate matching the step+turn identity it names (§6), and only when that
@@ -1755,6 +1757,59 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     routeConsolidateToGate(turn, verdict, reason, roster);
   };
 
+  const retry = (repoDir: string, stepId: string, turnKey: string): AppRetryOutcome => {
+    if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return { taken: false, reason: 'the stopped turn no longer matches' };
+    if (runner.state() === 'in-flight') return { taken: false, reason: 'the turn is already running' };
+    if (active.phase === 'work') {
+      const rr = deps.resolveDef(repoDir, active.loopName);
+      if (!rr.ok) {
+        const goal = goalReached(active);
+        active = unresolvedWorkTurn({
+          repoDir,
+          loopName: active.loopName,
+          stepId,
+          turnKey,
+          ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          ...(goal !== undefined ? { goal } : {}),
+        });
+        const reason = 'the bound def no longer resolves — retry or terminate';
+        refuseRouteOut('def-unresolvable', reason);
+        return { taken: false, reason };
+      }
+      const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
+      active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
+        ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+        ...(goalReached(active) !== undefined ? { goal: goalReached(active) } : {}),
+        inputs,
+      });
+    } else if (active.phase === 'review') {
+      const { loopName, round, chosenRoster, feedback } = active;
+      const rebuilt = reviewTurnFor({ repoDir, loopName, stepId }, round, 're-enter', chosenRoster, feedback);
+      if (!rebuilt) {
+        active = {
+          ...unresolvedReviewTurn({ repoDir, loopName, stepId, turnKey, round }),
+          ...(chosenRoster ? { chosenRoster } : {}),
+          ...(feedback !== undefined ? { feedback } : {}),
+        };
+        const reason = 'the review round no longer resolves (def or report location) — retry or terminate';
+        refuseRouteOut('def-unresolvable', reason, round);
+        return { taken: false, reason };
+      }
+      active = rebuilt;
+    }
+    persist('working');
+    const retryAudit =
+      active.phase === 'review'
+        ? reviewRoundAuditCmd('retry', active.round)
+        : active.phase === 'consolidate'
+          ? consolidateAuditCmd('retry', active.round)
+          : `§27 work turn ${turnKey} retry`;
+    deps.audit(repoDir, retryAudit, null);
+    hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'retried'));
+    runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
+    return { taken: true };
+  };
+
   return {
     // §28.5.3 — surface the injected machine completion predicates; S3/S4's gate calls through this.
     completionPredicates: deps.completionPredicates,
@@ -1895,10 +1950,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onStall() {
       runner.onStall();
     },
+    retry,
     onAgentWaitElapsed() {
       runner.onAgentWaitElapsed();
     },
     routeOut(repoDir, stepId, turnKey, action) {
+      if (action === 'retry') { retry(repoDir, stepId, turnKey); return; }
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
       if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
       // §27.12 — every goal leg shares the turn key, so a route-out for a leg that already moved on reaches a
@@ -2098,62 +2155,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (artifact present)`);
         return;
       }
-      // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
-      // §27.10 — after a relaunch the route-out handler reconstructs this turn first (`index.ts`, and only
-      // when no live turn for this repo holds), and that reconstruction announces nothing. Retry is the
-      // operator asking the turn to RUN, so rebuild it from ONE fresh def resolution: an input that vanished
-      // since is surfaced rather than dropped from the INPUTS block in silence, one that came back is
-      // carried, and the recipe, boundary and completion contract cannot be a revision older than the
-      // inputs they are graded beside. An unresolvable def refuses the retry exactly as Accept refuses.
-      if (active.phase === 'work') {
-        const rr = deps.resolveDef(repoDir, active.loopName);
-        if (!rr.ok) {
-          // Neutralize to the same unresolved shape `resume` builds so the sibling Accept lever honours the
-          // same def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
-          // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
-          // resolves. A later retry with a resolvable def rebuilds via `activeTurnFor` from the preserved id.
-          const goal = goalReached(active);
-          active = unresolvedWorkTurn({
-            repoDir,
-            loopName: active.loopName,
-            stepId,
-            turnKey,
-            ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
-            ...(goal !== undefined ? { goal } : {}),
-          });
-          refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
-          return;
-        }
-        const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
-        active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
-          ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
-          ...(goalReached(active) !== undefined ? { goal: goalReached(active) } : {}),
-          inputs,
-        });
-      } else if (active.phase === 'review') {
-        const { loopName, round, chosenRoster, feedback } = active;
-        const rebuilt = reviewTurnFor({ repoDir, loopName, stepId }, round, 're-enter', chosenRoster, feedback);
-        if (!rebuilt) {
-          active = {
-            ...unresolvedReviewTurn({ repoDir, loopName, stepId, turnKey, round }),
-            ...(chosenRoster ? { chosenRoster } : {}),
-            ...(feedback !== undefined ? { feedback } : {}),
-          };
-          refuseRouteOut('def-unresolvable', 'the review round no longer resolves (def or report location) — retry or terminate', round);
-          return;
-        }
-        active = rebuilt;
-      }
-      persist('working');
-      const retryAudit =
-        active.phase === 'review'
-          ? reviewRoundAuditCmd('retry', active.round)
-          : active.phase === 'consolidate'
-            ? consolidateAuditCmd('retry', active.round)
-            : `§27 work turn ${turnKey} retry`;
-      deps.audit(repoDir, retryAudit, null);
-      hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'retried'));
-      runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
+
     },
     requestChanges(repoDir, stepId, turnKey, feedback) {
       if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn

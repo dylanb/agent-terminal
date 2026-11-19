@@ -1,3 +1,6 @@
+import { createMcpGateOperations } from '../../src/main/mcpGateOperations';
+import { mcpActions as createMcpActions } from '../helpers/mcpActions';
+import type { McpWindowState } from '../../src/shared/mcpWindowState';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -14,6 +17,7 @@ import {
 import { recordOnFlow, stepScopedAdvance, type AppGateDecisionDeps, type ApproveClaim, type ApproveDecider, type GateApproveOutcome } from '../../src/main/appGateDecision';
 import {
   composeEngineApprove,
+  composeHumanApprove,
   composeHumanDecisionRunners,
   composeLoopBindingResolve,
   composeObservedResolveDef,
@@ -57,6 +61,7 @@ import type { ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
 import type { FlowStepDef } from '../../src/main/flow';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons } from '../../src/shared/audit';
 import type { AutoHaltReason } from '../../src/shared/gateAuthority';
+import { MARKED_BINDING_REASON, RETIRED_LOOP_NAMESPACE, type LoopBinding } from '../../src/shared/loopNamespace';
 import { createVirtualClock, type VirtualClock } from '../helpers/virtualClock';
 import { createAppLoopEngineHarness, CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, TEST_BRANCH, TURN_KEY } from '../helpers/appLoopEngineHarness';
 import { roundReportWithDisposition } from '../helpers/roundReports';
@@ -1229,6 +1234,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
 
 describe('autoGate — every engine approve outcome other than `advanced` halts the gate (N9b.6(k)/(l), #137 S1)', () => {
   it.each([
+    ['input-invalid', { kind: 'input-invalid', reason: 'ticket is required' } as GateApproveOutcome, 1, 'approve-not-persisted', 'ticket is required'],
     ['refused', { kind: 'refused', reason: 'the run-state no longer matches the gate' } as GateApproveOutcome, 1, 'approve-not-persisted', 'the run-state no longer matches the gate'],
     ['accept-failed', { kind: 'accept-failed', reason: 'ENOSPC' } as GateApproveOutcome, 0, 'approve-not-persisted', 'ENOSPC'],
     ['blocked', { kind: 'blocked' } as GateApproveOutcome, 1, 'epic-promotion', undefined],
@@ -2274,6 +2280,94 @@ describe('autoGate — one decider per gate, through the composed runners (AC10,
     expect(rig.approvals).toEqual([]);
     expect(engineDecided(rig)).toEqual([]);
     expect(rig.view().autoGate?.deciding).toBe(false);
+  });
+});
+
+describe('autoGate — the human approve the Approve control and the MCP approve share (#322)', () => {
+  const PICKUP_HOLD = 'confirm or cancel the ticket pickup before deciding the gate';
+  const humanApprove = (rig: Rig, opts: { pickupHold?: string; binding?: LoopBinding; outcome?: GateApproveOutcome } = {}) =>
+    composeHumanApprove(rig.gate, {
+      pickupHold: () => opts.pickupHold ?? null,
+      bindingOf: () => opts.binding ?? 'app',
+      approve: async (dir, step, turnKey) => {
+        if (opts.outcome !== undefined) return opts.outcome;
+        writeAppLoopState(dir, { loop: LOOP, step, turnKey, status: 'accepted' }, FIXED);
+        return { kind: 'advanced', effectFailures: [] };
+      },
+    });
+  const accepted = (): boolean => readAppLoopState(repoDir)?.status === 'accepted';
+
+  it('an approve at a halted auto gate is taken, settles the halt and withdraws the question the halt asked', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const withdrawnBefore = rig.withdrawn();
+    const outcome = await humanApprove(rig)(repoDir, STEP, TURN);
+    await flush();
+    expect({ outcome, accepted: accepted(), haltReasons: rig.view().autoGate?.haltReasons ?? [], questionsWithdrawn: rig.withdrawn() - withdrawnBefore }).toEqual({
+      outcome: { kind: 'advanced', effectFailures: [] },
+      accepted: true,
+      haltReasons: [],
+      questionsWithdrawn: 1,
+    });
+  });
+
+  it('an approve that reaches the deciding gate before the engine stands the engine down: no engine approve runs', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
+    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const outcome = await humanApprove(rig)(repoDir, STEP, TURN);
+    rig.gate.gateReached(repoDir, STEP, TURN);
+    await flush();
+    expect({ outcome: outcome.kind, engineApprovals: rig.approvals, engineEntries: engineDecided(rig) }).toEqual({ outcome: 'advanced', engineApprovals: [], engineEntries: [] });
+  });
+
+  it.each([
+    ['a pending pickup confirmation', { pickupHold: PICKUP_HOLD }, PICKUP_HOLD],
+    ['a step bound to the retired engine', { binding: RETIRED_LOOP_NAMESPACE }, MARKED_BINDING_REASON],
+  ] as const)('%s refuses the approve, naming why, before it is accepted; as at the Approve control, the attempt still withdraws the halt\'s question and the halt stays', async (_name, opts, reason) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const withdrawnBefore = rig.withdrawn();
+    const outcome = await humanApprove(rig, opts)(repoDir, STEP, TURN);
+    await flush();
+    expect({ outcome, accepted: accepted(), haltReasons: rig.view().autoGate?.haltReasons ?? [], questionsWithdrawn: rig.withdrawn() - withdrawnBefore }).toEqual({
+      outcome: { kind: 'refused', reason },
+      accepted: false,
+      haltReasons: [{ reason: 'stop-for-a-human' }],
+      questionsWithdrawn: 1,
+    });
+  });
+
+  it.each<[string, GateApproveOutcome, boolean]>([
+    ['taken with a failed side effect', { kind: 'advanced', effectFailures: ['mark-ready: HTTP 502'] }, true],
+    ['held at the gate', { kind: 'held', effectFailures: ['side-effect-failed: mark-ready: HTTP 502'] }, false],
+    ['whose accept could not be saved', { kind: 'accept-failed', reason: 'ENOSPC' }, false],
+    ['waiting on the epic-promotion preview', { kind: 'preview-raised' }, false],
+    ['whose epic promotion is blocked', { kind: 'blocked' }, false],
+  ])('an approve %s at a halted auto gate returns its outcome, and settles the halt only when it advanced', async (_name, outcome, settles) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const got = await humanApprove(rig, { outcome })(repoDir, STEP, TURN);
+    await flush();
+    expect({ got, haltReasons: rig.view().autoGate?.haltReasons ?? [] }).toEqual({ got: outcome, haltReasons: settles ? [] : [{ reason: 'stop-for-a-human' }] });
+  });
+
+  it.each([
+    ['a pending pickup confirmation', { pickupHold: PICKUP_HOLD }, PICKUP_HOLD],
+    ['a step bound to the retired engine', { binding: RETIRED_LOOP_NAMESPACE }, MARKED_BINDING_REASON],
+  ] as const)('an approve %s refuses that reaches the deciding gate before the engine still stands the engine down', async (_name, opts, reason) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
+    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const outcome = await humanApprove(rig, opts)(repoDir, STEP, TURN);
+    rig.gate.gateReached(repoDir, STEP, TURN);
+    await flush();
+    expect({ outcome, engineApprovals: rig.approvals, engineEntries: engineDecided(rig) }).toEqual({ outcome: { kind: 'refused', reason }, engineApprovals: [], engineEntries: [] });
   });
 });
 
@@ -3439,5 +3533,130 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readArmedInterrupt(repoDir)).toBeNull();
     held.release();
     await held.drained();
+  });
+});
+
+describe('autoGate — an engine approve whose step report cannot be assembled (#322)', () => {
+  it('advances with the Loop error only: no failed-effect marker, as before the MCP approve named report failures', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    const withReport = { ...COMMIT_GATE, outputs: [{ id: 'impl-report', path: 'r.md', sectionsDir: 'r' }] } as unknown as LoopDefV2;
+    const errors: string[] = [];
+    rig.gate.attachApprove(
+      composeEngineApprove(
+        () =>
+          approveDeps({
+            resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+            assembleReport: () => {
+              throw new Error('EACCES: permission denied');
+            },
+            emitError: (reason) => void errors.push(reason),
+          }),
+        () => 'app',
+      ),
+    );
+    await reachGate(rig, 'clean');
+    expect({ loopErrors: errors.length, failedEffect: rig.view().autoGate?.failedEffect }).toEqual({ loopErrors: 1, failedEffect: undefined });
+  });
+});
+
+describe('autoGate — two human approves of one gate at once (#322)', () => {
+  it('the Approve control and an MCP approve over the same gate run the approve once: the one that arrives second is refused, naming why, and the gate is not told of it', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const waiting: (() => void)[] = [];
+    const release = (): void => waiting.splice(0).forEach((resolve) => resolve());
+    const approves: string[] = [];
+    const deps = {
+      pickupHold: () => null,
+      bindingOf: (): LoopBinding => 'app',
+      approve: async (_dir: string, step: string): Promise<GateApproveOutcome> => {
+        approves.push(step);
+        await new Promise<void>((resolve) => void waiting.push(resolve));
+        return { kind: 'advanced', effectFailures: [] };
+      },
+    };
+    const fromUi = composeHumanApprove(rig.gate, deps);
+    const fromMcp = composeHumanApprove(rig.gate, deps);
+    const first = fromUi(repoDir, STEP, TURN);
+    const withdrawnBefore = rig.withdrawn();
+    const pendingSecond = fromMcp(repoDir, STEP, TURN);
+    await flush();
+    const questionsWithdrawnBySecond = rig.withdrawn() - withdrawnBefore;
+    release();
+    const second = await pendingSecond;
+    expect({ first: (await first).kind, second: second.kind, namesWhy: second.kind === 'refused' && /already running/.test(second.reason), approves, questionsWithdrawnBySecond }).toEqual({
+      first: 'advanced',
+      second: 'refused',
+      namesWhy: true,
+      approves: [STEP],
+      questionsWithdrawnBySecond: 0,
+    });
+  });
+});
+
+describe('autoGate — the Approve control pressed while an MCP approve of the gate runs (#322)', () => {
+  it('is refused with the reason the control posts as its Loop error', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const waiting: (() => void)[] = [];
+    const deps = {
+      pickupHold: () => null,
+      bindingOf: (): LoopBinding => 'app',
+      approve: async (): Promise<GateApproveOutcome> => {
+        await new Promise<void>((resolve) => void waiting.push(resolve));
+        return { kind: 'advanced', effectFailures: [] };
+      },
+    };
+    const posted: string[] = [];
+    const fromMcp = composeHumanApprove(rig.gate, deps)(repoDir, STEP, TURN);
+    await flush();
+    const fromUi = await composeHumanApprove(rig.gate, { ...deps, onRefused: (reason) => void posted.push(reason) })(repoDir, STEP, TURN);
+    waiting.splice(0).forEach((resolve) => resolve());
+    await fromMcp;
+    expect({ fromUi: fromUi.kind, posted: posted.length === 1 && fromUi.kind === 'refused' && posted[0] === fromUi.reason }).toEqual({ fromUi: 'refused', posted: true });
+  });
+});
+
+describe('MCP gate decisions stand down the automatic gate', () => {
+  async function callDecision(rig: Rig, tool: string): Promise<boolean> {
+    const state: McpWindowState = {
+      window: { id: 'gate-window' }, repo: { key: repoDir },
+      flow: { selected: null, steps: [STEP], step: STEP, status: 'in_progress', runStarted: true },
+      selectionUnusable: false,
+      gate: { step: STEP, turn: TURN, options: ['approve', 'request-changes', 'redo', 'polish'], reasons: [], engineDeciding: false },
+      stalledTurn: null, loopMessage: null, roundReport: null, todos: [], startable: null, startableError: null, terminateTodoCount: 0,
+    };
+    const ports = {
+      windowId: 'gate-window', originOf: async () => 'human' as const,
+      readState: async () => state, readActionState: () => state,
+      gate: createMcpGateOperations({ autoGate: rig.gate, pickupHold: () => null, bindingOf: () => 'app' as const,
+        approve: async () => ({ kind: 'refused' as const, reason: 'not this action' }),
+        decide: async () => ({ taken: true as const }) }),
+    };
+    try {
+      await createMcpActions(ports).call({ tool, args: { window: state.window.id, repo: repoDir, step: STEP, turn: TURN,
+        ...(tool === 'request_changes' ? { feedback: 'Revisit the boundary' } : {}), ...(tool === 'redo' ? { instruction: 'Rebuild the boundary' } : {}) } }, { session: 501 });
+      return true;
+    } catch { return false; }
+  }
+
+  it.each(['request_changes', 'redo', 'polish'])('%s withdraws the held question and settles the shown auto halt', async tool => {
+    const rig = makeRig(); startTrusted(rig); await reachGate(rig, 'stop for a human');
+    expect(rig.asked.length).toBeGreaterThan(0);
+    const before = rig.withdrawn();
+    const answered = await callDecision(rig, tool); await flush();
+    expect({ answered, withdrawn: rig.withdrawn() > before, reasons: rig.view().autoGate?.haltReasons ?? [] }).toEqual({ answered: true, withdrawn: true, reasons: [] });
+  });
+
+  it.each(['request_changes', 'redo', 'polish'])('%s at a deciding gate prevents the competing engine approval', async tool => {
+    const rig = makeRig(); startTrusted(rig);
+    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
+    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const answered = await callDecision(rig, tool);
+    rig.gate.gateReached(repoDir, STEP, TURN); await flush();
+    expect({ answered, approvals: rig.approvals, entries: engineDecided(rig) }).toEqual({ answered: true, approvals: [], entries: [] });
   });
 });

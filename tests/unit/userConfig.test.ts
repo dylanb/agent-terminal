@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   userConfigRoot,
   userConfigRootFrom,
+  userClaudeStateFileFrom,
   userConfigLoopsDir,
   userConfigCommandsDir,
 } from '../../src/main/userConfig';
@@ -102,5 +103,15 @@ describe('the destination branches all derive from the one root', () => {
       expect(dir).not.toBeNull();
       expect((dir as string).startsWith('/redirected' + path.sep)).toBe(true);
     }
+  });
+});
+
+describe("Claude Code's state file", () => {
+  it('sits inside CLAUDE_CONFIG_DIR when set, else at <home>/.claude.json, and is refused for a relative override', () => {
+    expect({
+      override: userClaudeStateFileFrom({ CLAUDE_CONFIG_DIR: ' /cfg/claude ' }, '/home/op'),
+      home: userClaudeStateFileFrom({}, '/home/op'),
+      relative: userClaudeStateFileFrom({ CLAUDE_CONFIG_DIR: 'cfg' }, '/home/op'),
+    }).toEqual({ override: '/cfg/claude/.claude.json', home: '/home/op/.claude.json', relative: null });
   });
 });
