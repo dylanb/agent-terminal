@@ -793,7 +793,7 @@ describe('resolveLoopDefV2: the decision output (§27.8)', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', withVerdict('nope'));
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('decision.output "nope" is not an output');
+    if (!r.ok) expect(r.reason).toContain('decision.output "nope" is not an output');
   });
 
   it('rejects a decision that is not a mapping naming an output', () => {

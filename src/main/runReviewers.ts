@@ -11,11 +11,14 @@ import type { AgentKind } from '../shared/agentKind';
 import type { FlowStepDef } from './flow';
 import { reviewerHome } from './reviewerPlacement';
 import type { LoopDefV2Result } from './loopDefV2';
-import { reviewRoster, type RosterEntry } from './reviewTurn';
+import { reviewRoster } from './reviewTurn';
 import { CLAUDE_REVIEWER_AGENT, installedCodexReviewerProblem, installedReviewerProblem, renderReviewerAgent, type AgentsDir, type InstalledReviewer } from './reviewerAgents';
 
 import { resolvedReviewerFile, resolvedReviewerName } from './resolvedReviewer';
+import { bindsNoSurvivingEngine, DEFAULT_LOOP_NAMESPACE } from '../shared/loopNamespace';
 import { RUN_REVIEWER_FILE_GLOB } from '../shared/resolvedReviewer';
+import { repairAdvice } from './fileRepairAdvice';
+import { readBoundedNoFollow } from './boundedRead';
 
 const RUN_AGENTS_SEGMENTS = ['.claude', 'agents'] as const;
 const EXCLUDE_LINE = `/${RUN_AGENTS_SEGMENTS.join('/')}/${RUN_REVIEWER_FILE_GLOB}`;
@@ -68,13 +71,14 @@ function commonGitDir(runFolder: string): { ok: true; dir: string | null } | { o
     isDir = st.isDirectory();
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { ok: true, dir: null };
-    return { ok: false, problem: `cannot read ${dotGit}: ${errMsg(e)}` };
+    return { ok: false, problem: `cannot read ${dotGit}: ${errMsg(e)}. ${repairAdvice(e, dotGit, 'u+r', resolveJail(runFolder))}` };
   }
   if (isDir) return { ok: true, dir: dotGit };
+  let gitDir: string | null = null;
   try {
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'));
     if (m === null) return { ok: false, problem: `${dotGit} names no git folder` };
-    const gitDir = path.resolve(runFolder, m[1]);
+    gitDir = path.resolve(runFolder, m[1]);
     if (!isFileAt(path.join(gitDir, 'HEAD'))) return { ok: false, problem: `${dotGit} points at ${gitDir}, which is not a git folder` };
     const backLink = readOrNull(path.join(gitDir, 'gitdir'));
     if (backLink !== null && realpathBounded(path.resolve(gitDir, backLink.toString('utf8').trim())) !== realpathSync(dotGit)) {
@@ -89,7 +93,9 @@ function commonGitDir(runFolder: string): { ok: true; dir: string | null } | { o
     }
     return { ok: true, dir: common };
   } catch (e) {
-    return { ok: false, problem: `cannot read the git folder ${dotGit} points at: ${errMsg(e)}` };
+    const file = e instanceof Error && 'path' in e && typeof e.path === 'string' ? e.path : dotGit;
+    const jail = file === dotGit || gitDir === null ? resolveJail(runFolder) : resolveOwnedDirJail(gitDir);
+    return { ok: false, problem: `cannot inspect Git metadata ${file}: ${errMsg(e)}. ${repairAdvice(e, file, 'u+r', jail)}` };
   }
 }
 
@@ -125,7 +131,7 @@ function ensureExcluded(runFolder: string): string | null {
     }
     return null;
   } catch (e) {
-    return `cannot add the reviewers to ${exclude}: ${errMsg(e)}`;
+    return `cannot add the reviewers to ${exclude}: ${errMsg(e)}. ${repairAdvice(e, exclude, 'u+rw')}`;
   }
 }
 
@@ -164,52 +170,88 @@ function ensureRealDirs(runFolder: string): string | null {
     try {
       if (!lstatSync(dir).isDirectory()) return `${dir} is not a real folder`;
     } catch (e) {
-      if (!isErrno(e, 'ENOENT')) return `cannot read ${dir}: ${errMsg(e)}`;
+      if (!isErrno(e, 'ENOENT')) return `cannot read ${dir}: ${errMsg(e)}. ${repairAdvice(e, dir, 'u+rwx')}`;
       try {
         mkdirSync(dir);
       } catch (err) {
-        return `cannot create ${dir}: ${errMsg(err)}`;
+        return `cannot create ${dir}: ${errMsg(err)}. ${repairAdvice(err, dir, 'u+rwx')}`;
       }
     }
   }
   return null;
 }
 
-export function ensureRunReviewers(runFolder: string, reviewers: readonly InstalledReviewer[], _bundleDir: string): EnsureRunReviewersResult {
-  const result: EnsureRunReviewersResult = { wrote: [], problems: [] };
+const MAX_REVIEWER_BYTES = 16 * 1024 * 1024;
+
+function readCharter(file: string): string {
+  const read = readBoundedNoFollow(file, MAX_REVIEWER_BYTES, true);
+  if (!read.ok) throw read.error ?? new Error(`${file}: ${read.cause === 'absent' ? 'missing file' : read.cause}`);
+  if (read.text.trim().length === 0) throw new Error('the charter is empty');
+  return read.text;
+}
+
+export interface ReviewerCatalog {
+  reviewers: readonly InstalledReviewer[];
+  problems: readonly string[];
+}
+
+export function ensureRunReviewers(runFolder: string, input: readonly InstalledReviewer[] | ReviewerCatalog, _bundleDir: string): EnsureRunReviewersResult {
+  const { reviewers, problems } = 'reviewers' in input ? input : { reviewers: input, problems: [] };
+  const result: EnsureRunReviewersResult = { wrote: [], problems: [...problems] };
   if (reviewers.length === 0) return result;
   const agents = runAgentsDir(runFolder);
   if (agents.jail === null) return { wrote: [], problems: [`the run folder ${runFolder} cannot be resolved`] };
   const wanted = new Map<string, Buffer>();
   for (const reviewer of reviewers) {
+    let charter: string;
     try {
-      const charter = readFileSync(reviewer.charter, 'utf8');
+      charter = readCharter(reviewer.charter);
+    } catch (e) {
+      result.problems.push(`cannot read the charter ${reviewer.charter} for reviewer ${reviewer.persona} of ${reviewer.loop}: ${errMsg(e)}. ${repairAdvice(e, reviewer.charter, 'u+r')}`);
+      continue;
+    }
+    try {
       wanted.set(resolvedReviewerFile(reviewer), Buffer.from(renderReviewerAgent({ ...reviewer, charter }, resolvedReviewerName(reviewer))));
     } catch (e) {
-      result.problems.push(`cannot read the charter ${reviewer.charter} or render reviewer ${reviewer.persona} of ${reviewer.loop}: ${errMsg(e)}`);
+      const definition = reviewer.definitionFile ?? `the definition of loop ${reviewer.loop}`;
+      result.problems.push(`cannot render reviewer ${reviewer.persona} of ${reviewer.loop}: ${errMsg(e)}. Correct that reviewer's declaration in ${definition}, then Retry.`);
     }
   }
-  if (wanted.size === 0) return result;
+  if (result.problems.length > 0 || wanted.size === 0) return result;
+  const affected = reviewers.map((reviewer) => `${reviewer.persona} of ${reviewer.loop}`).join(', ');
   const excludeProblem = ensureExcluded(runFolder);
-  if (excludeProblem !== null) return { wrote: [], problems: [...result.problems, excludeProblem] };
+  if (excludeProblem !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${excludeProblem}. Correct the exclusion and Retry.`] };
   const dirProblem = ensureRealDirs(runFolder);
-  if (dirProblem !== null) return { wrote: [], problems: [...result.problems, dirProblem] };
+  if (dirProblem !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${dirProblem}. Correct the destination and Retry.`] };
   const pending: { rel: string; file: string; bytes: Buffer }[] = [];
   for (const [rel, bytes] of wanted) {
     const file = path.join(agents.dir, rel);
     const real = confinedRealPathResult(agents.jail, file);
     if (!real.ok) {
-      result.problems.push(`the sub-agent file ${file} is not inside ${agents.dir}`);
+      result.problems.push(real.cause === 'escapes'
+        ? `${affected}: the sub-agent file ${file} is not inside ${agents.dir}. Correct the destination reference or link, then Retry.`
+        : `${affected}: cannot resolve ${file}: ${errMsg(real.error)}. ${repairAdvice(real.error, file, 'u+rw', agents.jail)}`);
       continue;
     }
     try {
-      if (readOrNull(real.path)?.equals(bytes)) continue;
-    } catch {}
+      const st = lstatSync(real.path);
+      if (!st.isFile()) {
+        result.problems.push(`${affected}: ${file} is not a regular file. Replace it with a regular reviewer file or remove the obstruction, then Retry.`);
+        continue;
+      }
+      const read = readBoundedNoFollow(real.path, MAX_REVIEWER_BYTES * 2);
+      if (read.ok && Buffer.from(read.text).equals(bytes)) continue;
+    } catch (e) {
+      if (!isErrno(e, 'ENOENT')) {
+        result.problems.push(`${affected}: cannot inspect ${file}: ${errMsg(e)}. ${repairAdvice(e, file, 'u+rw')}`);
+        continue;
+      }
+    }
     pending.push({ rel, file, bytes });
   }
-  if (pending.length === 0) return result;
+  if (result.problems.length > 0 || pending.length === 0) return result;
   const visible = gitWouldSee(runFolder, pending.map((p) => [...RUN_AGENTS_SEGMENTS, p.rel].join('/')));
-  if (visible !== null) return { wrote: [], problems: [...result.problems, visible] };
+  if (visible !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${visible}`] };
   for (const { file, bytes } of pending) {
     try {
       if (!atomicWriteFileSync(file, bytes, { mode: 0o644 })) {
@@ -218,7 +260,7 @@ export function ensureRunReviewers(runFolder: string, reviewers: readonly Instal
       }
       result.wrote.push(file);
     } catch (e) {
-      result.problems.push(`cannot write ${file}: ${errMsg(e)}`);
+      result.problems.push(`${affected}: cannot write ${file}: ${errMsg(e)}. ${repairAdvice(e, path.dirname(file), 'u+rwx')}`);
     }
   }
   return result;
@@ -228,6 +270,7 @@ export function ensureRunReviewers(runFolder: string, reviewers: readonly Instal
  *  (or just now) is one the running session has not loaded. */
 export function runReviewerProblems(runFolder: string, reviewers: readonly InstalledReviewer[], bundleDir: string, sessionStartedAt: number | null): string[] {
   const ensured = ensureRunReviewers(runFolder, reviewers, bundleDir);
+  if (ensured.problems.length > 0) return ensured.problems;
   const agents = runAgentsDir(runFolder);
   const unrunnable = reviewers.map((r) => installedReviewerProblem(agents, r)).filter((p): p is string => p !== null);
   const problems = [...ensured.problems, ...unrunnable];
@@ -249,24 +292,25 @@ export function reviewerInstallNotice(result: EnsureRunReviewersResult, runningA
   if (result.wrote.length > 0 && runningAgent === 'claude-code') {
     parts.push('Restart your agent session in the run folder (for example claude --continue) before the first review: its reviewers were installed after the session started.');
   }
-  const n = result.problems.length;
-  if (n > 0) {
-    const first = result.problems[0].replace(/\.$/, '');
-    parts.push(
-      n === 1
-        ? `A reviewer could not be installed in this run folder, so its review turn will stop: ${first}.`
-        : `${n} reviewer problems in this run folder, so those review turns will stop and say what to fix. The first: ${first}.`,
-    );
+  if (result.problems.length > 0) {
+    parts.push(`Reviewer installation failed; the flow must stay stopped until repaired:\n${result.problems.join('\n')}`);
   }
   return parts.length === 0 ? null : parts.join(' ');
 }
 
-export function flowReviewers(steps: readonly Pick<FlowStepDef, 'kind' | 'loop'>[], resolve: (loop: string) => LoopDefV2Result): RosterEntry[] {
-  return steps.flatMap((step) => {
-    if (step.kind !== 'loop' || step.loop === undefined) return [];
+export function flowReviewers(steps: readonly Pick<FlowStepDef, 'kind' | 'loop' | 'loopNamespace'>[], resolve: (loop: string) => LoopDefV2Result): ReviewerCatalog {
+  const problems: string[] = [];
+  const reviewers = steps.flatMap((step) => {
+    if (step.kind !== 'loop' || step.loop === undefined || bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) return [];
     const def = resolve(step.loop);
-    return def.ok ? reviewRoster(def.def) : [];
+    if (!def.ok) {
+      problems.push(`Cannot resolve reviewers for ${step.loop}: ${def.reason}. Correct the reported problem and Retry.`);
+    }
+    const catalog = def.ok ? def.def : def.reviewerDiagnostics;
+    const definitionFile = def.ok ? def.definitionFile : def.reviewerDiagnostics?.definitionFile;
+    return catalog === undefined ? [] : reviewRoster(catalog).map((reviewer) => ({ ...reviewer, ...(definitionFile === undefined ? {} : { definitionFile }) }));
   });
+  return { reviewers, problems };
 }
 
 export interface ReviewerCheckDeps {

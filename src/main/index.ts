@@ -149,6 +149,8 @@ import { ensureReviewersRunnable, ensureRunReviewers, flowReviewers, reviewerIns
 import { installsPerRun } from './reviewerPlacement';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { hostedAgentKind, identifiedAgent, sessionAgent } from './agentKind';
+import type { AgentKind } from '../shared/agentKind';
+import { errMsg } from './errno';
 import { createAgentHosting } from './agentHosting';
 import { readCurrentAuditRun } from './auditRun';
 import { foregroundCommand, foregroundStartedAt } from './foregroundCommand';
@@ -595,6 +597,7 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
+    ensureReviewerInstallation: (repoDir) => prepareRunReviewers(repoDir, identifiedAgent(tracker.summaries(), foregroundProgram())).problems,
     ensureReviewersRunnable: (repoDir, reviewers, kind) => {
       const home = codexHome();
       return ensureReviewersRunnable(kind, repoDir, reviewers, {
@@ -1204,6 +1207,7 @@ async function createWindow(): Promise<void> {
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {
       ...base,
+      ...(reviewerInstallationFailures.get(repoKey)?.retry ? { installationRetry: reviewerInstallationFailures.get(repoKey)!.retry, notice: reviewerInstallationFailures.get(repoKey)!.reason } : {}),
       ...(activity ? { loopActivity: activity } : {}),
       ...(pickupConfirm !== undefined ? { pickupConfirm } : {}),
     };
@@ -1271,7 +1275,7 @@ async function createWindow(): Promise<void> {
   // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
   const autoAdvanceFlow = (repoKey: string): void => {
     const pre = flow.state(repoKey);
-    if (pre.status !== 'in_progress') return;
+    if (pre.status !== 'in_progress' || reviewerInstallHold(repoKey) !== null) return;
     const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
     recordFlowTransition(repoKey, 'advance', pre, view);
   };
@@ -1414,7 +1418,7 @@ async function createWindow(): Promise<void> {
     run: runAppGateDecisionRaw,
   });
   const runAppGateDecision: typeof guardedGateDecision = (repoKey, ...rest) => {
-    const held = pickupHoldRefusal(repoKey);
+    const held = pickupHoldRefusal(repoKey) ?? reviewerInstallHold(repoKey);
     if (held === null) return guardedGateDecision(repoKey, ...rest);
     refuseGateDecision(held);
     return Promise.resolve(false);
@@ -1430,18 +1434,38 @@ async function createWindow(): Promise<void> {
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
   });
-  // §27.4 — a session loads sub-agents only when it starts, so every reviewer the run's flow can reach is
-  // installed before its first step is entered.
+  const reviewerInstallationFailures = new Map<string, { reason: string; retry?: 'start' | 'restart' }>();
+  const prepareRunReviewers = (repoKey: string, running: AgentKind | null) => {
+    if (!installsPerRun(running)) return { wrote: [], problems: [] };
+    let result;
+    try {
+      const load = resolveActiveDefinition(repoKey);
+      if (!load.ok) throw new Error(load.error);
+      const reviewers = flowReviewers(load.definition.steps, (loop) => observedResolveDef(repoKey, loop));
+      result = ensureRunReviewers(repoKey, reviewers, resolveExampleLoopsV2Dir(iconLoc));
+    } catch (e) {
+      result = { wrote: [], problems: [errMsg(e)] };
+    }
+    if (result.problems.length > 0) reviewerInstallationFailures.set(repoKey, { ...reviewerInstallationFailures.get(repoKey), reason: result.problems.join('\n') });
+    else reviewerInstallationFailures.delete(repoKey);
+    return result;
+  };
+  const reviewerInstallHold = (repoKey: string): string | null => reviewerInstallationFailures.get(repoKey)?.reason ?? null;
   const installRunReviewers = (repoKey: string): string | null => {
-    const load = resolveActiveDefinition(repoKey);
-    if (!load.ok) return null;
     const running = identifiedAgent(tracker.summaries(), foregroundProgram());
-    if (!installsPerRun(running)) return null;
-    const reviewers = flowReviewers(load.definition.steps, (loop) => observedResolveDef(repoKey, loop));
-    return reviewerInstallNotice(ensureRunReviewers(repoKey, reviewers, resolveExampleLoopsV2Dir(iconLoc)), running);
+    return reviewerInstallNotice(prepareRunReviewers(repoKey, running), running);
   };
   const withNotice = (view: FlowStateView, notice: string | null): FlowStateView =>
     notice === null ? view : { ...view, notice: view.notice === undefined ? notice : `${view.notice} ${notice}` };
+  const preparedRunStart = (repoKey: string, retry: 'start' | 'restart', transition: () => FlowStateView): FlowStateView => {
+    const notice = installRunReviewers(repoKey);
+    const failure = reviewerInstallationFailures.get(repoKey);
+    if (failure) {
+      reviewerInstallationFailures.set(repoKey, { ...failure, retry });
+      return trackLoop(repoKey, withDerived(repoKey, flow.state(repoKey)));
+    }
+    return beginRunHere(repoKey, () => trackLoop(repoKey, withNotice(withDerived(repoKey, transition()), notice)));
+  };
   const flowStartTransition = composeStartTransition({
     autoGate,
     resolveForStart: (repoKey) => {
@@ -1665,14 +1689,11 @@ async function createWindow(): Promise<void> {
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
-        const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          beginRunHere(m.repoKey, () => {
-            const installNotice = installRunReviewers(m.repoKey);
-            const started = flowStartTransition(m.repoKey);
-            trustedAppBootstraps.delete(m.repoKey);
-            return trackLoop(m.repoKey, withNotice(withDerived(m.repoKey, started), installNotice));
-          }),
-        );
+        const started = worktreeLock.withWorktreeLock(m.repoKey, () => preparedRunStart(m.repoKey, 'start', () => {
+          const started = flowStartTransition(m.repoKey);
+          trustedAppBootstraps.delete(m.repoKey);
+          return started;
+        }));
         if (started.ok) return started.value;
         return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
       },
@@ -1681,8 +1702,9 @@ async function createWindow(): Promise<void> {
       // the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        if (flow.state(m.repoKey).status === 'in_progress') installRunReviewers(m.repoKey);
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
-        const held = pickupHoldRefusal(m.repoKey);
+        const held = pickupHoldRefusal(m.repoKey) ?? reviewerInstallHold(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
         const awaits = flow.pendingDecision(m.repoKey);
         if (awaits !== null) return trackLoop(m.repoKey, { ...pre, notice: undecidedAdvanceNotice(awaits) });
@@ -1699,23 +1721,18 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowRestart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        // §27.13 — a Restart keeps the run's identity, so a saved pickup it cannot forget would be trusted again. Only a
-        // done run restarts (flow.restart); any other Restart is refused there and must not cost the run its pickup.
-        if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.forgetIfRemovable(m.repoKey)) {
-          return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP });
-        }
-        const restarted = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          beginRunHere(m.repoKey, () => {
-            const installNotice = installRunReviewers(m.repoKey);
-            return withNotice(recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)), installNotice);
-          }),
-        );
+        const restarted = worktreeLock.withWorktreeLock(m.repoKey, () => preparedRunStart(m.repoKey, 'restart', () => {
+          if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.forgetIfRemovable(m.repoKey)) {
+            return { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP };
+          }
+          return recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey));
+        }));
         if (restarted.ok) return restarted.value;
         return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: restarted.reason });
       },
       [CH.flowUndo]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const held = pickupHoldRefusal(m.repoKey);
+        const held = reviewerInstallHold(m.repoKey) ?? pickupHoldRefusal(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: held });
         return recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey));
       },
@@ -1724,6 +1741,9 @@ async function createWindow(): Promise<void> {
       // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        const failure = reviewerInstallationFailures.get(m.repoKey);
+        reviewerInstallationFailures.delete(m.repoKey);
+        if (failure?.retry) return trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
         return lifecycle.terminate(m.repoKey).view;
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3

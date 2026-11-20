@@ -206,6 +206,7 @@ export interface AppLoopEngineDeps {
   pickupBranch(repoDir: string): PickupBranch;
   /** §27.4 — installs what the agent `kind` loads from this run folder, then names every reviewer that still
    *  cannot run as the agent installed for it carrying its charter; empty when every one can. */
+  ensureReviewerInstallation(repoDir: string): string[];
   ensureReviewersRunnable(repoDir: string, reviewers: readonly RosterEntry[], kind: AgentKind): string[];
   /** §27.4 */
   hostedAgentKind(): AgentKind;
@@ -1151,6 +1152,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   const ensureReviewersOrRefusal = (repoDir: string, reviewers: RosterEntry[]): string | null => {
+    const installation = deps.ensureReviewerInstallation(repoDir);
+    if (installation.length > 0) return installation.join("\n");
     if (reviewers.length === 0) return null;
     const kind = hostedKind();
     const problems = deps.ensureReviewersRunnable(repoDir, reviewers, kind);

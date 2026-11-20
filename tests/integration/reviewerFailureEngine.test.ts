@@ -45,7 +45,7 @@ for (const mode of ['ordinary', 'goal'] as const) {
       engine.onInjectable();
     }
     const current = reviewRoster(def);
-    expect.soft(engine.liveErrorFor(h.repo)?.reason).toContain(current[0].charter);
+    expect.soft(engine.liveErrorFor(h.repo)?.reason).toContain(change === 'empty-tools' ? current[0].loop : current[0].charter);
     expect.soft(readAppLoopState(h.repo)?.status).toBe('error');
     expect.soft(engine.liveErrorFor(h.repo)?.reason).toMatch(/restore|correct|repair|replace|fix/i);
     expect.soft(engine.liveErrorFor(h.repo)?.reason).toMatch(/retry/i);

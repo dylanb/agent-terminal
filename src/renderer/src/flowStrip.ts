@@ -194,6 +194,7 @@ function derivedText(state: FlowStateView): string | null {
 function structuralSig(state: FlowStateView, effectiveNotices: string[]): string {
   return JSON.stringify([
     state.status,
+    state.installationRetry,
     state.status === 'error' ? state.error ?? '' : '',
     state.steps,
     state.stepRuns,
@@ -491,17 +492,28 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(line);
     }
 
-    const control = CONTROL[state.status];
+    const control = state.installationRetry ? CONTROL[state.installationRetry === 'start' ? 'not_started' : 'done'] : CONTROL[state.status];
     if (!control) return;
 
     // Undo takes the advance back to in-progress WITHOUT re-running the step's entry actions —
     // distinct from Restart, which re-runs them.
-    if (state.status === 'done') host.append(controlButton('Undo', 'undo', state.stepName));
-    host.append(controlButton(control.label, control.act, state.stepName));
+    if (state.status === 'done' && !state.installationRetry) host.append(controlButton('Undo', 'undo', state.stepName));
+    host.append(controlButton(state.installationRetry ? `Retry ${control.label}` : control.label, control.act, state.stepName));
+    if (state.installationRetry) {
+      const cancel = doc.createElement('button');
+      cancel.className = 'flow-terminate pill';
+      cancel.textContent = 'Cancel';
+      controls.bind(cancel, () => {
+        if (repoKey === null) return;
+        const key = repoKey;
+        return deps.terminate(key).then(afterTransition(key)).catch(onActFailed);
+      });
+      host.append(cancel);
+    }
 
     // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
     // is wired — absent (not in the accessibility tree) otherwise.
-    if (deps.onTerminate && (state.status === 'in_progress' || state.status === 'done')) {
+    if (!state.installationRetry && deps.onTerminate && (state.status === 'in_progress' || state.status === 'done')) {
       host.append(terminateButton());
     }
 

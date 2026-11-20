@@ -20,16 +20,16 @@ describe('what Start tells the operator about the reviewers it installed', () =>
     expect(reviewerInstallNotice(wrote, 'codex')).toBeNull();
   });
 
-  it('counts the problems and names the first, in the singular for one', () => {
-    expect(reviewerInstallNotice({ wrote: [], problems: ['only problem'] }, null)).toMatch(/^A reviewer .*only problem\.$/);
-    expect(reviewerInstallNotice({ wrote: [], problems: ['first problem.', 'second', 'third'] }, null)).toMatch(/3 .*first problem\.$/);
+  it('names every problem whether one or many reviewers failed', () => {
+    for (const problems of [['only problem'], ['first problem', 'second', 'third']]) {
+      const notice = reviewerInstallNotice({ wrote: [], problems }, null) ?? '';
+      for (const problem of problems) expect(notice).toContain(problem);
+    }
   });
 
-  it('names the first problem and stays one short message however many reviewers failed', () => {
+  it('retains every diagnostic in a large failed catalog', () => {
     const problems = Array.from({ length: 30 }, (_, i) => `problem number ${i} with a long path /Users/someone/loops/charter-${i}.md`);
     const notice = reviewerInstallNotice({ wrote: [], problems }, null) ?? '';
-    expect(notice).toContain('problem number 0');
-    expect(notice).not.toContain('problem number 1 ');
-    expect(notice.length).toBeLessThan(400);
+    for (const problem of problems) expect(notice).toContain(problem);
   });
 });

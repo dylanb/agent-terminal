@@ -1,3 +1,7 @@
+## Reviewer installation failures stop the flow and explain recovery
+
+§18.1 and §27.4 (#279, slice 3): missing or invalid resolved definitions and reviewer sources stop all flow work, including reviewer-free turns and manual advancement. Notices identify outstanding reviewers, paths and causes. Common permission obstructions have targeted copyable repairs; unusual/content failures name the correction and Retry, and full disks require freeing space. Successful writes survive a later failure and are reconciled on Retry. Newly installed reviewers still need a fresh agent session.
+
 ## Start uses resolved Claude reviewers for custom and edited flows
 
 §18.1 and §27.4 (#279, slice 1): run-local installation uses the run's resolved reviewer charters and tool declarations instead of requiring bundled content. Bounded, collision-resistant names distinguish simultaneous resolved reviewers and are shared by installation, checking and prompts. Required writable destinations are replaced regardless of origin without additional approval. Unrelated agents, global agents, Codex and Settings behavior remain unchanged.

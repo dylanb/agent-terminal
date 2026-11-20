@@ -42,7 +42,7 @@ export interface RosterEntry {
 
 /** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
  *  subset selection is the consolidator's job (N4). */
-export function reviewRoster(def: LoopDefV2): RosterEntry[] {
+export function reviewRoster(def: Pick<LoopDefV2, 'name' | 'reviewers'>): RosterEntry[] {
   return def.reviewers.map((r) => ({ loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
 }
 

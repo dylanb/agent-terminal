@@ -80,9 +80,9 @@ for (const fault of ['missing', 'invalid-loop', 'empty-tools'] as const) {
     await expect(page.locator('#flow-strip .flow-control')).toHaveText(operation);
     await page.locator('#flow-strip .flow-control').click();
     const state = () => read(join(repo, '.agent-terminal/loop/run-state.yaml'));
-    await expect.poll(async () => /status: (error|complete)/.test(state()) || (!(await page.locator('#flow-strip .flow-control').allTextContents()).join('').includes('Advance') && (await page.locator('#flow-strip').innerText()).includes(fault === 'invalid-loop' ? second : charter))).toBe(true);
+    await expect.poll(async () => /status: (error|complete)/.test(state()) || (!(await page.locator('#flow-strip .flow-control').allTextContents()).join('').includes('Advance') && (await page.locator('#flow-strip').innerText()).includes('Retry'))).toBe(true);
     expect.soft(read(artifact)).toBe('');
-    await expect.soft(page.locator('#flow-strip')).toContainText(fault === 'invalid-loop' ? second : charter);
+    await expect.soft(page.locator('#flow-strip')).toContainText(fault === 'missing' ? charter : second);
     await expect.soft(page.locator('#flow-strip')).toContainText(/retry/i);
     const beforeAdvance = await page.evaluate((dir) => window.flow.state(dir), repo);
     const advanced = await page.evaluate((dir) => window.flow.advance(dir), repo);

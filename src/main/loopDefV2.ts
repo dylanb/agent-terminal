@@ -11,10 +11,12 @@ import {
   confinedRealPathResult,
   resolveJail,
   resolveOwnedDirJail,
+  realpathBoundedResult,
 } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
-import { isErrno } from './errno';
+import { isErrno, errMsg } from './errno';
+import { repairAdvice } from './fileRepairAdvice';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
@@ -213,7 +215,7 @@ export function decisionOutput(def: LoopDefV2): ArtifactBinding | undefined {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string } | { ok: false; reason: string };
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; definitionFile?: string } | { ok: false; reason: string; reviewerDiagnostics?: Pick<LoopDefV2, 'name' | 'reviewers'> & { definitionFile: string } };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
@@ -254,6 +256,11 @@ const ALLOWED_TOP_KEYS = new Set([
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
 class DefError extends Error {}
+class ReviewerDefError extends DefError {
+  constructor(reason: string, readonly reviewers: ReviewerCatalogEntry[]) {
+    super(reason);
+  }
+}
 function fail(reason: string): never {
   throw new DefError(reason);
 }
@@ -265,9 +272,13 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
   if (UNEXPANDED_SLOT.test(ref)) fail(`${what} reference carries an unexpanded slot: ${ref}`);
   const jail = resolveJail(tierRoot);
   if (jail === null) fail(`${what} tier root is unresolvable`);
-  const confined = confinedRealPath(jail, path.resolve(defDir, ref));
-  if (confined === null) fail(`${what} reference escapes the tier root: ${ref}`);
-  return confined;
+  const target = path.resolve(defDir, ref);
+  const confined = confinedRealPathResult(jail, target);
+  if (!confined.ok) {
+    if (confined.cause === 'escapes') fail(`${what} reference escapes the tier root: ${ref}`);
+    fail(`${what} ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'u+r', jail)}`);
+  }
+  return confined.path;
 }
 
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
@@ -339,17 +350,24 @@ function requireRecord(value: unknown, what: string): Record<string, unknown> {
 
 function toReviewers(raw: unknown, tierRoot: string, defDir: string): ReviewerCatalogEntry[] {
   if (!Array.isArray(raw)) fail('reviewers must be a list');
-  return (raw as unknown[]).map((r) => {
-    if (!isRecord(r)) fail('each reviewer must be a mapping');
-    const rec = r as Record<string, unknown>;
-    const persona = requireSegment(rec.persona, 'reviewer persona');
-    const charter = confineDefRelative(tierRoot, defDir, requireString(rec.charter, 'reviewer charter'), 'charter');
-    if (rec.tools === undefined) return { persona, charter, tools: 'all' };
-    if (!Array.isArray(rec.tools) || !(rec.tools as unknown[]).every((t) => typeof t === 'string')) {
-      fail(`reviewer ${persona} tools must be a list of strings`);
+  const problems: string[] = [];
+  const reviewers = (raw as unknown[]).flatMap((r): ReviewerCatalogEntry[] => {
+    try {
+      if (!isRecord(r)) fail('each reviewer must be a mapping');
+      const persona = requireSegment(r.persona, 'reviewer persona');
+      const charter = confineDefRelative(tierRoot, defDir, requireString(r.charter, `reviewer ${persona} charter`), `reviewer ${persona} charter`);
+      if (r.tools === undefined) return [{ persona, charter, tools: 'all' }];
+      if (!Array.isArray(r.tools) || !(r.tools as unknown[]).every((t) => typeof t === 'string')) {
+        fail(`reviewer ${persona} tools must be a list of strings`);
+      }
+      return [{ persona, charter, tools: r.tools as string[] }];
+    } catch (error) {
+      problems.push(errMsg(error));
+      return [];
     }
-    return { persona, charter, tools: rec.tools as string[] };
   });
+  if (problems.length > 0) throw new ReviewerDefError(problems.join('\n'), reviewers);
+  return reviewers;
 }
 
 function toBoundaries(raw: unknown): BoundaryPolicy[] {
@@ -586,7 +604,7 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
     raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
-    return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
+    return { reason: `cannot read repo loop registry: ${errMsg(e)}. ${repairAdvice(e, path.join(repoDir, '.agent-loop.yaml'), 'u+r', resolveJail(repoDir))}` };
   }
   let doc: unknown;
   try {
@@ -604,38 +622,44 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   if (jail === null || (target !== root && !target.startsWith(root + path.sep))) {
     return { reason: `repo loop override for ${name} escapes the repository` };
   }
-  const defPath = confinedRealPath(jail, target);
-  if (defPath === null) return { reason: `repo loop override for ${name} is unresolvable` };
+  const confined = confinedRealPathResult(jail, target);
+  if (!confined.ok) {
+    if (confined.cause === 'escapes') return { reason: `repo loop override for ${name} escapes the repository` };
+    return { reason: `repo loop override for ${name} at ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'u+r', jail)}` };
+  }
+  const defPath = confined.path;
   return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
 }
 
 export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
-  const candidates: DefCandidate[] = [];
+  const candidates: (DefCandidate | { reason: string })[] = [];
   const repo = repoCandidate(name, ctx.repoDir);
   if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
   if (repo) candidates.push(repo);
-  // The operator and app-bundled tier roots are ground the app derives itself and either may be absent (the
-  // operator's on a first run) — resolveOwnedDirJail. A tier whose jail is unresolvable FALLS THROUGH to the
-  // next tier (an absent ~/.claude must not turn every loop step unresolvable), so a null jail is simply not
-  // pushed as a candidate.
-  // §27.8 lookup order.
-  const tierCandidates = [
+  const tierCandidates: ({ root: string; tierName: string; jail: string } | { reason: string })[] = [];
+  for (const { root, tierName } of [
     { root: ctx.tiers.operator, tierName: 'operator' },
     { root: ctx.tiers.appBundled, tierName: 'app-bundled' },
-  ].flatMap(({ root, tierName }) => {
-    if (root === null) return [];
-    const jail = resolveOwnedDirJail(root);
-    return jail === null ? [] : [{ root, tierName, jail }];
-  });
-  const candidateIn = (tier: (typeof tierCandidates)[number], flow: string | null): DefCandidate[] => {
+  ]) {
+    if (root === null) continue;
+    const resolved = realpathBoundedResult(root);
+    if (resolved.ok) tierCandidates.push({ root, tierName, jail: resolved.path });
+    else {
+      tierCandidates.push({ reason: `cannot resolve ${tierName} tier ${root}: ${errMsg(resolved.error)}. ${repairAdvice(resolved.error, root, 'u+rx')}` });
+    }
+  }
+  const candidateIn = (tier: (typeof tierCandidates)[number], flow: string | null): typeof candidates => {
+    if ('reason' in tier) return [tier];
     const at = loopDefLocation(tier.root, name, flow);
     return at === null ? [] : [{ tierRoot: tier.root, ...at, tierName: tier.tierName, jail: tier.jail }];
   };
   if (ctx.flow !== undefined) for (const tier of tierCandidates) candidates.push(...candidateIn(tier, ctx.flow));
   for (const tier of tierCandidates) candidates.push(...candidateIn(tier, null));
 
-  for (const { tierRoot, defDir, defPath, tierName, jail } of candidates) {
+  for (const candidate of candidates) {
+    if ('reason' in candidate) return { ok: false, reason: candidate.reason };
+    const { tierRoot, defDir, defPath, tierName, jail } = candidate;
     const confinedDefPath = confinedRealPathResult(jail, defPath);
     if (!confinedDefPath.ok) {
       return {
@@ -643,7 +667,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
         reason:
           confinedDefPath.cause === 'escapes'
             ? `def ${name} in the ${tierName} tier escapes its tier root`
-            : `def ${name} in the ${tierName} tier is unresolvable`,
+            : `def ${name} at ${defPath} in the ${tierName} tier is unresolvable: ${errMsg(confinedDefPath.error)}. ${repairAdvice(confinedDefPath.error, defPath, 'u+r', jail)}`,
       };
     }
     let body: string;
@@ -651,13 +675,16 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       body = readFileSync(confinedDefPath.path, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
+      return { ok: false, reason: `cannot read def ${name}: ${errMsg(e)}. ${repairAdvice(e, confinedDefPath.path, 'u+r', jail)}` };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, definitionFile: defPath };
     } catch (e) {
-      if (e instanceof DefError) return { ok: false, reason: e.message };
-      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      return {
+        ok: false,
+        reason: `${defPath}: ${e instanceof Error ? e.message : String(e)}`,
+        ...(e instanceof ReviewerDefError ? { reviewerDiagnostics: { name, reviewers: e.reviewers, definitionFile: defPath } } : {}),
+      };
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;

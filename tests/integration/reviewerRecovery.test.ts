@@ -1,9 +1,11 @@
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { seedResolvedLoop } from '../helpers/resolvedReviewerFixture';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureRunReviewers, reviewerInstallNotice, runAgentsDir, runReviewerProblems } from '../../src/main/runReviewers';
+import { ensureRunReviewers, reviewerInstallNotice, runAgentsDir, runReviewerProblems, flowReviewers } from '../../src/main/runReviewers';
 import { installedReviewerProblem, type InstalledReviewer } from '../../src/main/reviewerAgents';
 
 let root: string;
@@ -15,11 +17,10 @@ beforeEach(() => {
 });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-it.each(['missing', 'directory', 'empty-tools'] as const)('source recovery identifies the correction and Retry: %s', (fault) => {
+it.each(['missing', 'directory'] as const)('source recovery identifies the correction and Retry: %s', (fault) => {
   ensureRunReviewers(root, [reviewer], '');
   if (fault === 'missing' || fault === 'directory') rmSync(reviewer.charter);
   if (fault === 'directory') mkdirSync(reviewer.charter);
-  if (fault === 'empty-tools') reviewer.tools = [];
 
   const failed = ensureRunReviewers(root, [reviewer], '');
   const notice = reviewerInstallNotice(failed, 'claude-code') ?? '';
@@ -168,13 +169,31 @@ it('an empty placeholder does not repair a missing charter or authorize a stale 
 
 it('the operator sees every outstanding reviewer, source and distinct cause', () => {
   const missing = { ...reviewer, persona: 'review-alpha', charter: join(root, 'alpha.md') };
-  const invalid = { ...reviewer, persona: 'review-beta', tools: [] };
+  const invalid = { ...reviewer, persona: 'review-beta', tools: [], definitionFile: join(root, 'custom-loop.yaml') };
   const notice = reviewerInstallNotice(ensureRunReviewers(root, [missing, invalid], ''), 'claude-code') ?? '';
   expect.soft(notice).toContain(missing.persona);
   expect.soft(notice).toContain(missing.charter);
   expect.soft(notice).toMatch(/missing|no such file|not found|absent/i);
   expect.soft(notice).toContain(invalid.persona);
-  expect.soft(notice).toContain(invalid.charter);
+  expect.soft(notice).toContain(invalid.definitionFile);
   expect.soft(notice).toMatch(/no tools|empty.*tools|tools.*empty/i);
   expect(notice).toMatch(/retry/i);
+});
+
+it('invalid tools identify the real loop definition to correct before Retry', () => {
+  const tier = join(root, 'loops');
+  const file = seedResolvedLoop(tier, 'custom', 'Valid charter.\n', []);
+  const install = () => ensureRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
+    repoDir: root, tiers: { operator: tier, appBundled: join(root, 'absent'), retired: null },
+  })), '');
+  const failed = install();
+  const notice = reviewerInstallNotice(failed, 'claude-code') ?? '';
+  expect.soft(notice).toContain(file);
+  expect.soft(notice).toContain('review-result');
+  expect.soft(notice).toMatch(/tools/);
+  expect.soft(notice).toMatch(/correct|repair/i);
+  expect.soft(notice).toMatch(/retry/i);
+  expect(failed.wrote).toEqual([]);
+  seedResolvedLoop(tier, 'custom', 'Valid charter.\n', ['Read']);
+  expect(install().problems).toEqual([]);
 });

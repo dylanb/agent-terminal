@@ -2366,7 +2366,7 @@ test('a §27 loop step records its run-state and its status changes append loop.
 test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', { tag: '@ownapp' }, async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-input-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-input-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2400,7 +2400,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
 test('a refused github-ticket keeps the input dialog open, and a corrected number is saved', { tag: '@ownapp' }, async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-ticket-refuse-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-refuse-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -3038,7 +3038,7 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 // §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
 // record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
 // app binary) and sees pass before signalling; the round then completes and the loop moves on.
-test('§27.4 — a review round whose reviewers cannot be installed in the run folder stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
+test('§27.4 — failed reviewer installation stops Start with named recovery before any work or reviewer runs', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-noagent-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
@@ -3060,8 +3060,10 @@ test('§27.4 — a review round whose reviewers cannot be installed in the run f
   await typeCommand('fake-agent');
   await flowControl().click();
 
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  await expectLoopMessage('error', blocked, /restart your agent session/i);
+  await expect(page.locator('#flow-strip')).toContainText(blocked);
+  await expect(flowControl()).toHaveText('Retry Start');
+  expect(existsSync(appRunState(repo))).toBe(false);
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('turn-done:');
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
 
   await app.close();
@@ -5428,17 +5430,15 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → enter the step bound to an unresolvable §27 def: no turn starts (AC6)
+  await flowControl().click();
 
-  // The reason surfaces on the shared blocking loop-error dialog (the §27 error surface for a def that
-  // never resolved), naming the def that could not be found. The Advance control stays present behind it —
-  // the route off the failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was
-  // written (no turn ran). Dismiss the dialog so it does not intercept the control exercised below.
-  await expectLoopMessage('error', 'no-such-v2-loop');
+  await expect(page.locator('#flow-strip')).toContainText('no-such-v2-loop');
   expect(existsSync(appRunState(repo))).toBe(false);
-  await expect(flowControl()).toHaveText('Advance');
-  await flowControl().click(); // the route out completes the flow
-  await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Retry Start');
+  const advanced = await page.evaluate((dir) => window.flow.advance(dir), repo);
+  expect(advanced.status).toBe('not_started');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(flowControl()).toHaveText('Start');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -5462,12 +5462,10 @@ test('a §27 step resolves its loop from the running flow’s own loop folder be
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click();
 
-  await expectLoopMessage('error', 'v9-flow-folder');
+  await expect(page.locator('#flow-strip')).toContainText('v9-flow-folder');
+  await expect(page.locator('#flow-strip')).toContainText(flowDef);
   expect(existsSync(appRunState(repo))).toBe(false);
-
-  // The loop view resolves the same flow-folder def the step did, so it shows the same refusal.
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('v9-flow-folder', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Retry Start');
 
   await app.close();
   for (const dir of [repo, home, config]) rmSync(dir, { recursive: true, force: true });

@@ -143,6 +143,7 @@ export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentForma
 const AGENT_FILE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 
 export interface InstalledReviewer {
+  definitionFile?: string;
   loop: string;
   persona: string;
   charter: string;

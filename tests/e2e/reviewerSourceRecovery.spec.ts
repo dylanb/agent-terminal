@@ -124,7 +124,7 @@ for (const change of ['missing', 'empty-tools'] as const) {
     await expect.poll(state).toContain('step: second');
     await settle();
     expect.soft(state()).toContain('status: error');
-    await expect.soft(page.locator('#loop-panel')).toContainText(join(dirname(first), 'charter.md'));
+    await expect.soft(page.locator('#loop-panel')).toContainText(change === 'empty-tools' ? first : join(dirname(first), 'charter.md'));
     await expect.soft(page.locator('#loop-panel')).toContainText(/retry/i);
     expect.soft(records()).toEqual(before);
     await retry();
