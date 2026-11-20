@@ -567,7 +567,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
   const reviewerStart = options.reviewers
     ? `reviewer_state=${shellQuote(join(binDir, 'reviewer-session-'))}"$$.json"\nnode ${reviewerProgram} start ${reviewerArgs} || exit 2\n`
     : '';
-  const reviewerRead = options.reviewers ? `  node ${reviewerProgram} review ${reviewerArgs} "$line" || exit 2\n` : '';
+  const reviewerRead = options.reviewers ? `    *" — subagent_type: "*) node ${reviewerProgram} review ${reviewerArgs} "$line" || exit 2 ;;\n` : '';
   const usage = options.usage === undefined ? undefined : logFolders(options.usage);
   const scripts = Object.entries(steps).map(([id, s]): [string, StepScript] => [id, withUsage(binDir, usage, s)]);
   if (usage === undefined && options.conversation !== undefined) throw new Error('the fake agent bills a conversation, but was seeded without its usage logs');
@@ -596,9 +596,9 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     codexStart +
     'while IFS= read -r line; do\n' +
     logInjected +
-    reviewerRead +
     '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
+    reviewerRead +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     repairArm +
     '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +

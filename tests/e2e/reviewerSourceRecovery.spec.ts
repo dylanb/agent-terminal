@@ -94,7 +94,6 @@ for (const change of ['missing', 'empty-tools'] as const) {
       const before = state();
       await page.locator('#loop-panel [data-app-route-out="retry"]').click();
       await expect.poll(state).not.toBe(before);
-      await settle();
     };
     const approve = async () => {
       await page.locator('#loop-panel [data-gate-option="approve"]').click();
@@ -109,7 +108,7 @@ for (const change of ['missing', 'empty-tools'] as const) {
     await page.locator('#flow-strip .loopstat').click();
     await restartSession();
     await retry();
-    expect(state()).toContain('status: complete');
+    await expect.poll(state).toContain('status: complete');
     expect(records()).toEqual([{ charter: 'First instructions.\n', tools: ['Read'] }]);
 
     if (change === 'missing') rmSync(join(dirname(first), 'charter.md'));
@@ -123,12 +122,12 @@ for (const change of ['missing', 'empty-tools'] as const) {
     await approve();
     await expect.poll(state).toContain('step: second');
     await settle();
-    expect.soft(state()).toContain('status: error');
+    await expect.soft.poll(state).toContain('status: error');
     await expect.soft(page.locator('#loop-panel')).toContainText(change === 'empty-tools' ? first : join(dirname(first), 'charter.md'));
     await expect.soft(page.locator('#loop-panel')).toContainText(/retry/i);
     expect.soft(records()).toEqual(before);
     await retry();
-    expect.soft(state()).toContain('status: error');
+    await expect.soft.poll(state).toContain('status: error');
     expect.soft(records()).toEqual(before);
     expect.soft((await page.evaluate((dir) => window.flow.state(dir), repo)).stepName).toBe('second');
     expect.soft(read(bypass)).toBe('');
@@ -137,12 +136,11 @@ for (const change of ['missing', 'empty-tools'] as const) {
     repaired.reviewers[0].tools = ['Read'];
     writeFileSync(first, yaml.dump(repaired));
     await retry();
-    expect.soft(state()).toContain('status: error');
+    await expect.soft.poll(state).toContain('status: error');
     expect.soft(records()).toEqual(before);
     await restartSession();
     await retry();
-    expect.soft(state()).toContain('status: complete');
-    expect.soft(records().slice(before.length)).toEqual([{ charter: 'Repaired instructions.\n', tools: ['Read'] }]);
+    await expect.poll(() => records().slice(before.length)).toEqual([{ charter: 'Repaired instructions.\n', tools: ['Read'] }]);
     await expect.poll(() => read(bypass)).not.toBe('');
     expect.soft((await page.evaluate((dir) => window.flow.state(dir), repo)).stepName).toBe('third');
     expect.soft(read(join(repo, '.gitignore'))).toBe(originalIgnore);
