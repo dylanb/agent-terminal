@@ -328,6 +328,10 @@ const logFolders = (usage: FakeUsageLogs): LogFolders => ({
 });
 
 export interface FakeAgentOptions {
+  reviewers?: {
+    expected: { persona: string; name: string; charter: string; tools: string[] | 'all' }[];
+    evidence: string;
+  };
   usage?: FakeUsageLogs;
   /** Also installs the fake under these names, so the app sees a real agent's command and the fake bills in that
    *  agent's log form. */
@@ -556,6 +560,14 @@ const READY_LINE = `printf '%s\\n' '${FAKE_AGENT_READY}'\n`;
 // bumps per-turn counters so an e2e can prove a turn was (or was NOT) re-run. Per-step turn counts live under
 // `binDir`, outside the worktree, so no phase commit stages them.
 export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScript>, options: FakeAgentOptions = {}): void {
+  const reviewerProgram = shellQuote(join(__dirname, 'reviewerSession.cjs'));
+  const reviewerExpected = join(binDir, 'reviewer-expectations.json');
+  if (options.reviewers) writeFileSync(reviewerExpected, JSON.stringify(options.reviewers.expected));
+  const reviewerArgs = `"$reviewer_state" ${shellQuote(reviewerExpected)} ${shellQuote(options.reviewers?.evidence ?? '')}`;
+  const reviewerStart = options.reviewers
+    ? `reviewer_state=${shellQuote(join(binDir, 'reviewer-session-'))}"$$.json"\nnode ${reviewerProgram} start ${reviewerArgs} || exit 2\n`
+    : '';
+  const reviewerRead = options.reviewers ? `  node ${reviewerProgram} review ${reviewerArgs} "$line" || exit 2\n` : '';
   const usage = options.usage === undefined ? undefined : logFolders(options.usage);
   const scripts = Object.entries(steps).map(([id, s]): [string, StepScript] => [id, withUsage(binDir, usage, s)]);
   if (usage === undefined && options.conversation !== undefined) throw new Error('the fake agent bills a conversation, but was seeded without its usage logs');
@@ -576,6 +588,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     : '';
   const script =
     '#!/usr/bin/env bash\n' +
+    reviewerStart +
     READY_LINE +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
@@ -583,6 +596,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     codexStart +
     'while IFS= read -r line; do\n' +
     logInjected +
+    reviewerRead +
     '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +

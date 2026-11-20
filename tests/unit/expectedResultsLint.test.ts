@@ -16,6 +16,7 @@ describe('an expected-results fixture never imports the code it checks', () => {
   beforeAll(() => ruleErrors(''));
 
   it.each([
+    ['an import in the reviewer fixture', "import { renderReviewerAgent } from '../../src/main/reviewerAgents';\n", 'tests/helpers/reviewerContracts.ts'],
     ['an import from the renderer', "import { cardStatus } from '../../src/renderer/src/controllerCardConditions';\n", FIXTURE],
     ['an import from shared code', "import { cardStatus } from '../../src/shared/controllerCardClassification';\n", FIXTURE],
     ['a re-export of shared code', "export { cardStatus } from '../../src/shared/controllerCardClassification';\n", FIXTURE],
