@@ -258,15 +258,15 @@ describe('a run whose reviewers are missing, stale or newer than its agent sessi
     expect(runReviewerProblems(run, reviewers(), BUNDLE_LOOPS, startedAt).join(' ')).toContain(reviewerAgentName(r.loop, r.persona));
   });
 
-  it('installs nothing for a reviewer whose resolved charter is not the one the app ships, and names Install examples', () => {
+  it('installs an operator edit to a shipped reviewer charter', () => {
     const [r] = reviewers();
     const edited = path.join(scratch, 'edited.md');
     writeFileSync(edited, `${readFileSync(r.charter, 'utf8')}\nAn operator edit.\n`);
 
     const result = ensureRunReviewers(run, [{ ...r, charter: edited }], BUNDLE_LOOPS);
 
-    expect(result.wrote).toEqual([]);
-    expect(result.problems.join(' ')).toMatch(/Install examples/);
+    expect.soft(result.problems).toEqual([]);
+    expect(installedReviewerProblem(runAgentsDir(run), { ...r, charter: edited })).toBeNull();
   });
 
   it('says the charter cannot be read, not that it was edited, when the run resolved one that is missing', () => {
@@ -299,19 +299,22 @@ describe('a run whose reviewers are missing, stale or newer than its agent sessi
     expect(existsSync(path.join(scratch, 'nowhere'))).toBe(false);
   });
 
-  it('leaves a same-named file the app did not write, and rewrites its own file whose body was edited', () => {
+  it('replaces a writable foreign reviewer destination and repairs its own edited file', () => {
     const [mine, theirs] = reviewers();
     ensureRunReviewers(run, [mine], BUNDLE_LOOPS);
     const ownBytes = readFileSync(agentFile(mine), 'utf8');
     writeFileSync(agentFile(mine), `${ownBytes}\nedited\n`);
     mkdirSync(path.dirname(agentFile(theirs)), { recursive: true });
     writeFileSync(agentFile(theirs), '---\nname: hand-written\n---\nmine\n');
+    const unrelated = path.join(runAgentsDir(run).dir, 'independent.md');
+    writeFileSync(unrelated, '---\nname: independent\n---\nLeave this agent alone.\n');
 
     const result = ensureRunReviewers(run, [mine, theirs], BUNDLE_LOOPS);
 
     expect(readFileSync(agentFile(mine), 'utf8')).toBe(ownBytes);
-    expect(readFileSync(agentFile(theirs), 'utf8')).toBe('---\nname: hand-written\n---\nmine\n');
-    expect(result.problems.join(' ')).toContain(agentFile(theirs));
+    expect(readFileSync(unrelated, 'utf8')).toBe('---\nname: independent\n---\nLeave this agent alone.\n');
+    expect.soft(installedReviewerProblem(runAgentsDir(run), theirs)).toBeNull();
+    expect(result.problems).toEqual([]);
   });
 });
 
