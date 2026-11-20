@@ -1,3 +1,4 @@
+import { resolvedReviewerName, resolvedReviewerFile } from '../../src/main/resolvedReviewer';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chmodSync, existsSync, renameSync, statSync, utimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster, type RosterEntry } from '../../src/main/reviewTurn';
-import { installedReviewerProblem, reviewerAgentName } from '../../src/main/reviewerAgents';
+import { installedReviewerProblem } from '../../src/main/reviewerAgents';
 import { ensureReviewersRunnable, ensureRunReviewers, runAgentsDir, runReviewerProblems } from '../../src/main/runReviewers';
 
 const BUNDLE_LOOPS = path.resolve('example', 'loops-v2');
@@ -41,7 +42,7 @@ describe('a run installs its Claude reviewers into the run folder', () => {
 
     expect(result.problems).toEqual([]);
     for (const reviewer of reviewers) expect(installedReviewerProblem(runAgentsDir(run), reviewer)).toBeNull();
-    const expected = reviewers.map((r) => `${reviewerAgentName(r.loop, r.persona)}.md`).sort();
+    const expected = reviewers.map((r) => resolvedReviewerFile(r)).sort();
     expect(readdirSync(runAgentsDir(run).dir).sort()).toEqual([...new Set(expected)]);
   });
 
@@ -147,7 +148,7 @@ describe('installed reviewers stay out of git', () => {
 
     expect(ensureRunReviewers(run, reviewers(), BUNDLE_LOOPS).problems).toEqual([]);
 
-    expect(readFileSync(exclude, 'utf8').split('\n')).toEqual(expect.arrayContaining(['build-output/', '/.claude/agents/*--*.md']));
+    expect(readFileSync(exclude, 'utf8').startsWith('build-output/\n')).toBe(true);
     expect(untracked(run)).toEqual([]);
   });
 
@@ -238,7 +239,7 @@ describe('installed reviewers stay out of git', () => {
 
 describe('a run whose reviewers are missing, stale or newer than its agent session gets a way forward', () => {
   const reviewers = (): RosterEntry[] => roster('green-loop', 'feature-dev-v3');
-  const agentFile = (r: RosterEntry): string => path.join(runAgentsDir(run).dir, `${reviewerAgentName(r.loop, r.persona)}.md`);
+  const agentFile = (r: RosterEntry): string => path.join(runAgentsDir(run).dir, resolvedReviewerFile(r));
 
   it('asks for a restart when it had to install a reviewer, and passes once the session started after the files were written', () => {
     const first = runReviewerProblems(run, reviewers(), BUNDLE_LOOPS, null);
@@ -255,7 +256,7 @@ describe('a run whose reviewers are missing, stale or newer than its agent sessi
     utimesSync(agentFile(r), later, later);
     const startedAt = statSync(agentFile(r)).mtimeMs;
 
-    expect(runReviewerProblems(run, reviewers(), BUNDLE_LOOPS, startedAt).join(' ')).toContain(reviewerAgentName(r.loop, r.persona));
+    expect(runReviewerProblems(run, reviewers(), BUNDLE_LOOPS, startedAt).join(' ')).toContain(resolvedReviewerName(r));
   });
 
   it('installs an operator edit to a shipped reviewer charter', () => {

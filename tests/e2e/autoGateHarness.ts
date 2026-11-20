@@ -67,7 +67,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   git('init', '-q');
-  installBundledRunReviewers(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   git('symbolic-ref', 'HEAD', 'refs/heads/plan-loop/issue-176');
   git('config', 'user.email', 't@t');
   git('config', 'user.name', 'T');

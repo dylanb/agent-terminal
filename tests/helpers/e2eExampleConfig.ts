@@ -46,9 +46,10 @@ export function seedSharedExampleConfig(): string {
   const root = mkdtempSync(join(tmpdir(), 'agent-term-e2e-example-config-'));
   const bundle = join(process.cwd(), 'example', 'loops-v2');
   const folders = listLoopFolders(bundle).sort((a, b) => Number(b.flow === FEATURE_DEV_ID) - Number(a.flow === FEATURE_DEV_ID));
-  for (const { name, dir } of folders) {
+  for (const { name, dir, flow } of folders) {
     const dest = join(root, 'loops-v2', name);
     if (!existsSync(dest)) cpSync(dir, dest, { recursive: true });
+    if (flow !== null) cpSync(dir, join(root, 'loops-v2', flow, name), { recursive: true });
   }
   for (const loop of ROUND_PHASE_LOOPS) asReviewRounds(join(root, 'loops-v2', loop), loop);
   ownPlanLoopGate(join(root, 'loops-v2', 'plan-loop'));
@@ -58,10 +59,11 @@ export function seedSharedExampleConfig(): string {
 
 /** Installs every bundled reviewer into a seeded run folder before any agent starts in it, as an earlier run
  *  in that folder would have, so a fake agent launched next counts as having loaded them (§27.4). */
-export function installBundledRunReviewers(runFolder: string): void {
-  const bundle = join(process.cwd(), 'example', 'loops-v2');
-  const reviewers = listLoopFolders(bundle).flatMap((folder) => {
-    const r = resolveLoopDefV2(folder.name, { tiers: { operator: null, appBundled: bundle, retired: null }, repoDir: bundle, flow: folder.flow ?? undefined });
+export function installBundledRunReviewers(runFolder: string, configDir: string): void {
+  const bundle = join(process.cwd(), 'out/main/example/loops-v2');
+  const operator = join(configDir, 'loops-v2');
+  const reviewers = [...listLoopFolders(bundle), ...listLoopFolders(operator)].flatMap((folder) => {
+    const r = resolveLoopDefV2(folder.name, { tiers: { operator, appBundled: bundle, retired: null }, repoDir: runFolder, flow: folder.flow ?? undefined });
     if (!r.ok) throw new Error(r.reason);
     return reviewRoster(r.def);
   });

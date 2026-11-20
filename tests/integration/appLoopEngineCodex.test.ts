@@ -1,3 +1,4 @@
+import { reviewerAgentFor, reviewRoster } from '../../src/main/reviewTurn';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -61,7 +62,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     const engine = engineFor('claude-code');
     driveToReviewInjected(engine);
 
-    expect(reviewPrompt()).toContain('subagent_type: plan-loop--review-plan-principal');
+    for (const reviewer of reviewRoster(fileDef())) expect(reviewPrompt()).toContain(`subagent_type: ${reviewerAgentFor('claude-code', reviewer)}`);
   });
 
   it('names the reviewers for the same agent it checked them against, within one turn', () => {

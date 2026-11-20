@@ -1155,7 +1155,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const kind = hostedKind();
     const problems = deps.ensureReviewersRunnable(repoDir, reviewers, kind);
     if (problems.length === 0) return null;
-    return `this turn's reviewers cannot run: ${problems.join('; ')}. ${reviewerFix(kind)}. A run whose charters were edited or overridden cannot run its reviewers`;
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. ${reviewerFix(kind)}`;
   };
 
   /** §27.10 */

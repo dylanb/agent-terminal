@@ -126,8 +126,8 @@ async function launch(w: AdoptionWorld, agentTurnShell?: string | TurnShell, age
   });
   if (options.relaunchOf === undefined) {
     seedAdoptingFlow(w.repo);
-    installBundledRunReviewers(w.repo);
   }
+  installBundledRunReviewers(w.repo, config);
   const app = await electron.launch({
     args: ['out/main/index.js'],
     env: {

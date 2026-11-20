@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { resolvedReviewerFile, resolvedReviewerName } from './resolvedReviewer';
 import { confinedRealPathResult, resolveOwnedDirJail } from './confinedPath';
 import { errMsg, isErrno } from './errno';
 import { listLoopFolders } from './loopFolders';
@@ -97,18 +98,15 @@ export function isAppWrittenAgent(text: string): boolean {
   }
 }
 
-export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
+export function renderReviewerAgent(spec: ReviewerAgentSpec, name = reviewerAgentName(spec.loop, spec.persona)): string {
   checkReviewerSpec(spec);
-  const name = reviewerAgentName(spec.loop, spec.persona);
-  return [
-    '---',
-    `name: ${name}`,
-    `description: The ${spec.persona} reviewer of the ${spec.loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed in the run folder by agent-terminal.`,
-    `${GENERATED_BY_KEY}: ${GENERATED_BY}`,
-    ...(spec.tools === 'all' ? [] : [`tools: ${spec.tools.join(', ')}`]),
-    '---',
-    spec.charter,
-  ].join('\n');
+  const front = {
+    name,
+    description: `The ${spec.persona} reviewer of the ${spec.loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed in the run folder by agent-terminal.`,
+    [GENERATED_BY_KEY]: GENERATED_BY,
+    ...(spec.tools === 'all' ? {} : { tools: spec.tools.join(', ') }),
+  };
+  return `---\n${yaml.dump(front, { lineWidth: -1 })}---\n${spec.charter}`;
 }
 
 export interface PlannedReviewerAgent {
@@ -161,10 +159,10 @@ export interface AgentsDir {
 /** Why this reviewer cannot run as the sub-agent installed for it carrying the charter and tools the run
  *  resolved, or null when it can. */
 export function installedReviewerProblem(agents: AgentsDir, reviewer: InstalledReviewer): string | null {
-  const agent = reviewerAgentName(reviewer.loop, reviewer.persona);
+  const agent = resolvedReviewerName(reviewer);
   const agentsDir = agents.dir;
-  const file = path.join(agentsDir, reviewerAgentFile(CLAUDE_REVIEWER_AGENT, reviewer.loop, reviewer.persona));
-  const missing = `no sub-agent ${agent} is installed (${file})`;
+  const file = path.join(agentsDir, resolvedReviewerFile(reviewer));
+  const missing = `no sub-agent ${agent} for ${reviewer.persona} of ${reviewer.loop} is installed (${file}), with charter ${reviewer.charter} and tools ${reviewer.tools}`;
   if (agents.jail === null) return missing;
   const real = confinedRealPathResult(agents.jail, file);
   if (!real.ok) return `the sub-agent file ${file} is not inside ${agentsDir}`;
@@ -190,10 +188,10 @@ export function installedReviewerProblem(agents: AgentsDir, reviewer: InstalledR
   } catch (e) {
     return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
   }
-  if (m[2] !== charter) return `the sub-agent ${agent} carries a different charter than ${reviewer.charter}`;
+  if (m[2] !== charter) return `the sub-agent ${agent} (${reviewer.persona}) carries a different charter than ${reviewer.charter}`;
   const named = (t: ReviewerTools): string => (t === 'all' ? 'every tool' : t.join(', '));
   const tools: ReviewerTools = fields.tools === undefined ? 'all' : typeof fields.tools === 'string' ? fields.tools.split(',').map((t) => t.trim()) : [];
-  if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${agent} has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
+  if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${agent} (${reviewer.persona}) has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
   return null;
 }
 

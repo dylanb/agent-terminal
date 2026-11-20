@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { renderReviewerAgent } from '../../src/main/reviewerAgents';
+import { ensureRunReviewers } from '../../src/main/runReviewers';
+import { reviewerAgentFor } from '../../src/main/reviewTurn';
 import { rosterLines } from '../../src/main/reviewTurn';
 import { reviewerContracts } from '../helpers/reviewerContracts';
 import { seedFakeAgentSteps } from '../e2e/fakeTools';
@@ -19,16 +20,20 @@ describe('rendered Claude reviewers are discoverable by the names requested in r
     roots.push(root);
     const agents = join(root, '.claude', 'agents');
     mkdirSync(agents, { recursive: true });
-    writeFileSync(join(agents, `${contract.name}.md`), renderReviewerAgent(contract));
+    const charter = join(root, 'charter.md');
+    writeFileSync(charter, contract.charter);
+    const reviewer = { loop: contract.loop, persona: contract.persona, charter, tools: contract.tools };
+    const name = reviewerAgentFor('claude-code', reviewer);
+    expect(ensureRunReviewers(root, [reviewer], join(root, 'unused-bundle')).problems).toEqual([]);
     const evidence = join(root, 'executed.jsonl');
     seedFakeAgentSteps(root, { check: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', work: 'complete', roster: [contract.persona] } }, {
-      reviewers: { expected: [contract], evidence },
+      reviewers: { expected: [{ ...contract, name }], evidence },
     });
-    const lines = rosterLines([{ loop: contract.loop, persona: contract.persona, charter: '/unused', tools: contract.tools }], 'claude-code');
+    const lines = rosterLines([reviewer], 'claude-code');
     execFileSync('bash', [join(root, 'fake-agent')], { cwd: root, input: [...lines, 'turn-done:review-check', ''].join('\n') });
     expect(readFileSync(join(root, '.agent-terminal/loop/turn-done'), 'utf8')).toBe('review-check');
     expect(readFileSync(evidence, 'utf8').trim().split('\n').map((line) => JSON.parse(line))).toEqual([
-      { name: contract.name, charter: contract.charter, tools: contract.tools },
+      { name, charter: contract.charter, tools: contract.tools },
     ]);
   });
 });

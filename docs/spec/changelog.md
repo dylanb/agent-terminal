@@ -1,3 +1,7 @@
+## Start uses resolved Claude reviewers for custom and edited flows
+
+§18.1 and §27.4 (#279, slice 1): run-local installation uses the run's resolved reviewer charters and tool declarations instead of requiring bundled content. Bounded, collision-resistant names distinguish simultaneous resolved reviewers and are shared by installation, checking and prompts. Required writable destinations are replaced regardless of origin without additional approval. Unrelated agents, global agents, Codex and Settings behavior remain unchanged.
+
 ## A run's Claude Code reviewers live in its run folder
 
 §27.4 and §18.1 (#94): Install examples no longer writes Claude Code reviewer sub-agents to the user's agents folder, which every Claude Code session loaded at about 13.5k tokens. Start and Restart install the run flow's reviewers in `<run folder>/.claude/agents`, and the check before each reviewed turn reinstalls anything missing or stale and asks for a session restart when the files are newer than the session. One app-owned line in the repository's `info/exclude` keeps them out of git. Install examples offers to remove the copies older builds installed. Codex reviewers are unchanged.

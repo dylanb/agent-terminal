@@ -62,7 +62,7 @@ For what each bundled flow does, which one fits your ticket, and what you decide
 
 ### Review and quality gates
 
-- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as `<loop>--<reviewer>` sub-agents. For Claude Code, each run installs its flow's reviewers in its own run folder (`<run>/.claude/agents`, kept out of git through the repository's `info/exclude`) at Start and Restart, so sessions that run no loop don't load them; Codex reviewers go to `~/.codex/agents`.
+- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as named sub-agents. For Claude Code, each run installs its flow's reviewers in its own run folder (`<run>/.claude/agents`, kept out of git through the repository's `info/exclude`) at Start and Restart, so sessions that run no loop don't load them; Codex reviewers go to `~/.codex/agents`. Claude reviewers use the exact charters and tools the run resolves, including custom flows and edited loops, with collision-resistant names. Start authorizes replacing writable files at those required destinations without another approval; unrelated agents stay untouched.
   - **Security** reviewers in plan, infra, green and integration-slice.
   - **Taint** reviewers in infra, green and integration-slice.
   - **Accessibility** reviewers in green and integration-slice.

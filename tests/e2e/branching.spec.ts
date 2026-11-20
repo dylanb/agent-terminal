@@ -1,3 +1,4 @@
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -105,6 +106,7 @@ interface DecidingRun {
 }
 
 async function launchDeciding(run: DecidingRun, control: 'Start' | 'Advance' | 'Restart'): Promise<void> {
+  installBundledRunReviewers(run.repo, run.config);
   app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${tmp(`${run.prefix}ud-`)}`],
     env: {

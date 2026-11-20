@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { expect, test, type Page } from '@playwright/test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -132,6 +132,7 @@ test('resolved reviewers: an unmodified shipped flow executes its reviewer and r
   const state = () => read(join(repo, '.agent-terminal/loop/run-state.yaml'));
   await expect.poll(state).toContain('status: error');
   script();
+  for (const file of readdirSync(join(repo, '.claude/agents'))) utimesSync(join(repo, '.claude/agents', file), new Date(0), new Date(0));
   await page.locator('.xterm-screen').click();
   await page.keyboard.press('Control+C');
   await command(page, 'claude');

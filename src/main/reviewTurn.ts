@@ -16,7 +16,8 @@ import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { adoptedRunLines, ticketPromptLines, type AdoptedRunRefs } from '../shared/currentTicket';
-import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
+import { codexReviewerAgentName } from './reviewerAgents';
+import { resolvedReviewerName } from './resolvedReviewer';
 import type { AgentKind } from '../shared/agentKind';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
@@ -46,8 +47,8 @@ export function reviewRoster(def: LoopDefV2): RosterEntry[] {
 }
 
 /** §27.4 */
-export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'loop' | 'persona'>): string {
-  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona) : reviewerAgentName(r.loop, r.persona);
+export function reviewerAgentFor(kind: AgentKind, r: RosterEntry): string {
+  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona) : resolvedReviewerName(r);
 }
 
 /** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
