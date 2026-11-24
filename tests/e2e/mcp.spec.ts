@@ -851,6 +851,7 @@ test('an approve typed at a halted auto gate showing a failed effect is a human 
     'name: v2-auto-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    gate_authority: auto\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
   );
   ownPlanLoop(m.config);
+  installBundledRunReviewers(m.repo, m.config, m.appHome);
   const runStateFile = join(m.repo, '.agent-terminal', 'loop', 'run-state.yaml');
   const flowStateFile = join(m.repo, '.agent-terminal', 'flow-state.yaml');
   const autoHalts = (): (string[] | null)[] =>
