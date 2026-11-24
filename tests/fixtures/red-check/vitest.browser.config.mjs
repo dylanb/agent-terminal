@@ -8,7 +8,7 @@ export default defineConfig({
     include: ['sample.case.ts'],
     browser: {
       enabled: true,
-      provider: playwright(),
+      provider: playwright({ launchOptions: { executablePath: process.env.TEST_CHROMIUM_EXECUTABLE } }),
       headless: true,
       instances: [{ browser: 'chromium' }],
     },

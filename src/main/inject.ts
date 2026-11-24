@@ -31,14 +31,12 @@ export const SUBMIT_DELAY_MS = resolveSubmitDelay(process.env.APP_SUBMIT_DELAY_M
 const DEFER_DEADLINE_GRACE_MS = 3_000;
 export const DEFER_DEADLINE_MS = SUBMIT_DELAY_MS + DEFER_DEADLINE_GRACE_MS;
 
-export interface InjectorDeps {
+export type InjectorDeps = {
   write(data: string): void;
-  /** Read live at injection time — never cached (§9.3). */
-  isBracketedPaste(): boolean;
   submitDelayMs?: number;
   /** Seed the self-injection suppression signal at paste time, where the echo lands (§16.5). */
   onInject?(): void;
-}
+} & ({ isBracketedPaste(): boolean; paste?: never } | { paste(data: string): void; isBracketedPaste?: never });
 
 export type Injector = (
   text: string,
@@ -49,7 +47,8 @@ export function createInjector(deps: InjectorDeps): Injector {
   const delay = deps.submitDelayMs ?? SUBMIT_DELAY_MS;
   return (text, { submit = false, onComplete } = {}) => {
     if (!text) return;
-    deps.write(wrapForPaste(text, deps.isBracketedPaste()));
+    if (deps.paste) deps.paste(wrapForPaste(text, false));
+    else deps.write(wrapForPaste(text, deps.isBracketedPaste()));
     // Seed before the echo can return, so the watermark marks the pre-echo cursor row (§16.5).
     deps.onInject?.();
     // The CR must land after the agent drains the paste, outside the markers (§9.3). The completion

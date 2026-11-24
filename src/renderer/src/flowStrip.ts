@@ -4,12 +4,12 @@
 // no control (§18.1). It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3):
 // before a repo key is known it renders nothing.
 
+import { terminateOffered } from '../../shared/terminateCount';
 import type { FlowViewArgs } from './flowView';
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs, FlowTokensView } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { railTotal, type RunTokens, type StepTokens } from '../../shared/tokenCounts';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
-import { isSelectionLocked } from '../../shared/flowStarted';
 import { stepLabel } from '../../shared/stepLabel';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
@@ -409,7 +409,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
       // §18.7.2 AC6 — a begun run held at the load error still has Terminate as its route back to not_started.
-      if (deps.onTerminate && isSelectionLocked(state.runStarted)) host.append(terminateButton());
+      if (deps.onTerminate && terminateOffered(state)) host.append(terminateButton());
       appendHeldNotices();
       deps.onPanelState?.(null, ''); // no step → the docked panel clears + closes
       return;
@@ -515,7 +515,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
     // is wired — absent (not in the accessibility tree) otherwise.
-    if (!state.installationRetry && deps.onTerminate && (state.status === 'in_progress' || state.status === 'done')) {
+    if (!state.installationRetry && deps.onTerminate && terminateOffered(state)) {
       host.append(terminateButton());
     }
 

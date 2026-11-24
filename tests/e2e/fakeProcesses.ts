@@ -21,11 +21,12 @@ function checkedName(name: string): string {
 
 export function fakeSpawnShell(binDir: string): string {
   const dir = shellQuote(processDir(binDir));
+  const childCommand = `node -e ${shellQuote('process.title = process.argv[1]; setTimeout(() => {}, Number(process.argv[2]) * 1000);')} "$2" ${LIFETIME_CAP_S}`;
   return (
-    `fake_spawn() { d=${dir}; mkdir -p "$d/bin"; [ -x "$d/bin/$2" ] || cp "$(command -v sleep)" "$d/bin/$2"; ` +
-    `if [ "$1" = session ]; then setsid "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; ` +
-    `elif [ "$1" = own ]; then set -m; "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; set +m; ` +
-    `else "$d/bin/$2" ${LIFETIME_CAP_S} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; fi; ` +
+    `fake_spawn() { d=${dir}; mkdir -p "$d"; ` +
+    `if [ "$1" = session ]; then setsid ${childCommand} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; ` +
+    `elif [ "$1" = own ]; then set -m; ${childCommand} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; set +m; ` +
+    `else ${childCommand} </dev/null >/dev/null 2>&1 & p=$!; disown "$p"; fi; ` +
     `printf '%s %s\\n' "$p" "$1" > "$d/$2.pid.tmp" && mv "$d/$2.pid.tmp" "$d/$2.pid"; }\n` +
     `fake_reap() { for f in ${dir}/*.pid; do [ -e "$f" ] || continue; r=$(cat "$f"); p=\${r%% *}; g=\${r#* }; ` +
     `if [ "$g" = agent ]; then kill -KILL "$p" 2>/dev/null; else kill -KILL -- "-$p" 2>/dev/null; fi; rm -f "$f"; done; }\n` +

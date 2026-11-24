@@ -37,6 +37,8 @@ podman build --iidfile "$iidfile" -t "$IMAGE" -f e2e/Containerfile .
 run_image="$IMAGE"
 report=()
 if [ -n "${E2E_REPORT_DIR:-}" ]; then
+  mkdir -p "$E2E_REPORT_DIR"
+  rm -f "$E2E_REPORT_DIR/report.json" "$E2E_REPORT_DIR/environment.json"
   run_image="$(cat "$iidfile")"
   run_image="${run_image#sha256:}"
   report=(-e "E2E_REPORT_DIR=$E2E_REPORT_DIR" -e "E2E_IMAGE_ID=$run_image")

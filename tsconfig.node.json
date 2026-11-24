@@ -28,6 +28,8 @@
     "src/renderer/src/tokenTable.ts",
     "src/renderer/src/cliInstall.ts",
     "src/renderer/src/cliInstallAction.ts",
+    "src/renderer/src/mcpInstallAction.ts",
+    "src/renderer/src/mcpInstall.ts",
     "src/renderer/src/installExamples.ts",
     "src/renderer/src/installConsent.ts",
     "src/renderer/src/menuActions.ts",

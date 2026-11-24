@@ -85,6 +85,8 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     handlers = {};
     settings = { ...DEFAULT_UI_SETTINGS };
     monitor = {
+      onTodosChanged: vi.fn(),
+      onCaptureChanged: vi.fn(),
       onEvent: vi.fn((cb) => (handlers.event = cb)),
       onEventRemoved: vi.fn((cb) => (handlers.eventRemoved = cb)),
       onCleared: vi.fn((cb) => (handlers.cleared = cb)),
@@ -185,6 +187,20 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
 
   // ---- capture cards: bulk triage (checkbox + toolbar Add to todo), command-output inject
   //      (§16.2 / §24.2.1) ----
+
+  it('a remote replacement keeps capture focus on a usable new control without taking focus from another tab', async () => {
+    let replace!: (events: MonitorEvent[]) => void;
+    monitor.onCaptureChanged.mockImplementation(cb => { replace = cb; });
+    wireMonitorPane(); await flush();
+    replace([makeEvent({ id: 'old', type: 'finding', text: 'old finding' })]);
+    const old = document.querySelector<HTMLInputElement>('#monitor-blocks input[type="checkbox"]')!;
+    old.focus();
+    replace([makeEvent({ id: 'new', type: 'finding', text: 'new finding' })]);
+    expect(document.activeElement).toBe(document.querySelector('#monitor-blocks input[type="checkbox"]'));
+    const outside = document.getElementById('tab-todo')!; outside.focus();
+    replace([makeEvent({ id: 'another', type: 'finding', text: 'another finding' })]);
+    expect(document.activeElement).toBe(outside);
+  });
 
   it('a finding card carries a selection checkbox and no per-card Add/Insert button', async () => {
     wireMonitorPane();

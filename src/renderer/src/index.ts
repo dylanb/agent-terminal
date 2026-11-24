@@ -40,6 +40,7 @@ import { createKeyboardSettings } from './keyboardSettings';
 import { createDisplaySettings } from './displaySettings';
 import { createCliInstall } from './cliInstall';
 import { createCliInstallAction } from './cliInstallAction';
+import { createMcpInstall } from './mcpInstall';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
@@ -93,6 +94,10 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 });
 createDisplaySettings(document.getElementById('display-settings-view')!, { settings: window.monitor });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
+createMcpInstall(document.getElementById('mcp-install-view')!, {
+  install: () => window.claudeCode.install(),
+  remove: () => window.claudeCode.remove(),
+});
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
   apply: (previewId, replace, removeRetired) =>

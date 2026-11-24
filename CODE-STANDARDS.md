@@ -105,6 +105,17 @@ discriminated union, never a flat record with fields dead in some modes — a fl
 dummy the mode ignores. `BundleLocation` (`packaged: true` carries `resourcesPath`; `packaged: false`
 carries `appPath`) is the shape to copy.
 
+**The same boundary rule applies to every module interface, not only injected dependencies.** A module
+owns its domain rules and the coordination needed to carry out its operations. Callers request operations
+and consume domain results; they do not inspect internal state to reconstruct validation, reproduce a
+required sequence of calls, or depend on persistence and audit serialization shapes. Expose only the
+information the caller's task requires. Litmus: can the implementation or storage change while callers
+and their behavior tests remain unchanged, provided the public behavior stays the same?
+
+`flow.ts` owns entry validation through `validateEntryInputs`; `mcpGateOperations.ts` owns gate
+coordination; MCP todo results use a public projection instead of exposing stored records. These are
+examples of ownership, not a requirement to add an adapter to every module.
+
 ## Code that acts on a kind handles every kind
 
 When a value names its kind (a discriminated union's tag, a string-literal union, a `kind` field), every place
@@ -413,6 +424,18 @@ surface on the last value the owner reported. Always-on-top is the live instance
 owns it in main, and the window switch (`alwaysOnTopControl.ts`) and the tray item both request it. A value
 with a single surface that cannot be refused (the controller theme) needs none of this.
 
+## Resources follow their owner's lifetime, including asynchronous startup
+
+A window, session or operation that owns a resource also owns its release. Establish that lifetime
+relationship as part of acquisition, before later startup work can leave cleanup unwired. If the owner
+ends while acquisition is pending, release the acquired resource instead of publishing it as live.
+Repeated close paths must be safe; callers must not each reproduce the startup/teardown sequence.
+
+Tests cover owner closure before, during and after asynchronous acquisition, including connected clients
+where applicable. A cleanup test keeps the containing process alive so process exit cannot supply the
+cleanup the application omitted, and must fail when that cleanup is disabled. The MCP window bridge's
+lifetime owner and its real-socket and Electron tests are the live example.
+
 ## A best-effort or cosmetic side effect must never abort the critical path it sits on
 
 Anything observe-only or decorative — the Dock icon, the §25 audit record, fire-and-forget telemetry — is
@@ -546,6 +569,17 @@ return a value that names each outcome and choose the entry from it — the epic
 `EpicGateOutcome` and records "confirmation shown" only on `preview-raised`, with a block recorded as a
 distinct kind. RED-test both directions: the entry appears when the outcome happened, and is absent when a
 different one did — a bug that writes the entry every time passes a one-direction test.
+
+**Authorization and its audit record consume the same observation.** When a record explains why an
+action was allowed or refused, carry the evidence used by that decision into the record; never perform a
+second lookup of mutable state and present its answer as the original reason. If freshness checks require
+a new observation before acting, the decision and its record both use that new observation. This extends
+the occurrence-identity rule: shared classification logic alone cannot prevent two reads at different
+times from disagreeing. Record the actual operation outcome separately from its authorization evidence.
+
+`mcpCallHandler.ts` passes one paired origin/prompt observation to authorization and audit. Tests change
+the surrounding state or overlap calls and verify each record retains the evidence used for its own
+decision, without borrowing a later prompt or another call's attribution.
 
 ## Comments state ONLY what the code cannot
 

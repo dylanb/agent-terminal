@@ -1,0 +1,32 @@
+{
+  "parentUuid": "6eeb9cfd-10c8-489a-a911-5c5f6459b3b2",
+  "isSidechain": false,
+  "attachment": {
+    "type": "queued_command",
+    "prompt": "OVERLAP-322-B: Read agent-terminal state. Confirm repo /private/tmp/at322-zt4bt6zg/repo and real-client-manual waiting at gate-5; otherwise stop. Approve that gate once using the returned identities, then read state and report. Do not retry or approve another gate.",
+    "source_uuid": "02f56fb9-e0b5-412f-9f6c-4b9a49b19bfc",
+    "delivery_id": "5d8872ec-de35-4804-a3bb-d20c4b029522",
+    "commandMode": "prompt",
+    "origin": {
+      "kind": "human"
+    },
+    "timestamp": "2026-11-17T21:42:36.796Z",
+    "humanTurn": true
+  },
+  "type": "attachment",
+  "uuid": "942633e0-f1ca-4bd4-a290-f4ee01d6049e",
+  "timestamp": "2026-11-17T21:42:36.796Z",
+  "rendered": [
+    {
+      "content": "<system-reminder>\nThe user sent a new message while you were working:\nOVERLAP-322-B: Read agent-terminal state. Confirm repo /private/tmp/at322-zt4bt6zg/repo and real-client-manual waiting at gate-5; otherwise stop. Approve that gate once using the returned identities, then read state and report. Do not retry or approve another gate.\n\nThis is how Claude Code surfaces messages the user sends mid-turn \u2014 within the running turn, often alongside the next tool result, rather than as a separate conversation turn. Address the message above as you continue this turn.\n</system-reminder>"
+    }
+  ],
+  "renderedRole": "system",
+  "session_id": "76eeaa29-92a8-4afa-befb-66ea165251e7",
+  "userType": "external",
+  "entrypoint": "cli",
+  "cwd": "/private/tmp/at322-zt4bt6zg/repo",
+  "sessionId": "76eeaa29-92a8-4afa-befb-66ea165251e7",
+  "version": "2.1.326",
+  "gitBranch": "real-client-checks"
+}

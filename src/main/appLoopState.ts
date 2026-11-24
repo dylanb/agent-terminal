@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { lstatSync, readFileSync, rmSync } from 'node:fs';
+import { constants, lstatSync, readFileSync, rmSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
@@ -337,6 +338,37 @@ export function roundReportFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR);
   if (jail === null) return null;
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+}
+
+export function createRoundReportReader(log: (line: string) => void): (repoDir: string, round: number) => Promise<unknown> {
+  const logged = new Map<string, Set<string>>();
+  return async (repoDir, round) => {
+    const key = JSON.stringify([repoDir, round]);
+    const file = roundReportFile(repoDir, round);
+    if (file === null) { logged.delete(key); return null; }
+    try {
+      const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      let result: unknown;
+      try {
+        if (!(await handle.stat()).isFile()) throw new Error('The round report is not a regular file.');
+        result = JSON.parse(await handle.readFile('utf8')) as unknown;
+      } finally {
+        await handle.close();
+      }
+      logged.delete(key);
+      return result;
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) { logged.delete(key); return null; }
+      const line = `The round report ${file} was not read: ${errMsg(error)}`;
+      const failures = logged.get(key) ?? new Set<string>();
+      logged.set(key, failures);
+      if (!failures.has(line)) {
+        failures.add(line);
+        log(line);
+      }
+      return null;
+    }
+  };
 }
 
 /** §28.5.5 — the confined path of the raw captured run kept beside the phase result at `resultPath`, which is

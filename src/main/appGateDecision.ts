@@ -21,6 +21,7 @@ import { errMsg } from './errno';
 import { approveEndsSliceBrief } from './sliceBriefReader';
 import type { SectionedReport } from './reportSections';
 import { decisionProblemText, type DecisionProblem, type FlowDecision } from '../shared/flowBranch';
+import type { FlowInputValidation } from './flow';
 import type { StepDecisionRead } from './stepDecision';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
@@ -35,6 +36,7 @@ export interface AppGateRefs {
 /** The executor's injection seam — each member a domain concept, not a mechanism (CODE-STANDARDS seam rule),
  *  so the decision logic runs under fakes with no PTY while the composition root wires the real ports. */
 export interface AppGateDecisionDeps {
+  validateEntryInputs?(repoDir: string, decision?: FlowDecision): FlowInputValidation;
   readRunState(repoDir: string): AppLoopRunState | null;
   resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   refs(repoDir: string): AppGateRefs;
@@ -145,8 +147,9 @@ export function resolveGateSideEffectBodyFile(
 }
 
 export type GateApproveOutcome =
+  | { kind: 'input-invalid'; reason: string }
   | { kind: 'advanced'; effectFailures: string[] }
-  | { kind: 'held' }
+  | { kind: 'held'; effectFailures: string[] }
   | { kind: 'preview-raised' }
   | { kind: 'blocked' }
   | { kind: 'refused'; reason: string }
@@ -169,6 +172,8 @@ export const HUMAN_DECIDER: ApproveDecider = { kind: 'human' };
 /** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
  *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
  *  the bound def declares. */
+export type GateDecisionOutcome = { taken: true } | { taken: false; reason: string };
+
 export async function runAppGateDecision(
   repoDir: string,
   step: string,
@@ -177,64 +182,76 @@ export async function runAppGateDecision(
   deps: AppGateDecisionDeps,
   note?: string,
 ): Promise<boolean> {
+  return (await runAppGateDecisionOutcome(repoDir, step, turnKey, option, deps, note)).taken;
+}
+
+export async function runAppGateDecisionOutcome(
+  repoDir: string,
+  step: string,
+  turnKey: string,
+  option: GateDecisionOption,
+  deps: AppGateDecisionDeps,
+  note?: string,
+): Promise<GateDecisionOutcome> {
   if (option === 'approve') {
     const outcome = await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
-    return outcome.kind === 'advanced';
+    return outcome.kind === 'advanced' ? { taken: true } : { taken: false, reason: `Approve was not taken: ${outcome.kind}` };
   }
   const humanAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void =>
     deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit);
   const run = deps.readRunState(repoDir);
   // §6/AC7
-  if (!run || run.step !== step || run.turnKey !== turnKey) return false;
-  if (run.status !== 'complete' || run.verdict === undefined) return false;
+  if (!run || run.step !== step || run.turnKey !== turnKey) return { taken: false, reason: 'The gate is no longer available for this decision.' };
+  if (run.status !== 'complete' || run.verdict === undefined) return { taken: false, reason: 'The gate is no longer available for this decision.' };
 
   const r = deps.resolveDef(repoDir, run.loop);
-  if (!r.ok) return false;
+  if (!r.ok) return { taken: false, reason: 'The gate is no longer available for this decision.' };
   // AC9
   const gateOpt = r.def.gate.find((g) => g.option === option);
-  if (!gateOpt) return false;
+  if (!gateOpt) return { taken: false, reason: 'The gate is no longer available for this decision.' };
 
   // §27.9/§19.4 (AC4) — request-changes is not approve: a blank note fires no round, and the delivered/dropped
   // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
   // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
   if (option === 'request-changes') {
     const feedback = validFeedback(note);
-    if (feedback === undefined) return false;
+    if (feedback === undefined) return { taken: false, reason: 'The gate is no longer available for this decision.' };
     if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
       humanAudit('decision', 0);
-      return true;
+      return { taken: true };
     }
     humanAudit('decision-dropped', 1, 'the loop was busy');
-    return false;
+    return { taken: false, reason: 'The loop was busy; resend the feedback or instruction.' };
   }
   // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
   // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
   // instruction on a drop, and a blank note fires nothing.
   if (option === 'redo') {
     const instruction = validInstruction(note);
-    if (instruction === undefined) return false;
+    if (instruction === undefined) return { taken: false, reason: 'The gate is no longer available for this decision.' };
     if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
       humanAudit('decision', 0);
-      return true;
+      return { taken: true };
     }
     humanAudit('decision-dropped', 1, 'the loop was busy');
-    return false;
+    return { taken: false, reason: 'The loop was busy; resend the feedback or instruction.' };
   }
   // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
   // and the operator can retry (§27.9.1 N9b.5(d)).
   if (option === 'polish') {
-    let entered = false;
+    let result: GateDecisionOutcome = { taken: true };
     try {
       deps.enterPolish(repoDir, step);
       humanAudit('decision', 0);
-      entered = true;
+
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       deps.emitError(`could not enter polish: ${reason}`);
+      result = { taken: false, reason: `Could not enter polish: ${reason}` };
     }
     deps.onViewChanged();
-    return entered;
+    return result;
   }
   // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
   // slice's RED step (reopenSlice) so the operator can redo missed work. Like polish it carries no note to lose:
@@ -249,7 +266,7 @@ export async function runAppGateDecision(
       } catch (e) {
         deps.emitError(`could not save the back-to-RED brief: ${e instanceof Error ? e.message : String(e)}`);
         deps.onViewChanged();
-        return false;
+        return { taken: false, reason: 'The gate is no longer available for this decision.' };
       }
     }
     let reopened = false;
@@ -264,10 +281,10 @@ export async function runAppGateDecision(
       deps.emitError(`could not reopen the slice: ${failure}`);
     }
     deps.onViewChanged();
-    return reopened;
+    return reopened ? { taken: true } : { taken: false, reason: failure };
   }
   // impasse is never executed here.
-  return false;
+  return { taken: false, reason: 'The gate is no longer available for this decision.' };
 }
 
 /** The approve operation both deciders invoke (§27.9.1 N9b.5(c)): the same identity check, accept, effects,
@@ -275,11 +292,10 @@ export async function runAppGateDecision(
 export async function runAppApprove(repoDir: string, step: string, turnKey: string, deps: AppGateDecisionDeps, decider: ApproveDecider): Promise<GateApproveOutcome> {
   const option: GateDecisionOption = 'approve';
   const by: GateDecider = decider.kind;
-  let accepted = false;
   const effectFailures: string[] = [];
   const gateAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void => {
     deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, by), exit);
-    if (accepted && exit !== 0) effectFailures.push(`${kind}: ${detail ?? ''}`);
+    if (exit !== 0) effectFailures.push(`${kind}: ${detail ?? ''}`);
   };
 
   if (decider.kind === 'engine' && decider.humanAttempted()) return { kind: 'stood-down' };
@@ -302,6 +318,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     deps.emitError(reason);
     return { kind: 'refused', reason };
   }
+  const inputs = deps.validateEntryInputs?.(repoDir, decisionRead.kind === 'ok' ? decisionRead.decision : undefined);
+  if (inputs && !inputs.valid) return { kind: 'input-invalid', reason: inputs.reason };
   // §27.9.1 N9b.6(m)
   if (decider.kind === 'engine' && decisionRead.kind === 'ok' && decisionRead.haltsAuto) return { kind: 'decision-held', value: decisionRead.decision.value };
 
@@ -361,6 +379,7 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     }
   };
 
+  let accepted = false;
   try {
     const refs = deps.refs(repoDir);
     /** False when the side-effect failed; an unknown kind is skipped. */
@@ -449,6 +468,7 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
         } catch (e) {
           const reason = errMsg(e);
           deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
+          if (by === 'human') effectFailures.push(`report ${o.id}: ${reason}`);
           deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
           ok = false;
         }
@@ -465,7 +485,7 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
         if (!ok) break;
         ok = await runEffect(se, (notice) => heldNotices.push(notice));
       }
-      if (!ok) return { kind: 'held' };
+      if (!ok) return { kind: 'held', effectFailures };
     }
 
     // D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and

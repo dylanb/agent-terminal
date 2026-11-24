@@ -5,6 +5,14 @@ export const INSTALL_CHANNELS = {
     name: 'cli:install',
     does: 'The renderer asks main to install the agent-terminal launch shim onto PATH for the running build, even before controller registration.',
   },
+  claudeCodeInstall: {
+    name: 'claudeCode:install',
+    does: "The renderer asks main to register the agent-terminal MCP server and its hooks in the user's Claude Code configuration.",
+  },
+  claudeCodeRemove: {
+    name: 'claudeCode:remove',
+    does: "The renderer asks main to take the agent-terminal MCP server and its hooks out of the user's Claude Code configuration.",
+  },
   installExamplesPreview: {
     name: 'examples:preview',
     does: 'The renderer asks which bundled example files already exist and differ at each destination, without writing anything.',
@@ -28,6 +36,13 @@ export interface CliInstallMsg {
 export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
+
+
+export interface ClaudeCodeIntegrationMsg {
+  sessionId: SessionId;
+}
+
+export type ClaudeCodeIntegrationResult = { ok: true } | { ok: false; error: string };
 
 // ---- Install bundled examples (§18.1/§23.4/§27.15) ----
 
@@ -144,6 +159,11 @@ export type InstallExamplesResult =
 export interface CliApi {
   /** Install the `agent-terminal` launch shim onto PATH, reconciling to the running build. */
   install(): Promise<CliInstallResult>;
+}
+
+export interface ClaudeCodeApi {
+  install(): Promise<ClaudeCodeIntegrationResult>;
+  remove(): Promise<ClaudeCodeIntegrationResult>;
 }
 
 /** Install bundled examples (§18.1/§23.4/§27.15): the settings organism's only seam to the install action.

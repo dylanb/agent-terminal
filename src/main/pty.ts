@@ -30,6 +30,10 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
+export function terminalShellArgs(platform: NodeJS.Platform): string[] {
+  return platform === 'darwin' ? ['-l'] : [];
+}
+
 export function buildSpawnConfig(input: {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
@@ -61,8 +65,7 @@ export function buildSpawnConfig(input: {
 
   return {
     shellPath,
-    // Login shell on macOS (native terminals' convention), plain interactive on Linux (§5).
-    shellArgs: platform === 'darwin' ? ['-l'] : [],
+    shellArgs: terminalShellArgs(platform),
     options: {
       name: 'xterm-256color',
       cols: 80,
@@ -125,11 +128,12 @@ export function probeLoginPath(): Promise<string | undefined> {
 export async function spawnAgentShell(opts: {
   integrationScriptPath?: string;
   cwd: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<pty.IPty> {
   const probedPath = await probeLoginPath();
   const cfg = buildSpawnConfig({
     platform: process.platform,
-    env: process.env,
+    env: opts.env ?? process.env,
     cwd: opts.cwd,
     probedPath,
     integrationScriptPath: opts.integrationScriptPath,
