@@ -515,7 +515,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
     // is wired — absent (not in the accessibility tree) otherwise.
-    if (!state.installationRetry && deps.onTerminate && terminateOffered(state)) {
+    if (deps.onTerminate && terminateOffered(state)) {
       host.append(terminateButton());
     }
 
