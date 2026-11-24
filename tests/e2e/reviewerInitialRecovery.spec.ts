@@ -1,13 +1,15 @@
+import { markRunReviewersLoaded } from '../helpers/runReviewerSession';
 /// <reference lib="dom" />
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
 import { seedAutoGateRepo } from './autoGateHarness';
 import { FAKE_AGENT_READY, seedFakeAgentSteps, seedFakeGhGit } from './fakeTools';
+import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { seedResolvedLoop } from '../helpers/resolvedReviewerFixture';
 
 let harness: FlowPickerHarness | undefined;
@@ -90,6 +92,14 @@ test('initial reviewer refusal supports back-out and a real Retry before any loo
   await expect.poll(() => state() === '' || /status: (complete|error)/.test(state())).toBe(true);
   const backout = page.getByRole('button', { name: /^(Terminate|Cancel|Back(?: out)?)$/ });
   await expect.soft(backout).toBeEnabled();
+  const peerLock = worktreeLockFile(worktreeLockRoot(harness.home), repo);
+  mkdirSync(dirname(peerLock), { recursive: true });
+  writeFileSync(peerLock, serializeLockHolder(currentLockHolder()));
+  await clickAvailable(backout);
+  await expect.soft(page.locator('#flow-strip .flow-control')).toHaveText('Retry Start');
+  expect.soft(existsSync(peerLock)).toBe(true);
+  rmSync(peerLock);
+
   await clickAvailable(backout);
   await clickAvailable(page.locator('#flow-confirm-host .flow-modal .confirm'));
   await expect.soft(page.locator('#flow-picker').getByRole('button', { name: /flow/i })).toBeEnabled();
@@ -111,7 +121,7 @@ test('initial reviewer refusal supports back-out and a real Retry before any loo
   await expect.soft.poll(state).toContain('step: second');
   await expect.soft.poll(state).toMatch(/status: (complete|error)/);
   script();
-  for (const file of existsSync(agents) ? readdirSync(agents) : []) utimesSync(join(agents, file), new Date(0), new Date(0));
+  markRunReviewersLoaded(repo);
   const sessions = readdirSync(binDir).filter((file) => file.startsWith('reviewer-session-')).length;
   await page.locator('.xterm-screen').click();
   await page.keyboard.press('Control+C');

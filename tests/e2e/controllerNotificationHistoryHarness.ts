@@ -35,11 +35,11 @@ export async function historyGate() {
     const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
     def.gate = [{ option: 'approve' }, { option: 'request-changes' }];
     writeFileSync(defPath, dump(def));
-    installBundledRunReviewers(repo, config);
     relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome);
     seedTrustedFlow(h.fixture.home, repo, 'history-flow', autoGateFlowYaml([
       { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' }, { id: 'verify', kind: 'manual' },
     ], 'history-flow'));
+    installBundledRunReviewers(repo, config, h.fixture.home);
     seedFakeAgentV2(binDir, {
       stepId: 'red', artifactRel: '.agent-terminal/loop/artifacts/red-result.json', work: 'red',
       roster: loopRoster('red-loop'),

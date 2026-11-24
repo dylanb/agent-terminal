@@ -1,3 +1,4 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,7 +8,7 @@ import yaml from 'js-yaml';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster, reviewerAgentFor, rosterLines } from '../../src/main/reviewTurn';
 import { installedReviewerProblem } from '../../src/main/reviewerAgents';
-import { ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { reconcileRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
 import { seedResolvedLoop } from '../helpers/resolvedReviewerFixture';
 import { seedFakeAgentSteps } from '../e2e/fakeTools';
 
@@ -45,7 +46,7 @@ describe('resolved run-local reviewers', () => {
     for (let i = winner; i < locations.length; i++) seedResolvedLoop(locations[i], 'custom-loop', `Tier ${i}: keep this exact charter.\n`, i === 3 ? 'all' : ['Read', 'Grep']);
     if (winner === 0) writeFileSync(join(run, '.agent-loop.yaml'), 'loops:\n  custom-loop: defs/custom-loop/custom-loop.yaml\n');
     const reviewers = resolved(run, operator, bundle);
-    const result = ensureRunReviewers(run, reviewers, bundle);
+    const result = reconcileRunReviewers(run, reviewerCatalog(reviewers));
     expect.soft(result.problems).toEqual([]);
     expect.soft(loaded(run)).toEqual([{ name: reviewerAgentFor('claude-code', reviewers[0]), charter: `Tier ${winner}: keep this exact charter.\n`, tools: winner === 3 ? 'all' : ['Read', 'Grep'] }]);
     expect(installedReviewerProblem(runAgentsDir(run), reviewers[0])).toBeNull();
@@ -56,7 +57,7 @@ describe('resolved run-local reviewers', () => {
     const result = resolveLoopDefV2('green-loop', { repoDir: run, flow: 'feature-dev-v3', tiers: { operator: null, appBundled: bundle, retired: null } });
     if (!result.ok) throw new Error(result.reason);
     const reviewer = { ...reviewRoster(result.def)[0], tools: ['Read'] };
-    ensureRunReviewers(run, [reviewer], bundle);
+    reconcileRunReviewers(run, reviewerCatalog([reviewer]));
     expect(installedReviewerProblem(runAgentsDir(run), reviewer)).toBeNull();
   });
 
@@ -64,7 +65,7 @@ describe('resolved run-local reviewers', () => {
     const charter = join(root, 'charter.md');
     writeFileSync(charter, 'Check the result.\n');
     const reviewers = ['a', 'b'].map((suffix) => ({ loop: 'loop-' + 'x'.repeat(150), persona: 'review-' + 'y'.repeat(150) + suffix, charter, tools: 'all' as const }));
-    ensureRunReviewers(run, reviewers, resolve('example/loops-v2'));
+    reconcileRunReviewers(run, reviewerCatalog(reviewers));
     expect.soft(new Set(reviewers.map((r) => reviewerAgentFor('claude-code', r))).size).toBe(2);
     for (const reviewer of reviewers) expect.soft(installedReviewerProblem(runAgentsDir(run), reviewer)).toBeNull();
     expect(loaded(run)).toHaveLength(2);
@@ -76,7 +77,7 @@ describe('resolved run-local reviewers', () => {
     seedResolvedLoop(join(operator, 'first'), 'custom-loop', 'First charter.\n', ['Read']);
     seedResolvedLoop(join(operator, 'second'), 'custom-loop', 'Second charter.\n', 'all');
     const reviewers = [...resolved(run, operator, bundle, 'first'), ...resolved(run, operator, bundle, 'second')];
-    ensureRunReviewers(run, reviewers, bundle);
+    reconcileRunReviewers(run, reviewerCatalog(reviewers));
     const expected = reviewers.map((r, i) => ({ name: reviewerAgentFor('claude-code', r), persona: r.persona, charter: i === 0 ? 'First charter.\n' : 'Second charter.\n', tools: i === 0 ? ['Read'] : 'all' as const }));
     const evidence = join(root, 'executed.jsonl');
     seedFakeAgentSteps(root, { check: { artifactRel: '.agent-terminal/loop/artifacts/result.md', work: 'complete', roster: ['review-result'] } }, { reviewers: { expected, evidence } });
@@ -102,7 +103,7 @@ describe('resolved run-local reviewers', () => {
       const operator = join(root, `operator-${index}`);
       seedResolvedLoop(operator, 'custom-loop', `Worktree ${index}.\n`, index === 0 ? ['Read'] : 'all');
       const reviewers = resolved(dir, operator, join(root, 'bundle'));
-      const result = ensureRunReviewers(dir, reviewers, join(root, 'bundle'));
+      const result = reconcileRunReviewers(dir, reviewerCatalog(reviewers));
       expect.soft(result.problems).toEqual([]);
       expect.soft(loaded(dir)).toEqual([{ name: reviewerAgentFor('claude-code', reviewers[0]), charter: `Worktree ${index}.\n`, tools: index === 0 ? ['Read'] : 'all' }]);
       snapshots.push(loaded(dir));

@@ -16,7 +16,7 @@ import {
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno, errMsg } from './errno';
-import { repairAdvice } from './fileRepairAdvice';
+import { repairAdvice, within } from './fileRepairAdvice';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
@@ -215,7 +215,7 @@ export function decisionOutput(def: LoopDefV2): ArtifactBinding | undefined {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; definitionFile?: string } | { ok: false; reason: string; reviewerDiagnostics?: Pick<LoopDefV2, 'name' | 'reviewers'> & { definitionFile: string } };
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; definitionFile: string } | { ok: false; reason: string; reviewerDiagnostics?: Pick<LoopDefV2, 'name' | 'reviewers'> & { definitionFile: string } };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
@@ -276,7 +276,7 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
   const confined = confinedRealPathResult(jail, target);
   if (!confined.ok) {
     if (confined.cause === 'escapes') fail(`${what} reference escapes the tier root: ${ref}`);
-    fail(`${what} ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'u+r', jail)}`);
+    fail(`${what} ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'read', within(jail))}`);
   }
   return confined.path;
 }
@@ -464,7 +464,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   try {
     doc = yaml.load(body);
   } catch (e) {
-    fail(`malformed yaml: ${e instanceof Error ? e.message : String(e)}`);
+    fail(`malformed yaml: ${errMsg(e)}`);
   }
   if (!isRecord(doc)) fail('def is not a mapping');
   const rec = doc as Record<string, unknown>;
@@ -604,7 +604,7 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
     raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
-    return { reason: `cannot read repo loop registry: ${errMsg(e)}. ${repairAdvice(e, path.join(repoDir, '.agent-loop.yaml'), 'u+r', resolveJail(repoDir))}` };
+    return { reason: `cannot read repo loop registry: ${errMsg(e)}. ${repairAdvice(e, path.join(repoDir, '.agent-loop.yaml'), 'read', within(resolveJail(repoDir)))}` };
   }
   let doc: unknown;
   try {
@@ -625,7 +625,7 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   const confined = confinedRealPathResult(jail, target);
   if (!confined.ok) {
     if (confined.cause === 'escapes') return { reason: `repo loop override for ${name} escapes the repository` };
-    return { reason: `repo loop override for ${name} at ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'u+r', jail)}` };
+    return { reason: `repo loop override for ${name} at ${target} is unresolvable: ${errMsg(confined.error)}. ${repairAdvice(confined.error, target, 'read', within(jail))}` };
   }
   const defPath = confined.path;
   return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
@@ -646,7 +646,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     const resolved = realpathBoundedResult(root);
     if (resolved.ok) tierCandidates.push({ root, tierName, jail: resolved.path });
     else {
-      tierCandidates.push({ reason: `cannot resolve ${tierName} tier ${root}: ${errMsg(resolved.error)}. ${repairAdvice(resolved.error, root, 'u+rx')}` });
+      tierCandidates.push({ reason: `cannot resolve ${tierName} tier ${root}: ${errMsg(resolved.error)}. ${repairAdvice(resolved.error, root, 'enter-folder')}` });
     }
   }
   const candidateIn = (tier: (typeof tierCandidates)[number], flow: string | null): typeof candidates => {
@@ -667,7 +667,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
         reason:
           confinedDefPath.cause === 'escapes'
             ? `def ${name} in the ${tierName} tier escapes its tier root`
-            : `def ${name} at ${defPath} in the ${tierName} tier is unresolvable: ${errMsg(confinedDefPath.error)}. ${repairAdvice(confinedDefPath.error, defPath, 'u+r', jail)}`,
+            : `def ${name} at ${defPath} in the ${tierName} tier is unresolvable: ${errMsg(confinedDefPath.error)}. ${repairAdvice(confinedDefPath.error, defPath, 'read', within(jail))}`,
       };
     }
     let body: string;
@@ -675,14 +675,14 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       body = readFileSync(confinedDefPath.path, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${errMsg(e)}. ${repairAdvice(e, confinedDefPath.path, 'u+r', jail)}` };
+      return { ok: false, reason: `cannot read def ${name}: ${errMsg(e)}. ${repairAdvice(e, confinedDefPath.path, 'read', within(jail))}` };
     }
     try {
       return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, definitionFile: defPath };
     } catch (e) {
       return {
         ok: false,
-        reason: `${defPath}: ${e instanceof Error ? e.message : String(e)}`,
+        reason: `${defPath}: ${errMsg(e)}`,
         ...(e instanceof ReviewerDefError ? { reviewerDiagnostics: { name, reviewers: e.reviewers, definitionFile: defPath } } : {}),
       };
     }

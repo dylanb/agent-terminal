@@ -64,7 +64,7 @@ export interface ReviewerAgentFormat {
   render: (spec: ReviewerAgentSpec) => string;
 }
 
-export const CLAUDE_REVIEWER_AGENT: ReviewerAgentFormat = { name: reviewerAgentName, extension: '.md', render: renderReviewerAgent };
+export const CLAUDE_REVIEWER_AGENT: ReviewerAgentFormat = { name: reviewerAgentName, extension: '.md', render: (spec) => renderReviewerAgent(spec, reviewerAgentName(spec.loop, spec.persona)) };
 export const CODEX_REVIEWER_AGENT: ReviewerAgentFormat = { name: codexReviewerAgentName, extension: '.toml', render: renderCodexReviewerAgent };
 
 export function reviewerAgentFile(format: ReviewerAgentFormat, loop: string, persona: string): string {
@@ -98,7 +98,7 @@ export function isAppWrittenAgent(text: string): boolean {
   }
 }
 
-export function renderReviewerAgent(spec: ReviewerAgentSpec, name = reviewerAgentName(spec.loop, spec.persona)): string {
+export function renderReviewerAgent(spec: ReviewerAgentSpec, name: string): string {
   checkReviewerSpec(spec);
   const front = {
     name,
@@ -143,7 +143,6 @@ export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentForma
 const AGENT_FILE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 
 export interface InstalledReviewer {
-  definitionFile?: string;
   loop: string;
   persona: string;
   charter: string;

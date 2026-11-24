@@ -104,7 +104,7 @@ import { createRunResolver } from './runResolver';
 import { createActiveFlowGate, selectIfUnlocked } from './activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
 import { createHeldRunRecovery, realHeldRunRecoveryDeps } from './heldRunRecovery';
-import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
+import { createFlowLifecycle, terminateWithReviewers, type FlowLifecycle } from './flowLifecycle';
 import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder, type AuditRecorder } from './auditRecorder';
@@ -145,12 +145,9 @@ import { createLoopMessages } from './loopMessages';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
-import { ensureReviewersRunnable, ensureRunReviewers, flowReviewers, reviewerInstallNotice } from './runReviewers';
-import { installsPerRun } from './reviewerPlacement';
-import { resolveExampleLoopsV2Dir } from './exampleAssets';
+import { unrunnableReviewers, reconcileRunReviewers, removeRunReviewers, flowReviewers, reviewerInstallNotice } from './runReviewers';
+import { createReviewerInstallationRecovery } from './reviewerInstallationRecovery';
 import { hostedAgentKind, identifiedAgent, sessionAgent } from './agentKind';
-import type { AgentKind } from '../shared/agentKind';
-import { errMsg } from './errno';
 import { createAgentHosting } from './agentHosting';
 import { readCurrentAuditRun } from './auditRun';
 import { foregroundCommand, foregroundStartedAt } from './foregroundCommand';
@@ -597,11 +594,10 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    ensureReviewerInstallation: (repoDir) => prepareRunReviewers(repoDir, identifiedAgent(tracker.summaries(), foregroundProgram())).problems,
-    ensureReviewersRunnable: (repoDir, reviewers, kind) => {
+    ensureReviewerInstallation: (repoDir) => reviewerRecovery.prepare(repoDir, identifiedAgent(tracker.summaries(), foregroundProgram())).problems,
+    unrunnableReviewers: (repoDir, reviewers, kind) => {
       const home = codexHome();
-      return ensureReviewersRunnable(kind, repoDir, reviewers, {
-        bundleDir: resolveExampleLoopsV2Dir(iconLoc),
+      return unrunnableReviewers(kind, repoDir, reviewers, {
         codexAgentsDir: home === null ? null : codexAgentsDir(home),
         sessionStartedAt: () => foregroundStartedAt(ptyProcess.pid),
       });
@@ -842,7 +838,7 @@ async function createWindow(): Promise<void> {
   const heldRunRecovery = createHeldRunRecovery({
     lock: worktreeLock,
     ...realHeldRunRecoveryDeps(flowGlobalDir, resolveAppLoopDefTiers(iconLoc)),
-    terminate: (repoKey) => flow.terminate(repoKey),
+    terminate: (repoKey) => terminateWithReviewers(flow, repoKey, (key) => removeRunReviewers(key)),
     selectIfUnlocked,
   });
 
@@ -1207,7 +1203,7 @@ async function createWindow(): Promise<void> {
     const pickupConfirm = pickupConfirmations.view(repoKey);
     return {
       ...base,
-      ...(reviewerInstallationFailures.get(repoKey)?.retry ? { installationRetry: reviewerInstallationFailures.get(repoKey)!.retry, notice: reviewerInstallationFailures.get(repoKey)!.reason } : {}),
+      ...reviewerRecovery.retryView(repoKey),
       ...(activity ? { loopActivity: activity } : {}),
       ...(pickupConfirm !== undefined ? { pickupConfirm } : {}),
     };
@@ -1225,6 +1221,7 @@ async function createWindow(): Promise<void> {
       pickupRecordPredatesRun.add(repoKey);
     },
     endRun: composeLifecycleEndRun(autoGate),
+    removeReviewers: (repoKey) => removeRunReviewers(repoKey),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
     recordRollback: (repoKey, before, after) => recordTransitionAndSample(repoKey, 'rollback', before, after),
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
@@ -1275,7 +1272,7 @@ async function createWindow(): Promise<void> {
   // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
   const autoAdvanceFlow = (repoKey: string): void => {
     const pre = flow.state(repoKey);
-    if (pre.status !== 'in_progress' || reviewerInstallHold(repoKey) !== null) return;
+    if (pre.status !== 'in_progress' || reviewerRecovery.hold(repoKey) !== null) return;
     const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
     recordFlowTransition(repoKey, 'advance', pre, view);
   };
@@ -1418,7 +1415,7 @@ async function createWindow(): Promise<void> {
     run: runAppGateDecisionRaw,
   });
   const runAppGateDecision: typeof guardedGateDecision = (repoKey, ...rest) => {
-    const held = pickupHoldRefusal(repoKey) ?? reviewerInstallHold(repoKey);
+    const held = pickupHoldRefusal(repoKey) ?? reviewerRecovery.hold(repoKey);
     if (held === null) return guardedGateDecision(repoKey, ...rest);
     refuseGateDecision(held);
     return Promise.resolve(false);
@@ -1434,34 +1431,26 @@ async function createWindow(): Promise<void> {
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
   });
-  const reviewerInstallationFailures = new Map<string, { reason: string; retry?: 'start' | 'restart' }>();
-  const prepareRunReviewers = (repoKey: string, running: AgentKind | null) => {
-    if (!installsPerRun(running)) return { wrote: [], problems: [] };
-    let result;
-    try {
+  const reviewerRecovery = createReviewerInstallationRecovery({
+    install: (repoKey) => {
       const load = resolveActiveDefinition(repoKey);
       if (!load.ok) throw new Error(load.error);
-      const reviewers = flowReviewers(load.definition.steps, (loop) => observedResolveDef(repoKey, loop));
-      result = ensureRunReviewers(repoKey, reviewers, resolveExampleLoopsV2Dir(iconLoc));
-    } catch (e) {
-      result = { wrote: [], problems: [errMsg(e)] };
-    }
-    if (result.problems.length > 0) reviewerInstallationFailures.set(repoKey, { ...reviewerInstallationFailures.get(repoKey), reason: result.problems.join('\n') });
-    else reviewerInstallationFailures.delete(repoKey);
-    return result;
-  };
-  const reviewerInstallHold = (repoKey: string): string | null => reviewerInstallationFailures.get(repoKey)?.reason ?? null;
-  const installRunReviewers = (repoKey: string): string | null => {
+      return reconcileRunReviewers(repoKey, flowReviewers(load.definition.steps, (loop) => observedResolveDef(repoKey, loop)));
+    },
+    remove: (repoKey) => removeRunReviewers(repoKey),
+    lock: worktreeLock,
+    currentView: (repoKey, notice) => trackLoop(repoKey, withNotice(withDerived(repoKey, flow.state(repoKey)), notice ?? null)),
+    terminate: (repoKey) => lifecycle.terminate(repoKey),
+  });
+  const installRunReviewers = (repoKey: string, retry?: 'start' | 'restart'): string | null => {
     const running = identifiedAgent(tracker.summaries(), foregroundProgram());
-    return reviewerInstallNotice(prepareRunReviewers(repoKey, running), running);
+    return reviewerInstallNotice(reviewerRecovery.prepare(repoKey, running, retry), running);
   };
   const withNotice = (view: FlowStateView, notice: string | null): FlowStateView =>
     notice === null ? view : { ...view, notice: view.notice === undefined ? notice : `${view.notice} ${notice}` };
   const preparedRunStart = (repoKey: string, retry: 'start' | 'restart', transition: () => FlowStateView): FlowStateView => {
-    const notice = installRunReviewers(repoKey);
-    const failure = reviewerInstallationFailures.get(repoKey);
-    if (failure) {
-      reviewerInstallationFailures.set(repoKey, { ...failure, retry });
+    const notice = installRunReviewers(repoKey, retry);
+    if (reviewerRecovery.hold(repoKey) !== null) {
       return trackLoop(repoKey, withDerived(repoKey, flow.state(repoKey)));
     }
     return beginRunHere(repoKey, () => trackLoop(repoKey, withNotice(withDerived(repoKey, transition()), notice)));
@@ -1704,7 +1693,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         if (flow.state(m.repoKey).status === 'in_progress') installRunReviewers(m.repoKey);
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
-        const held = pickupHoldRefusal(m.repoKey) ?? reviewerInstallHold(m.repoKey);
+        const held = pickupHoldRefusal(m.repoKey) ?? reviewerRecovery.hold(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
         const awaits = flow.pendingDecision(m.repoKey);
         if (awaits !== null) return trackLoop(m.repoKey, { ...pre, notice: undecidedAdvanceNotice(awaits) });
@@ -1732,7 +1721,7 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowUndo]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const held = reviewerInstallHold(m.repoKey) ?? pickupHoldRefusal(m.repoKey);
+        const held = reviewerRecovery.hold(m.repoKey) ?? pickupHoldRefusal(m.repoKey);
         if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: held });
         return recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey));
       },
@@ -1741,10 +1730,7 @@ async function createWindow(): Promise<void> {
       // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const failure = reviewerInstallationFailures.get(m.repoKey);
-        reviewerInstallationFailures.delete(m.repoKey);
-        if (failure?.retry) return trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
-        return lifecycle.terminate(m.repoKey).view;
+        return reviewerRecovery.terminate(m.repoKey);
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.

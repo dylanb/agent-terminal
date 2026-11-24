@@ -4,13 +4,30 @@ import { isErrno, errMsg } from './errno';
 import { confinedRealPathResult } from './confinedPath';
 import { shellQuote } from '../shared/shellQuote';
 
-export function repairAdvice(error: unknown, target: string, mode: string, jail?: string | null): string {
+export type RepairAccess = 'read' | 'read-write' | 'enter-folder' | 'change-folder';
+
+/** Where a repair may point: anywhere, or only inside a jail (`null` when the jail itself cannot be resolved). */
+export type RepairScope = { kind: 'anywhere' } | { kind: 'within'; jail: string | null };
+
+export const ANYWHERE: RepairScope = { kind: 'anywhere' };
+export const within = (jail: string | null): RepairScope => ({ kind: 'within', jail });
+
+const CHMOD_MODE: Record<RepairAccess, string> = {
+  read: 'u+r',
+  'read-write': 'u+rw',
+  'enter-folder': 'u+rx',
+  'change-folder': 'u+rwx',
+};
+
+const effectiveUser = (): number | undefined => process.geteuid?.() ?? process.getuid?.();
+
+export function repairAdvice(error: unknown, target: string, access: RepairAccess, scope: RepairScope = ANYWHERE, operator = effectiveUser()): string {
   if (isErrno(error, 'ENOSPC')) return 'Free disk space, then Retry.';
   const manual = `Correct the reference or link for ${target} within its allowed source directory, then Retry.`;
   const repairPath = (file: string): string | null => {
-    if (jail === undefined) return file;
-    if (jail === null) return null;
-    const confined = confinedRealPathResult(jail, file);
+    if (scope.kind === 'anywhere') return file;
+    if (scope.jail === null) return null;
+    const confined = confinedRealPathResult(scope.jail, file);
     return confined.ok ? confined.path : null;
   };
   if (isErrno(error, 'EACCES') || isErrno(error, 'EPERM')) {
@@ -23,7 +40,7 @@ export function repairAdvice(error: unknown, target: string, mode: string, jail?
       const resolved = repairPath(dir);
       if (resolved === null) continue;
       try { accessSync(resolved, constants.X_OK); } catch (e) {
-        if (isErrno(e, 'EACCES') || isErrno(e, 'EPERM')) return permissionAdvice(resolved, 'u+x');
+        if (isErrno(e, 'EACCES') || isErrno(e, 'EPERM')) return permissionAdvice(resolved, 'u+x', operator);
         break;
       }
     }
@@ -31,7 +48,7 @@ export function repairAdvice(error: unknown, target: string, mode: string, jail?
     for (;;) {
       const resolved = repairPath(existing);
       if (resolved === null) return manual;
-      if (existsSync(resolved)) return permissionAdvice(resolved, existing === target ? mode : 'u+rwx');
+      if (existsSync(resolved)) return permissionAdvice(resolved, existing === target ? CHMOD_MODE[access] : CHMOD_MODE['change-folder'], operator);
       if (path.dirname(existing) === existing) return manual;
       existing = path.dirname(existing);
     }
@@ -39,17 +56,15 @@ export function repairAdvice(error: unknown, target: string, mode: string, jail?
   return `Correct or restore ${target}, then Retry.`;
 }
 
-function permissionAdvice(target: string, mode: string): string {
+function permissionAdvice(target: string, mode: string, operator: number | undefined): string {
   let owner: number;
   try {
     owner = statSync(target).uid;
   } catch (error) {
     return `Cannot inspect ownership of ${target}: ${errMsg(error)}. Restore access to that path, then Retry.`;
   }
-  const operator = process.geteuid?.() ?? process.getuid?.();
-  const quoted = shellQuote(target);
-  if (operator !== undefined && owner !== operator) {
-    return `Have an administrator run this block as root (for example in sudo -s), from any directory, to give user ${operator} access to ${target}:\n\`\`\`sh\nchown ${operator} ${quoted}\nchmod ${mode} ${quoted}\n\`\`\`\nThen Retry.`;
+  if (operator === undefined || operator === 0 || owner !== operator) {
+    return `Ask the owner or an administrator to inspect ${target} and restore the access needed by user ${operator ?? 'running the app'}, preserving its ownership and unrelated users' access. Verify the current path and any shared directory before making changes; do not elevate a command copied from this notice. Then Retry.`;
   }
-  return `As the owner of ${target}, run from any directory:\n\`\`\`sh\nchmod ${mode} ${quoted}\n\`\`\`\nThen Retry.`;
+  return `As user ${operator}, the owner of ${target}, run from any directory without sudo or a root shell:\n\`\`\`sh\nchmod ${mode} ${shellQuote(target)}\n\`\`\`\nThen Retry.`;
 }

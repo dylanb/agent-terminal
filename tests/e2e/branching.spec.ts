@@ -106,7 +106,7 @@ interface DecidingRun {
 }
 
 async function launchDeciding(run: DecidingRun, control: 'Start' | 'Advance' | 'Restart'): Promise<void> {
-  installBundledRunReviewers(run.repo, run.config);
+  installBundledRunReviewers(run.repo, run.config, run.home);
   app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${tmp(`${run.prefix}ud-`)}`],
     env: {

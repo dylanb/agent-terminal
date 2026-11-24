@@ -1,9 +1,11 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
+import { markRunReviewersLoaded } from '../helpers/runReviewerSession';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createAppLoopEngineHarness, REVIEW_KEY, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
-import { ensureReviewersRunnable, ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { unrunnableReviewers, reconcileRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
 import { reviewRoster, reviewerAgentFor, rosterLines } from '../../src/main/reviewTurn';
 import { readAppLoopState } from '../../src/main/appLoopState';
 import { seedFakeAgentSteps } from '../e2e/fakeTools';
@@ -21,12 +23,12 @@ for (const mode of ['ordinary', 'goal'] as const) {
       writeFileSync(reviewer.charter, `${reviewer.persona} original instructions.\n`);
     }
     h.defResult = h.resolved(def);
-    ensureRunReviewers(h.repo, reviewRoster(def), '');
+    reconcileRunReviewers(h.repo, reviewerCatalog(reviewRoster(def)));
     const agents = runAgentsDir(h.repo).dir;
-    for (const file of readdirSync(agents)) utimesSync(join(agents, file), new Date(0), new Date(0));
-    let sessionStartedAt = 1;
+    let sessionStartedAt = markRunReviewersLoaded(h.repo);
     const engine = h.makeEngine(undefined, undefined, undefined, {
-      ensureReviewersRunnable: (repo, reviewers, kind) => ensureReviewersRunnable(kind, repo, reviewers, { bundleDir: '', codexAgentsDir: null, sessionStartedAt: () => sessionStartedAt }),
+      ensureReviewerInstallation: (repo) => reconcileRunReviewers(repo, h.defResult.ok ? reviewerCatalog(reviewRoster(h.defResult.def), h.defResult.definitionFile) : reviewerCatalog([])).problems,
+      unrunnableReviewers: (repo, reviewers, kind) => unrunnableReviewers(kind, repo, reviewers, { codexAgentsDir: null, sessionStartedAt: () => sessionStartedAt }),
     });
     h.enterAndInjectWork(engine);
     h.driveFromWorkToGate(engine);
@@ -58,7 +60,7 @@ for (const mode of ['ordinary', 'goal'] as const) {
     engine.onInjectable();
     engine.onInjectable();
     expect.soft(h.injected.filter(isReview)).toEqual([]);
-    sessionStartedAt = Math.max(...readdirSync(agents).map((file) => statSync(join(agents, file)).mtimeMs)) + 1;
+    sessionStartedAt = markRunReviewersLoaded(h.repo);
     engine.routeOut(h.repo, STEP, mode === 'goal' ? TURN_KEY : REVIEW_KEY, 'retry');
     engine.onInjectable();
     engine.onInjectable();
@@ -88,7 +90,7 @@ for (const hasIgnore of [false, true]) {
         writeFileSync(charter, `Worktree ${i}.`);
         if (hasIgnore) writeFileSync(join(repo, '.gitignore'), 'build/\n');
         const reviewer = { loop: 'same-loop', persona: 'same-reviewer', charter, tools: ['Read'] };
-        ensureRunReviewers(repo, [reviewer], '');
+        reconcileRunReviewers(repo, reviewerCatalog([reviewer]));
         writeFileSync(join(runAgentsDir(repo).dir, 'unrelated.md'), 'Unrelated reviewer.');
         return reviewer;
       });
@@ -103,7 +105,7 @@ for (const hasIgnore of [false, true]) {
         if (change === 'charter') writeFileSync(specs[0].charter, 'Refreshed first worktree.');
         if (change === 'tools') specs[0].tools = ['Grep'];
         if (change === 'deleted') for (const file of readdirSync(runAgentsDir(h.repo).dir).filter((f) => f !== 'unrelated.md')) rmSync(join(runAgentsDir(h.repo).dir, file));
-        ensureRunReviewers(h.repo, [specs[0]], '');
+        reconcileRunReviewers(h.repo, reviewerCatalog([specs[0]]));
         expect.soft(installedReviewerProblem(runAgentsDir(h.repo), specs[0])).toBeNull();
         expect.soft(snapshot()).toEqual(original);
         expect.soft(installedReviewerProblem(runAgentsDir(other), specs[1])).toBeNull();

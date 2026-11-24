@@ -31,6 +31,8 @@ const CONTROL: Record<FlowStatus, { label: string; act: Act } | null> = {
   error: null,
 };
 
+const RETRIED_FROM: Record<NonNullable<FlowStateView['installationRetry']>, FlowStatus> = { start: 'not_started', restart: 'done' };
+
 type RailItem = { name: string; st: StationState; step?: number; tag?: string; current?: true } | { marker: string };
 
 const UNDECIDED_MARKER = 'next steps depend on the verdict';
@@ -492,7 +494,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(line);
     }
 
-    const control = state.installationRetry ? CONTROL[state.installationRetry === 'start' ? 'not_started' : 'done'] : CONTROL[state.status];
+    const control = state.installationRetry ? CONTROL[RETRIED_FROM[state.installationRetry]] : CONTROL[state.status];
     if (!control) return;
 
     // Undo takes the advance back to in-progress WITHOUT re-running the step's entry actions —

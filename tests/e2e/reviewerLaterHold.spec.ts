@@ -1,7 +1,8 @@
+import { markRunReviewersLoaded } from '../helpers/runReviewerSession';
 /// <reference lib="dom" />
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -83,7 +84,7 @@ for (const change of ['missing'] as const) {
     const restartSession = async () => {
       script();
       const sessions = readdirSync(binDir).filter((file) => file.startsWith('reviewer-session-'));
-      for (const file of readdirSync(agents)) utimesSync(join(agents, file), new Date(0), new Date(0));
+      markRunReviewersLoaded(repo);
       await page.locator('.xterm-screen').click();
       await page.keyboard.press('Control+C');
       await command(page, 'claude');

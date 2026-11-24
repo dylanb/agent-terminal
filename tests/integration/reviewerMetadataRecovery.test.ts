@@ -1,9 +1,10 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { ensureRunReviewers } from '../../src/main/runReviewers';
+import { reconcileRunReviewers } from '../../src/main/runReviewers';
 
 it.skipIf(process.getuid?.() === 0).each(['git-file', 'backlink', 'commondir', 'agents-search', 'git-search', 'run-search'] as const)('offered repair restores installation after %s permission failure', (fault) => {
   const root = mkdtempSync(join(tmpdir(), "metadata repair's-"));
@@ -21,7 +22,7 @@ it.skipIf(process.getuid?.() === 0).each(['git-file', 'backlink', 'commondir', '
   if (fault === 'agents-search') mkdirSync(obstruction, { recursive: true });
   chmodSync(obstruction, directoryFault ? 0o600 : 0o200);
   try {
-    const failed = ensureRunReviewers(work, [reviewer], '');
+    const failed = reconcileRunReviewers(work, reviewerCatalog([reviewer]));
     expect(failed.wrote).toEqual([]);
     const notice = failed.problems.join('\n');
     expect.soft(notice).toContain(reviewer.persona);
@@ -30,7 +31,7 @@ it.skipIf(process.getuid?.() === 0).each(['git-file', 'backlink', 'commondir', '
     const command = /```sh\n([\s\S]*?)```/.exec(notice)?.[1];
     expect(command).toBeDefined();
     execFileSync('/bin/sh', ['-c', command!], { cwd: tmpdir(), stdio: 'pipe' });
-    const retried = ensureRunReviewers(work, [reviewer], '');
+    const retried = reconcileRunReviewers(work, reviewerCatalog([reviewer]));
     expect(retried.problems).toEqual([]);
     expect(retried.wrote).toHaveLength(1);
     expect(readFileSync(retried.wrote[0], 'utf8')).toContain('Required reviewer.');

@@ -2,7 +2,7 @@
 
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { isErrno } from './errno';
-import { decodeUtf8Strict } from './decodeUtf8Strict';
+import { decodeUtf8Strict, type ByteOrderMark } from './decodeUtf8Strict';
 
 export type BoundedRead =
   | { ok: true; text: string }
@@ -11,7 +11,7 @@ export type BoundedRead =
 /** Read `file` as UTF-8 through ONE descriptor opened O_NOFOLLOW|O_NONBLOCK: a symlink leaf, a FIFO or other
  *  non-regular file, a file past `maxBytes`, or invalid UTF-8 never yields text. Only a genuine ENOENT is
  *  `absent`. Never throws. */
-export function readBoundedNoFollow(file: string, maxBytes: number, preserveByteOrderMark = false): BoundedRead {
+export function readBoundedNoFollow(file: string, maxBytes: number, byteOrderMark: ByteOrderMark = 'strip'): BoundedRead {
   let fd: number;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -28,7 +28,7 @@ export function readBoundedNoFollow(file: string, maxBytes: number, preserveByte
       total += n;
     }
     if (total > maxBytes) return { ok: false, cause: 'over-cap' };
-    return { ok: true, text: decodeUtf8Strict(buf.subarray(0, total), preserveByteOrderMark) };
+    return { ok: true, text: decodeUtf8Strict(buf.subarray(0, total), byteOrderMark) };
   } catch (e) {
     return { ok: false, cause: 'unreadable', error: e };
   } finally {

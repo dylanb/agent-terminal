@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { markRunReviewersLoaded } from './runReviewerSession';
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dump, load } from 'js-yaml';
@@ -6,7 +7,8 @@ import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { listLoopFolders } from '../../src/main/loopFolders';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
-import { ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { createRunResolver } from '../../src/main/runResolver';
+import { reconcileRunReviewers, flowReviewers } from '../../src/main/runReviewers';
 
 /** The phase loops a fixture flow binds by name and drives with a round-answering fake agent (§27.5). */
 export const ROUND_PHASE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'] as const;
@@ -57,20 +59,24 @@ export function seedSharedExampleConfig(): string {
   return root;
 }
 
-/** Installs every bundled reviewer into a seeded run folder before any agent starts in it, as an earlier run
- *  in that folder would have, so a fake agent launched next counts as having loaded them (§27.4). */
-export function installBundledRunReviewers(runFolder: string, configDir: string): void {
+/** Prepares only the fixture flow's reviewers before its agent starts. A caller selecting a flow later
+ * supplies that fixture's loop names explicitly; no unrelated generated reviewers are seeded. */
+export function installBundledRunReviewers(runFolder: string, configDir: string, globalDir = runFolder, loopNames?: readonly string[]): void {
   const bundle = join(process.cwd(), 'out/main/example/loops-v2');
-  const operator = join(configDir, 'loops-v2');
-  const reviewers = [...listLoopFolders(bundle), ...listLoopFolders(operator)].flatMap((folder) => {
-    const r = resolveLoopDefV2(folder.name, { tiers: { operator, appBundled: bundle, retired: null }, repoDir: runFolder, flow: folder.flow ?? undefined });
-    if (!r.ok) throw new Error(r.reason);
-    return reviewRoster(r.def);
-  });
-  const { problems } = ensureRunReviewers(runFolder, reviewers, bundle);
+  const tiers = { operator: join(configDir, 'loops-v2'), appBundled: bundle, retired: null };
+  const load = createRunResolver(globalDir, tiers)(runFolder).load;
+  if (!load.ok && loopNames === undefined) return;
+  const resolve = (name: string) => resolveLoopDefV2(name, { tiers, repoDir: runFolder, ...(load.ok ? { flow: load.definition.name } : {}) });
+  const catalog = loopNames === undefined && load.ok
+    ? flowReviewers(load.definition.steps, resolve)
+    : { reviewers: (loopNames ?? []).flatMap((name) => {
+      const result = resolve(name);
+      if (!result.ok) throw new Error(result.reason);
+      return reviewRoster(result.def).map((reviewer) => ({ ...reviewer, definitionFile: result.definitionFile }));
+    }), problems: [] };
+  // Deliberately invalid definitions are diagnosed by the app in refusal tests, not by fixture setup.
+  if (catalog.problems.length > 0) return;
+  const { problems } = reconcileRunReviewers(runFolder, catalog);
   if (problems.length > 0) throw new Error(problems.join('; '));
-  // An earlier run wrote them, well before any agent session the test starts.
-  const earlier = new Date(Date.now() - 3_600_000);
-  const agents = runAgentsDir(runFolder).dir;
-  for (const file of readdirSync(agents)) utimesSync(join(agents, file), earlier, earlier);
+  markRunReviewersLoaded(runFolder);
 }

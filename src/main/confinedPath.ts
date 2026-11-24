@@ -14,6 +14,10 @@ function isAbsent(p: string): boolean {
   }
 }
 
+/** The symlink-free real path of `p`: symlinks in its longest existing prefix are resolved and a tail of
+ *  not-yet-created segments is appended. Only a genuinely absent (ENOENT) segment is appended; a segment
+ *  that exists but does not resolve — a dangling symlink — or one that is inaccessible or traversed as a
+ *  non-directory is refused with its error, since none can be reduced to a symlink-free path. Never throws. */
 export function realpathBoundedResult(p: string): { ok: true; path: string } | { ok: false; error: unknown } {
   const abs = path.resolve(p);
   const tail: string[] = [];
@@ -62,7 +66,10 @@ export function resolveOwnedDirJail(dir: string): string | null {
  *  unreadable or is not a directory. The two call for opposite fixes, so a caller that reports a refusal to
  *  a human MUST distinguish them rather than blaming a link for a permission problem. */
 export type PathRefusal = 'escapes' | 'unresolvable';
-export type ConfinedPath = { ok: true; path: string } | { ok: false; cause: PathRefusal; error?: unknown };
+export type ConfinedPath =
+  | { ok: true; path: string }
+  | { ok: false; cause: 'unresolvable'; error: unknown }
+  | { ok: false; cause: 'escapes' };
 
 /** `target`'s symlink-free real path when it stays inside `jail`, else the reason it was refused. `jail` must
  *  already be resolved — by `resolveJail` or `resolveOwnedDirJail`, whichever matches whose ground it sits on;

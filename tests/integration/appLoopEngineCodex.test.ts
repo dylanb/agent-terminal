@@ -19,7 +19,7 @@ const goalDef = (): LoopDefV2 => {
 const engineFor = (kind: AgentKind, problem: (agent: string) => string | null = () => null) =>
   makeEngine(undefined, undefined, undefined, {
     hostedAgentKind: () => kind,
-    ensureReviewersRunnable: (_repo, rs, k) => rs.map((r) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`)).filter((p): p is string => p !== null),
+    unrunnableReviewers: (_repo, rs, k) => rs.map((r) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`)).filter((p): p is string => p !== null),
   });
 const goalPrompt = (): string => {
   const cmd = h.injected.find((p) => p.startsWith('/goal '));
@@ -69,7 +69,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     const kinds: AgentKind[] = ['claude-code', 'codex', 'codex', 'codex'];
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgentKind: () => kinds.shift() ?? 'codex',
-      ensureReviewersRunnable: (_repo, rs, k) => (k === 'codex' ? rs.map((r) => `no Codex agent for ${r.persona} is installed`) : []),
+      unrunnableReviewers: (_repo, rs, k) => (k === 'codex' ? rs.map((r) => `no Codex agent for ${r.persona} is installed`) : []),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
@@ -95,7 +95,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
   it('with no agent at the prompt it says so, not that reviewers are missing', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgent: () => 'absent',
-      ensureReviewersRunnable: (_repo, rs) => rs.map((r) => `no sub-agent ${r.persona} is installed`),
+      unrunnableReviewers: (_repo, rs) => rs.map((r) => `no sub-agent ${r.persona} is installed`),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);

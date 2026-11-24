@@ -1,8 +1,10 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
+import { markRunReviewersLoaded } from '../helpers/runReviewerSession';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createAppLoopEngineHarness, REVIEW_KEY, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
-import { ensureReviewersRunnable, ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { unrunnableReviewers, reconcileRunReviewers } from '../../src/main/runReviewers';
 import { reviewRoster, reviewerAgentFor } from '../../src/main/reviewTurn';
 import { readAppLoopState } from '../../src/main/appLoopState';
 
@@ -18,12 +20,11 @@ for (const mode of ['ordinary', 'goal'] as const) {
       writeFileSync(reviewer.charter, `${reviewer.persona} original instructions.\n`);
     }
     h.defResult = h.resolved(def);
-    ensureRunReviewers(h.repo, reviewRoster(def), '');
-    const agents = runAgentsDir(h.repo).dir;
-    for (const file of readdirSync(agents)) utimesSync(join(agents, file), new Date(0), new Date(0));
-    let sessionStartedAt = 1;
+    reconcileRunReviewers(h.repo, reviewerCatalog(reviewRoster(def)));
+    let sessionStartedAt = markRunReviewersLoaded(h.repo);
     const engine = h.makeEngine(undefined, undefined, undefined, {
-      ensureReviewersRunnable: (repo, reviewers, kind) => ensureReviewersRunnable(kind, repo, reviewers, { bundleDir: '', codexAgentsDir: null, sessionStartedAt: () => sessionStartedAt }),
+      ensureReviewerInstallation: (repo) => reconcileRunReviewers(repo, h.defResult.ok ? reviewerCatalog(reviewRoster(h.defResult.def), h.defResult.definitionFile) : reviewerCatalog([])).problems,
+      unrunnableReviewers: (repo, reviewers, kind) => unrunnableReviewers(kind, repo, reviewers, { codexAgentsDir: null, sessionStartedAt: () => sessionStartedAt }),
     });
     h.enterAndInjectWork(engine);
     h.driveFromWorkToGate(engine);
@@ -38,12 +39,6 @@ for (const mode of ['ordinary', 'goal'] as const) {
     h.defResult = h.resolved(def);
     h.injected.length = 0;
     h.enterAndInjectWork(engine);
-    if (mode === 'ordinary') {
-      h.writeArtifact(true);
-      engine.onDoneSignal();
-      engine.onInjectable();
-      engine.onInjectable();
-    }
     const current = reviewRoster(def);
     expect.soft(engine.liveErrorFor(h.repo)?.reason).toContain(change === 'empty-tools' ? current[0].loop : current[0].charter);
     expect.soft(readAppLoopState(h.repo)?.status).toBe('error');
@@ -51,18 +46,25 @@ for (const mode of ['ordinary', 'goal'] as const) {
     expect.soft(engine.liveErrorFor(h.repo)?.reason).toMatch(/retry/i);
     const isReview = (prompt: string) => mode === 'goal' ? prompt.startsWith('/goal ') : prompt.includes('review-and-fix turn');
     expect.soft(h.injected.filter(isReview)).toEqual([]);
-    engine.routeOut(h.repo, STEP, mode === 'goal' ? TURN_KEY : REVIEW_KEY, 'retry');
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
     engine.onInjectable();
     engine.onInjectable();
     expect.soft(h.injected.filter(isReview)).toEqual([]);
     if (change === 'directory') rmSync(def.reviewers[0].charter, { recursive: true });
     writeFileSync(def.reviewers[0].charter, 'Repaired instructions.\n');
     def.reviewers[0].tools = ['Read'];
-    ensureRunReviewers(h.repo, reviewRoster(def), '');
-    sessionStartedAt = Math.max(...readdirSync(agents).map((file) => statSync(join(agents, file)).mtimeMs)) + 1;
-    engine.routeOut(h.repo, STEP, mode === 'goal' ? TURN_KEY : REVIEW_KEY, 'retry');
+    h.defResult = h.resolved(def);
+    reconcileRunReviewers(h.repo, reviewerCatalog(reviewRoster(def)));
+    sessionStartedAt = markRunReviewersLoaded(h.repo);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
     engine.onInjectable();
     engine.onInjectable();
+    if (mode === 'ordinary') {
+      h.writeArtifact(true);
+      engine.onDoneSignal();
+      engine.onInjectable();
+      engine.onInjectable();
+    }
     expect.soft(engine.liveErrorFor(h.repo)).toBeNull();
     expect.soft(h.injected.some(isReview)).toBe(true);
     const prompt = mode === 'goal' ? readFileSync(join(h.repo, '.agent-terminal/loop/goal-prompt.md'), 'utf8') : h.injected.find(isReview) ?? '';

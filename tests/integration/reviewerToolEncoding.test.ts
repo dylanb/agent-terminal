@@ -11,7 +11,7 @@ it.each([
   'null',
 ])('keeps tool declaration %j inside the tools field', (tool) => {
   const charter = 'Review only the requested result.\n';
-  const rendered = renderReviewerAgent({ loop: 'custom-loop', persona: 'review-result', charter, tools: [tool] });
+  const rendered = renderReviewerAgent({ loop: 'custom-loop', persona: 'review-result', charter, tools: [tool] }, 'custom-loop--review-result');
   const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(rendered);
   expect(match).not.toBeNull();
   expect(() => yaml.load(match![1])).not.toThrow();

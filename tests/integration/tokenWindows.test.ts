@@ -140,6 +140,7 @@ function rollbackRun(startedAt: number) {
     pendingNotices: createPendingNotices(),
     loopTurnActive: () => false,
     forgetRunEntry: () => {},
+    removeReviewers: () => [],
     endRun: () => {},
     recordTerminate: (repoKey) => recorder.recordTerminate(repoKey),
     recordRollback: (repoKey, before, after) => recorder.recordTransition(repoKey, 'rollback', before, after),

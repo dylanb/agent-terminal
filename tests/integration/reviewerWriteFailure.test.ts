@@ -1,8 +1,9 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureRunReviewers, reviewerInstallNotice, runAgentsDir } from '../../src/main/runReviewers';
+import { reconcileRunReviewers, reviewerInstallNotice, runAgentsDir } from '../../src/main/runReviewers';
 import { installedReviewerProblem, type InstalledReviewer } from '../../src/main/reviewerAgents';
 
 const fault = vi.hoisted(() => ({ dir: '', code: '', completed: 0 }));
@@ -28,7 +29,8 @@ beforeEach(() => {
     writeFileSync(charter, `${persona} instructions.\n`);
     return { loop: 'custom-loop', persona, charter, tools: ['Read'] };
   });
-  fault.dir = `${runAgentsDir(root).dir}/`;
+  mkdirSync(runAgentsDir(root).dir, { recursive: true });
+  fault.dir = `${realpathSync(runAgentsDir(root).dir)}/`;
   fault.completed = 0;
   fault.code = '';
 });
@@ -39,7 +41,7 @@ it.each(['ENOSPC', 'EIO'] as const)('a late %s failure diagnoses the outstanding
   mkdirSync(agents.dir, { recursive: true });
   writeFileSync(join(agents.dir, 'personal.md'), 'Unrelated local instructions.');
   fault.code = code;
-  const failed = ensureRunReviewers(root, reviewers, '');
+  const failed = reconcileRunReviewers(root, reviewerCatalog(reviewers));
   const completed = readdirSync(agents.dir).filter((file) => file !== 'personal.md');
   const bytes = completed.map((file) => [file, readFileSync(join(agents.dir, file), 'utf8')] as const);
   const outstanding = reviewers.filter((reviewer) => installedReviewerProblem(agents, reviewer) !== null);
@@ -51,11 +53,11 @@ it.each(['ENOSPC', 'EIO'] as const)('a late %s failure diagnoses the outstanding
   expect.soft(notice).toContain(code);
   expect.soft(notice).toMatch(/retry/i);
   if (code === 'ENOSPC') expect.soft(notice).toMatch(/free.*space|space.*free/i);
-  const repeated = ensureRunReviewers(root, reviewers, '');
+  const repeated = reconcileRunReviewers(root, reviewerCatalog(reviewers));
   expect.soft(repeated.problems.length).toBeGreaterThan(0);
   expect.soft(reviewerInstallNotice(repeated, 'claude-code')).toMatch(/retry/i);
   fault.code = '';
-  expect.soft(ensureRunReviewers(root, reviewers, '').problems).toEqual([]);
+  expect.soft(reconcileRunReviewers(root, reviewerCatalog(reviewers)).problems).toEqual([]);
   for (const [file, content] of bytes) expect.soft(readFileSync(join(agents.dir, file), 'utf8')).toBe(content);
   for (const reviewer of reviewers) expect.soft(installedReviewerProblem(agents, reviewer)).toBeNull();
   expect(readFileSync(join(agents.dir, 'personal.md'), 'utf8')).toBe('Unrelated local instructions.');

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { isAdoptPickup, resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
@@ -822,5 +823,43 @@ describe('resolveLoopDefV2: the decision output (§27.8)', () => {
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     if (!r.ok) throw new Error(r.reason);
     expect(r.def.decision).toBeUndefined();
+  });
+});
+
+describe.skipIf(process.getuid?.() === 0)('resolveLoopDefV2 — permission failures offer a repair that works', () => {
+  const faults = {
+    'repo registry': () => {
+      plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
+      const registry = join(repoDir, '.agent-loop.yaml');
+      writeFileSync(registry, 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
+      return { obstruction: registry, mode: 0o000, restore: 0o600 };
+    },
+    'definition file': () => {
+      plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+      return { obstruction: join(opDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'), mode: 0o000, restore: 0o600 };
+    },
+    'tier root ancestor': () => {
+      plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+      return { obstruction: opDir, mode: 0o000, restore: 0o700 };
+    },
+    'charter folder': () => {
+      plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+      return { obstruction: join(opDir, 'loops-v2', 'plan-loop', 'charter'), mode: 0o000, restore: 0o700 };
+    },
+  };
+  it.each(Object.keys(faults) as (keyof typeof faults)[])('%s: the offered command restores resolution', (fault) => {
+    const { obstruction, mode, restore } = faults[fault]();
+    chmodSync(obstruction, mode);
+    try {
+      const failed = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+      expect(failed.ok).toBe(false);
+      const reason = failed.ok ? '' : failed.reason;
+      const command = /```sh\n([\s\S]*?)```/.exec(reason)?.[1];
+      expect(command, reason).toBeDefined();
+      execFileSync('/bin/sh', ['-c', command!], { cwd: tmpdir(), stdio: 'pipe' });
+      expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }).ok).toBe(true);
+    } finally {
+      chmodSync(obstruction, restore);
+    }
   });
 });

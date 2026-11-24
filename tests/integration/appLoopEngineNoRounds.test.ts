@@ -140,7 +140,7 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
 
   it('refuses the goal turn before submitting it when a reviewer sub-agent is not installed', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
-      ensureReviewersRunnable: (_repo, rs) => rs.filter((r) => r.persona === 'review-plan-security').map((r) => `no sub-agent ${r.loop}--${r.persona} is installed`),
+      unrunnableReviewers: (_repo, rs) => rs.filter((r) => r.persona === 'review-plan-security').map((r) => `no sub-agent ${r.loop}--${r.persona} is installed`),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);

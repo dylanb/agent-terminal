@@ -1,6 +1,7 @@
+import { markRunReviewersLoaded } from '../helpers/runReviewerSession';
 /// <reference lib="dom" />
 import { expect, test, type Page } from '@playwright/test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -74,7 +75,7 @@ for (const change of ['charter', 'tools', 'deleted', 'restart-deleted', 'restart
     const restartSession = async () => {
       script();
       const sessions = readdirSync(binDir).filter((file) => file.startsWith('reviewer-session-'));
-      for (const file of readdirSync(agents)) utimesSync(join(agents, file), new Date(0), new Date(0));
+      markRunReviewersLoaded(repo);
       await page.locator('.xterm-screen').click();
       await page.keyboard.press('Control+C');
       await command(page, 'claude');
@@ -112,6 +113,7 @@ for (const change of ['charter', 'tools', 'deleted', 'restart-deleted', 'restart
       await expect(page.locator('#flow-strip .flow-control')).toHaveText('Restart');
     }
     if (change === 'charter' || change === 'restart-stale') writeFileSync(join(dirname(first), 'charter.md'), 'Updated instructions.\n');
+    const priorAgentFiles = readdirSync(agents);
     if (change === 'tools') {
       const def = yaml.load(read(first)) as { reviewers: { tools: string[] }[] };
       def.reviewers[0].tools = ['Bash'];
@@ -133,6 +135,7 @@ for (const change of ['charter', 'tools', 'deleted', 'restart-deleted', 'restart
         await retry();
       }
     }
+    if (change === 'tools') for (const file of priorAgentFiles) expect.soft(existsSync(join(agents, file))).toBe(false);
     expect.soft(state()).toContain('status: complete');
     const charter = change === 'charter' || change === 'restart-stale' ? 'Updated instructions.\n' : change === 'unchanged' ? 'Second instructions.\n' : 'First instructions.\n';
     expect.soft(records().slice(before.length)).toEqual([{ charter, tools: change === 'tools' ? ['Bash'] : change === 'unchanged' ? ['Grep'] : ['Read'] }]);
@@ -143,6 +146,11 @@ for (const change of ['charter', 'tools', 'deleted', 'restart-deleted', 'restart
       expect.soft(state()).toContain('status: complete');
       expect.soft(records().at(-1)).toEqual({ charter: 'Second instructions.\n', tools: ['Grep'] });
     }
+    writeFileSync(join(agents, 'personal.md'), 'Keep personal agent');
+    await page.locator('#flow-strip .flow-terminate').click();
+    await page.locator('#flow-confirm-host .flow-modal .confirm').click();
+    await expect(page.locator('#flow-strip .flow-control')).toHaveText('Start');
+    expect.soft(readdirSync(agents)).toEqual(['personal.md']);
     expect.soft(read(join(repo, '.gitignore'))).toBe(originalIgnore);
     expect(readdirSync(globalAgents).map((file) => read(join(globalAgents, file)))).toEqual(['Global agent.\n']);
   });

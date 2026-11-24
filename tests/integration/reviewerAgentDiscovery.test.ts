@@ -1,9 +1,10 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureRunReviewers } from '../../src/main/runReviewers';
+import { reconcileRunReviewers } from '../../src/main/runReviewers';
 import { reviewerAgentFor } from '../../src/main/reviewTurn';
 import { rosterLines } from '../../src/main/reviewTurn';
 import { reviewerContracts } from '../helpers/reviewerContracts';
@@ -24,7 +25,7 @@ describe('rendered Claude reviewers are discoverable by the names requested in r
     writeFileSync(charter, contract.charter);
     const reviewer = { loop: contract.loop, persona: contract.persona, charter, tools: contract.tools };
     const name = reviewerAgentFor('claude-code', reviewer);
-    expect(ensureRunReviewers(root, [reviewer], join(root, 'unused-bundle')).problems).toEqual([]);
+    expect(reconcileRunReviewers(root, reviewerCatalog([reviewer])).problems).toEqual([]);
     const evidence = join(root, 'executed.jsonl');
     seedFakeAgentSteps(root, { check: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', work: 'complete', roster: [contract.persona] } }, {
       reviewers: { expected: [{ ...contract, name }], evidence },

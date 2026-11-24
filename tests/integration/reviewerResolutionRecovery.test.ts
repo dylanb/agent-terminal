@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { ensureRunReviewers, flowReviewers } from '../../src/main/runReviewers';
+import { reconcileRunReviewers, flowReviewers } from '../../src/main/runReviewers';
 import { seedResolvedLoop } from '../helpers/resolvedReviewerFixture';
 
 it.skipIf(process.getuid?.() === 0).each(['definition', 'charter-parent', 'definition-parent', 'registry', 'override-parent', 'tier-parent'] as const)('repairs %s permissions through flow resolution and installation', (fault) => {
@@ -30,9 +30,9 @@ it.skipIf(process.getuid?.() === 0).each(['definition', 'charter-parent', 'defin
     writeFileSync(obstruction, yaml.dump({ loops: { custom: 'config/loops/custom/custom.yaml' } }));
   }
   chmodSync(obstruction, fault === 'definition' || fault === 'registry' ? 0o200 : 0o600);
-  const install = () => ensureRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
+  const install = () => reconcileRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
     repoDir: root, tiers: { operator: tier, appBundled: join(root, 'absent'), retired: null },
-  })), '');
+  })));
   try {
     let notice = '';
     try { notice = install().problems.join('\n'); } catch (error) { notice = error instanceof Error ? error.message : String(error); }
@@ -94,7 +94,7 @@ it.skipIf(process.getuid?.() === 0)('reports every inaccessible reviewer source 
     expect(commands).toHaveLength(2);
     for (const command of commands) execFileSync('/bin/sh', ['-c', command], { cwd: tmpdir(), stdio: 'pipe' });
     const roster = flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, { repoDir: root, tiers: { operator: root, appBundled: join(root, 'absent'), retired: null } }));
-    expect(ensureRunReviewers(root, roster, '').problems).toEqual([]);
+    expect(reconcileRunReviewers(root, roster).problems).toEqual([]);
     expect(roster.reviewers.map((reviewer) => reviewer.persona)).toEqual(personas);
   } finally {
     for (const dir of dirs) chmodSync(dir, 0o700);
@@ -141,7 +141,7 @@ it('reports resolution and source validation failures together before writing re
   seedResolvedLoop(tier, 'valid-source', 'Valid instructions.\n');
   const steps = ['absent-loop', 'empty-source', 'valid-source'].map((loop) => ({ kind: 'loop' as const, loop }));
   const resolve = (name: string) => resolveLoopDefV2(name, { repoDir: root, tiers: { operator: tier, appBundled: join(root, 'absent'), retired: null } });
-  const install = () => ensureRunReviewers(root, flowReviewers(steps, resolve), '');
+  const install = () => reconcileRunReviewers(root, flowReviewers(steps, resolve));
   try {
     let notice = '';
     try { notice = install().problems.join('\n'); } catch (error) { notice = error instanceof Error ? error.message : String(error); }
@@ -166,9 +166,9 @@ it.each(['dangling', 'cycle'] as const)('refuses a %s operator tier instead of s
   const bundled = join(root, 'bundle');
   seedResolvedLoop(bundled, 'custom', 'Bundled instructions.\n');
   symlinkSync(fault === 'cycle' ? operator : join(root, 'absent-target'), operator);
-  const install = () => ensureRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
+  const install = () => reconcileRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
     repoDir: root, tiers: { operator, appBundled: bundled, retired: null },
-  })), '');
+  })));
   try {
     const failed = install();
     expect.soft(failed.wrote).toEqual([]);
@@ -201,9 +201,9 @@ it('reports mixed failures within one loop before any writes and retries every r
     { persona: 'valid-reviewer', charter: 'charter.md', tools: ['Read'] },
   ];
   writeFileSync(file, yaml.dump(def));
-  const install = () => ensureRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
+  const install = () => reconcileRunReviewers(root, flowReviewers([{ kind: 'loop', loop: 'custom' }], (name) => resolveLoopDefV2(name, {
     repoDir: root, tiers: { operator: tier, appBundled: join(root, 'absent'), retired: null },
-  })), '');
+  })));
   try {
     const failed = install();
     const notice = failed.problems.join('\n');

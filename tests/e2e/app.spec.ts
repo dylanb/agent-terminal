@@ -1,4 +1,4 @@
-import { resolvedReviewerFile } from '../../src/main/resolvedReviewer';
+import { installedReviewerPath } from '../../src/main/runReviewers';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
 import { controllerOf, electron } from './registeredElectron';
@@ -2893,7 +2893,6 @@ function seedCompletedAppBootstrap(dir: string, issue = 176): void {
 function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2904,6 +2903,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
     'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -2913,7 +2913,6 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
 function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2924,6 +2923,7 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
     'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3076,7 +3076,7 @@ test('§27.4 — failed reviewer installation stops Start with named recovery be
 function installedLoopFiles(repo: string, loop: string): string[] {
   const resolved = resolveLoopDefV2(loop, { repoDir: repo, tiers: { operator: join(exampleConfigDir, 'loops-v2'), appBundled: join(process.cwd(), 'example/loops-v2'), retired: null } });
   if (!resolved.ok) throw new Error(resolved.reason);
-  return reviewRoster(resolved.def).map((r) => join(repo, '.claude/agents', resolvedReviewerFile(r)));
+  return reviewRoster(resolved.def).map((r) => installedReviewerPath(repo, r));
 }
 
 async function restartsAfterLateReviewerInstall(prefix: string, shellIntegration: boolean): Promise<void> {
@@ -3273,7 +3273,6 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
 function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3285,6 +3284,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n${prInput}`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3612,7 +3612,6 @@ test('Terminate still ends a run held for its ticket and PR (§27.13)', { tag: '
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3625,13 +3624,13 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
 function seedAppChainStepRefRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(stepLibraryDir(dir), { recursive: true });
   writeFileSync(
     join(stepLibraryDir(dir), 'plan-step.yaml'),
@@ -3647,13 +3646,13 @@ function seedAppChainStepRefRepo(prefix: string, pr: string): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
 function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3662,6 +3661,7 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3763,7 +3763,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
   mkdirSync(join(repo, '.git'));
-  installBundledRunReviewers(repo, exampleConfigDir);
+  installBundledRunReviewers(repo, exampleConfigDir, home, ['plan-loop']);
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'pickup');
 
   await typeCommand(`cd "${repo}"`);
@@ -5956,6 +5956,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
   seedCompletedAppBootstrap(repo);
+  installBundledRunReviewers(repo, exampleConfigDir);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-restart-reprompt-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
@@ -7057,7 +7058,6 @@ function seedFlowRepoBase(
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
-  installBundledRunReviewers(dir, exampleConfigDir);
   g('config', 'user.email', 't@t');
   g('config', 'user.name', 'T');
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
@@ -7076,6 +7076,7 @@ function seedFlowRepoBase(
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
   g('commit', '-qm', 'baseline');
+  installBundledRunReviewers(dir, exampleConfigDir);
   return { dir, g };
 }
 
@@ -7621,6 +7622,7 @@ function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntr
     writeCatalogEntry(entry.home, entry.id, flowYaml.replace(/^name:.*$/m, `name: ${JSON.stringify(entry.name)}`));
     seedBundledStepLibrary(entry.home);
     writeActiveFlow(dir, entry.id);
+    installBundledRunReviewers(dir, exampleConfigDir, entry.home);
   }
   mkdirSync(join(dir, V3_ART), { recursive: true });
   writeFileSync(join(dir, V3_ART, 'groomed-ticket.md'), '# groomed\n');
@@ -8025,7 +8027,6 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
 function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir, exampleConfigDir);
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
   writeFileSync(
@@ -8041,6 +8042,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
     `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-approve-loop\nstep: plan-approve\nturn_key: work-plan-approve\nstatus: complete\nverdict: clean\nround: 1\n`,
   );
   writeFileSync(join(at, 'loop', 'artifacts', 'plan.md'), `${exampleEpicPlan(subTickets)}\n`);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -8238,7 +8240,10 @@ test('§27.3 — once the operator resolves a blocked goal session in the sessio
     `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
     `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
     `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [
+    `    *"not a turn."*) printf ready > .agent-terminal/gate-question-ready ;;\n`,
+    `    *"Ship one export"*) ${resolved} ;;\n`,
+  ]);
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -8253,6 +8258,7 @@ test('§27.3 — once the operator resolves a blocked goal session in the sessio
   await passAutoGate(home, repo, 'groom-intent');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
 
+  await expect.poll(() => readIf(join(repo, '.agent-terminal/gate-question-ready'))).toBe('ready');
   await typeCommand('Ship one export. Carry on.');
   await passAutoGate(home, repo, 'groom');
   expect(readIf(appFlowState(repo))).toContain('step: groom-approve\n');
