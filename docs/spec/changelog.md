@@ -1,3 +1,15 @@
+## Reviewer cleanup and non-elevated permission repairs
+
+§18.1 and §27.4 (#279, operator decision 2026-11-20): stop generating privileged ownership-transfer repairs for mutable paths; same-owner commands explicitly run without elevation, while cross-owner access is referred for owner/administrator assessment. Whole-flow updates retire obsolete generated reviewers, retain other steps’ reviewers and require session restart after removals. Terminate and failed-install Cancel remove generated reviewers, preserving unrelated files and surfacing cleanup failures. Already-running agent sessions must restart to unload deleted reviewers.
+
+## Reviewer installation failures stop the flow and explain recovery
+
+§18.1 and §27.4 (#279, slice 3): missing or invalid resolved definitions and reviewer sources stop all flow work, including reviewer-free turns and manual advancement. Notices identify outstanding reviewers, paths and causes. Common permission obstructions have targeted copyable repairs; unusual/content failures name the correction and Retry, and full disks require freeing space. Successful writes survive a later failure and are reconciled on Retry. Newly installed reviewers still need a fresh agent session.
+
+## Start uses resolved Claude reviewers for custom and edited flows
+
+§18.1 and §27.4 (#279, slice 1): run-local installation uses the run's resolved reviewer charters and tool declarations instead of requiring bundled content. Bounded, collision-resistant names distinguish simultaneous resolved reviewers and are shared by installation, checking and prompts. Required writable destinations are replaced regardless of origin without additional approval. Unrelated agents, global agents, Codex and Settings behavior remain unchanged.
+
 ## #322 — queued human messages in the audit (2026-11-17)
 
 The real-client overlap check exposed a missing queued message in the full-prompt audit. §30.5 now makes

@@ -224,6 +224,7 @@ const WIRE_FORMAT_TESTS = [
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
 const EXPECTED_RESULTS_FIXTURES = [
+  'tests/helpers/reviewerContracts.ts',
   'tests/helpers/controllerStatusFixture.ts',
   'tests/helpers/controllerCards.ts',
   'tests/helpers/fakeClaude.ts',

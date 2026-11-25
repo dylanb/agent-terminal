@@ -1,3 +1,6 @@
+import { installedReviewerPath } from '../../src/main/runReviewers';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { reviewRoster } from '../../src/main/reviewTurn';
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
@@ -2363,7 +2366,7 @@ test('a §27 loop step records its run-state and its status changes append loop.
 test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', { tag: '@ownapp' }, async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-input-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-input-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2397,7 +2400,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
 test('a refused github-ticket keeps the input dialog open, and a corrected number is saved', { tag: '@ownapp' }, async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-ticket-refuse-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-refuse-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2890,7 +2893,6 @@ function seedCompletedAppBootstrap(dir: string, issue = 176): void {
 function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2901,6 +2903,7 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
     'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -2910,7 +2913,6 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
 function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -2921,6 +2923,7 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
     'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3035,7 +3038,7 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 // §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
 // record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
 // app binary) and sees pass before signalling; the round then completes and the loop moves on.
-test('§27.4 — a review round whose reviewers cannot be installed in the run folder stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
+test('§27.4 — failed reviewer installation stops Start with named recovery before any work or reviewer runs', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-noagent-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
   const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
@@ -3057,8 +3060,10 @@ test('§27.4 — a review round whose reviewers cannot be installed in the run f
   await typeCommand('fake-agent');
   await flowControl().click();
 
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  await expectLoopMessage('error', blocked, /restart your agent session/i);
+  await expect(page.locator('#flow-strip')).toContainText(blocked);
+  await expect(flowControl()).toHaveText('Retry Start');
+  expect(existsSync(appRunState(repo))).toBe(false);
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('turn-done:');
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
 
   await app.close();
@@ -3067,6 +3072,12 @@ test('§27.4 — a review round whose reviewers cannot be installed in the run f
   rmSync(binDir, { recursive: true, force: true });
   rmSync(cfg, { recursive: true, force: true });
 });
+
+function installedLoopFiles(repo: string, loop: string): string[] {
+  const resolved = resolveLoopDefV2(loop, { repoDir: repo, tiers: { operator: join(exampleConfigDir, 'loops-v2'), appBundled: join(process.cwd(), 'example/loops-v2'), retired: null } });
+  if (!resolved.ok) throw new Error(resolved.reason);
+  return reviewRoster(resolved.def).map((r) => installedReviewerPath(repo, r));
+}
 
 async function restartsAfterLateReviewerInstall(prefix: string, shellIntegration: boolean): Promise<void> {
   const repo = seedPrebootstrappedAppLoopFlowRepo(`${prefix}-`);
@@ -3096,7 +3107,7 @@ async function restartsAfterLateReviewerInstall(prefix: string, shellIntegration
   await expectLoopMessage('error', 'after your agent session started', /restart/i);
   const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
   expect(log()).not.toContain('Spawn each reviewer');
-  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+  for (const file of installedLoopFiles(repo, 'plan-loop')) expect(existsSync(file)).toBe(true);
 
   await focusTerminal();
   await page.keyboard.press('Control+C');
@@ -3146,7 +3157,7 @@ test('§27.3 — the bundled loop brief reaches both the work prompt and the rev
   // §27.4 — the reviewers were already in place before the agent started, so Start asked for no restart.
   await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
   // §27.4 — the reviewers ran from the run folder; the operator's agents folder holds none.
-  for (const persona of PLAN_V2_ROSTER) expect(existsSync(join(repo, '.claude', 'agents', `plan-loop--${persona}.md`))).toBe(true);
+  for (const file of installedLoopFiles(repo, 'plan-loop')) expect(existsSync(file)).toBe(true);
   expect(existsSync(join(exampleConfigDir, 'agents'))).toBe(false);
   await expect.poll(() => log().lastIndexOf(rule) > log().indexOf('Spawn each reviewer'), { timeout: 15_000 }).toBe(true);
   const workPart = log().slice(0, log().indexOf('Spawn each reviewer'));
@@ -3237,7 +3248,11 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
   expect(injectedLog).toContain(`no record for ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
   expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
   // §27.4 — each reviewer is spawned as the sub-agent installed for it, never told to go and read a charter.
-  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: plan-loop--${persona}`);
+  for (const persona of PLAN_V2_ROSTER) {
+    const name = new RegExp(`${persona} — subagent_type: ([a-z0-9-]+)`).exec(injectedLog)?.[1];
+    expect(name).toBeDefined();
+    expect(readIf(join(repo, '.claude/agents', `${name}.md`))).toContain(`name: ${name}\n`);
+  }
   expect(injectedLog).not.toMatch(/charter\/[\w-]+\.md/);
 
   // The agent ran the checker the prompt handed it: it passed the repaired report.
@@ -3258,7 +3273,6 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
 function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3270,6 +3284,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n${prInput}`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3541,7 +3556,7 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
 
     rmSync(saved, { recursive: true, force: true });
     // §27.4 — Restart installs the flow's reviewers again, so one the operator deleted is back.
-    const reviewer = join(repo, '.claude', 'agents', `plan-loop--${PLAN_V2_ROSTER[0]}.md`);
+    const reviewer = installedLoopFiles(repo, 'plan-loop')[0];
     rmSync(reviewer);
     // §18.7.4 AC11 — while a live peer holds the worktree lock, Restart is refused with the reason and installs nothing.
     const lockFile = worktreeLockFile(worktreeLockRoot(home), repo);
@@ -3597,7 +3612,6 @@ test('Terminate still ends a run held for its ticket and PR (§27.13)', { tag: '
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3610,13 +3624,13 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
 function seedAppChainStepRefRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(stepLibraryDir(dir), { recursive: true });
   writeFileSync(
     join(stepLibraryDir(dir), 'plan-step.yaml'),
@@ -3632,13 +3646,13 @@ function seedAppChainStepRefRepo(prefix: string, pr: string): string {
     `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
   );
   seedCompletedAppBootstrap(dir);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
 function seedAppBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -3647,6 +3661,7 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -3748,7 +3763,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
   mkdirSync(join(repo, '.git'));
-  installBundledRunReviewers(repo);
+  installBundledRunReviewers(repo, exampleConfigDir, home, ['plan-loop']);
   const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'pickup');
 
   await typeCommand(`cd "${repo}"`);
@@ -3862,6 +3877,7 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
         '    - target: pr\n      action: remove\n      label: needs-triage\n',
     ),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
@@ -3968,7 +3984,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-resume-refs-');
   const other = mkdtempSync(join(tmpdir(), 'agent-term-e2e-resume-refs-other-'));
   mkdirSync(join(other, '.git'), { recursive: true });
-  installBundledRunReviewers(other);
+  installBundledRunReviewers(other, exampleConfigDir);
   mkdirSync(join(other, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(other, '.agent-terminal', 'flow.yaml'),
@@ -3982,6 +3998,8 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-resume-refs-config-', (yaml) =>
     withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
   );
+  installBundledRunReviewers(repo, config);
+  installBundledRunReviewers(other, config);
   const resumeEntry = join(flowCatalogDir(home), 'resume-flow');
   mkdirSync(resumeEntry, { recursive: true });
   writeFileSync(
@@ -4182,7 +4200,7 @@ test('a def resolved from the REPOSITORY tier declaring a pickup contract bootst
 test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (AC 10)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
-  installBundledRunReviewers(repo);
+  installBundledRunReviewers(repo, exampleConfigDir);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -4198,6 +4216,7 @@ test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branc
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-a-config-', (yaml) =>
     withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-a-bin-');
   seedFakeAgentV2(binDir, { stepId: 'build', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
@@ -4259,6 +4278,7 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-f-config-', (yaml) =>
     withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-f-bin-');
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -4331,7 +4351,13 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   // The retired tier is left byte-for-byte untouched — the app does not read, move or rewrite files it retired.
   expect(readFileSync(retiredDef, 'utf8')).toBe(retiredContent);
 
-  // (c) the shipped flow still drives — the migrated def runs work → review → consolidate to its clean gate.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  await expectLoopMessage('error', 'after your agent session started', /restart/i);
+  await focusTerminal();
+  await page.keyboard.press('Control+C');
+  await typeCommand('fake-agent');
+  await loopReadout().click();
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
 
   await app.close();
@@ -4395,6 +4421,7 @@ test('a §27 pickup onto existing resources (on_conflict: wipe-and-retry) confir
         '  on_conflict: wipe-and-retry\n',
     ),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-wipe-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   // The conflicting resources the operator will be asked about: a local branch, the same branch on
@@ -4466,6 +4493,7 @@ test('a §27 pickup conflict declined destroys nothing and reverts the step', { 
         '  on_conflict: wipe-and-retry\n',
     ),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-decline-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   writeFileSync(`${logFile}.local-branch`, 'plan-loop/issue-176\n');
@@ -4686,6 +4714,7 @@ test('a §27 def with no pickup enters work without invoking bootstrap ports (ST
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-no-bootstrap-config-', (yaml) =>
     withoutPickup(yaml),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-no-bootstrap-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
   app = await electron.launch({
@@ -4963,8 +4992,8 @@ test('§27.4 — Start installs the reviewers of every loop the flow reaches int
   await flowControl().click();
 
   const agents = join(repo, '.claude', 'agents');
-  await expect.poll(() => (existsSync(agents) ? readdirSync(agents) : []), { timeout: 15_000 }).toEqual(expect.arrayContaining(PLAN_V2_ROSTER.map((p) => `plan-loop--${p}.md`)));
-  expect(readdirSync(agents).some((f) => f.startsWith('infra-loop--'))).toBe(true);
+  await expect.poll(() => (existsSync(agents) ? readdirSync(agents) : []), { timeout: 15_000 }).toEqual(expect.arrayContaining(installedLoopFiles(repo, 'plan-loop').map((file) => basename(file))));
+  for (const file of installedLoopFiles(repo, 'infra-loop')) expect(existsSync(file)).toBe(true);
   await expect(page.locator('#flow-strip .flow-notice', { hasText: /restart/i })).toHaveCount(0);
 
   await app.close();
@@ -5360,6 +5389,7 @@ test('a §27 approve side-effect with no PR to act on is skipped with a notice, 
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-approvefail-config-', (yaml) =>
     withoutPickup(yaml),
   );
+  installBundledRunReviewers(repo, config);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approvefail-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
@@ -5400,17 +5430,15 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → enter the step bound to an unresolvable §27 def: no turn starts (AC6)
+  await flowControl().click();
 
-  // The reason surfaces on the shared blocking loop-error dialog (the §27 error surface for a def that
-  // never resolved), naming the def that could not be found. The Advance control stays present behind it —
-  // the route off the failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was
-  // written (no turn ran). Dismiss the dialog so it does not intercept the control exercised below.
-  await expectLoopMessage('error', 'no-such-v2-loop');
+  await expect(page.locator('#flow-strip')).toContainText('no-such-v2-loop');
   expect(existsSync(appRunState(repo))).toBe(false);
-  await expect(flowControl()).toHaveText('Advance');
-  await flowControl().click(); // the route out completes the flow
-  await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Retry Start');
+  const advanced = await page.evaluate((dir) => window.flow.advance(dir), repo);
+  expect(advanced.status).toBe('not_started');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(flowControl()).toHaveText('Start');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -5434,12 +5462,10 @@ test('a §27 step resolves its loop from the running flow’s own loop folder be
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click();
 
-  await expectLoopMessage('error', 'v9-flow-folder');
+  await expect(page.locator('#flow-strip')).toContainText('v9-flow-folder');
+  await expect(page.locator('#flow-strip')).toContainText(flowDef);
   expect(existsSync(appRunState(repo))).toBe(false);
-
-  // The loop view resolves the same flow-folder def the step did, so it shows the same refusal.
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('v9-flow-folder', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Retry Start');
 
   await app.close();
   for (const dir of [repo, home, config]) rmSync(dir, { recursive: true, force: true });
@@ -5921,7 +5947,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // rather than erroring for want of a hosted agent; that is incidental to the Restart-clears-input behavior.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
-  installBundledRunReviewers(repo);
+  installBundledRunReviewers(repo, exampleConfigDir);
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(repo, '.agent-terminal', 'flow.yaml'),
@@ -5930,6 +5956,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
   seedCompletedAppBootstrap(repo);
+  installBundledRunReviewers(repo, exampleConfigDir);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-restart-reprompt-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
@@ -7031,7 +7058,6 @@ function seedFlowRepoBase(
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
-  installBundledRunReviewers(dir);
   g('config', 'user.email', 't@t');
   g('config', 'user.name', 'T');
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
@@ -7050,6 +7076,7 @@ function seedFlowRepoBase(
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
   g('commit', '-qm', 'baseline');
+  installBundledRunReviewers(dir, exampleConfigDir);
   return { dir, g };
 }
 
@@ -7073,6 +7100,7 @@ test('§28.3 — approve on a gate declaring a commit side-effect advances HEAD 
   const repo = seedCommitFlowRepo('agent-term-e2e-commit-', { withChange: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-home-'));
   const cfg = seedCommitGateConfig('agent-term-e2e-commit-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
@@ -7114,6 +7142,7 @@ test('§28.3 / AC3 — approve with nothing to commit sends the controller a not
   const repo = seedCommitFlowRepo('agent-term-e2e-commit-noop-', { withChange: false }); // clean tree — nothing to stage
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-noop-home-'));
   const cfg = seedCommitGateConfig('agent-term-e2e-commit-noop-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-noop-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
@@ -7171,6 +7200,7 @@ test('§28.5 — a RED loop completes on a newly-authored failing test + a faile
   const repo = seedRedFlowRepo('agent-term-e2e-red-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-red-home-'));
   const cfg = seedRedGateConfig('agent-term-e2e-red-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-red-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'red', resultOutcome: 'failed-assertion', writeTest: true, review: 'full' });
   app = await electron.launch({
@@ -7223,6 +7253,7 @@ test('§28.5 / AC2 — a RED loop whose test PASSES never completes: it retries 
   const repo = seedRedFlowRepo('agent-term-e2e-red-sad-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-red-sad-home-'));
   const cfg = seedRedGateConfig('agent-term-e2e-red-sad-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-red-sad-bin-', { realCommitOps: true });
   // A test IS authored, but the fake classifies the run as `passed` — the RED gate requires failed-assertion.
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'red', resultOutcome: 'passed', writeTest: true, review: 'full' });
@@ -7280,6 +7311,7 @@ test('§28.5.3 — a clean GREEN (passed + built, no test changed) completes and
   const repo = seedGreenFlowRepo('agent-term-e2e-green-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-home-'));
   const cfg = seedGreenGateConfig('agent-term-e2e-green-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: false, review: 'full' });
   app = await electron.launch({
@@ -7321,6 +7353,7 @@ test('§28.5.3 / AC2 — a GREEN turn that touches a test file STILL completes, 
   const repo = seedGreenFlowRepo('agent-term-e2e-green-flag-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-flag-home-'));
   const cfg = seedGreenGateConfig('agent-term-e2e-green-flag-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-flag-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: true, review: 'full' });
   app = await electron.launch({
@@ -7363,6 +7396,7 @@ test('§28.5.3 — a GREEN review-and-fix round that edits a test file after a c
   const repo = seedGreenFlowRepo('agent-term-e2e-green-review-flag-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-review-flag-home-'));
   const cfg = seedGreenGateConfig('agent-term-e2e-green-review-flag-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-review-flag-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: false, reviewTouchesTest: true, review: 'full' });
   app = await electron.launch({
@@ -7396,6 +7430,7 @@ test('§28.5.3 / AC3 — a GREEN turn whose tests do NOT pass never completes: i
   const repo = seedGreenFlowRepo('agent-term-e2e-green-sad-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-sad-home-'));
   const cfg = seedGreenGateConfig('agent-term-e2e-green-sad-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-sad-bin-', { realCommitOps: true });
   // the impl "runs" but the fake classifies the outcome as failed-assertion — the GREEN gate requires `passed`.
   // (AC3's other half — a broken BUILD, `build: build-failed` — fails the same sync clause and is proven at the
@@ -7451,6 +7486,7 @@ test('§28.5.3 / AC1 — a clean refactor round (report + passing result, no tes
   const repo = seedRefactorFlowRepo('agent-term-e2e-refac-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-home-'));
   const cfg = seedRefactorGateConfig('agent-term-e2e-refac-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', touchTest: false, review: 'full' });
   app = await electron.launch({
@@ -7492,6 +7528,7 @@ test('§28.5.3 / AC3 — a refactor round that touches a test file STILL complet
   const repo = seedRefactorFlowRepo('agent-term-e2e-refac-flag-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-flag-home-'));
   const cfg = seedRefactorGateConfig('agent-term-e2e-refac-flag-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-flag-bin-', { realCommitOps: true });
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', touchTest: true, review: 'full' });
   app = await electron.launch({
@@ -7535,6 +7572,7 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
   const repo = seedRefactorFlowRepo('agent-term-e2e-refac-sad-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-sad-home-'));
   const cfg = seedRefactorGateConfig('agent-term-e2e-refac-sad-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-sad-bin-', { realCommitOps: true });
   // the round writes a report but the fake classifies the result as failed-assertion — the gate requires `passed`.
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', resultOutcome: 'failed-assertion', touchTest: false, review: 'full' });
@@ -7584,6 +7622,7 @@ function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntr
     writeCatalogEntry(entry.home, entry.id, flowYaml.replace(/^name:.*$/m, `name: ${JSON.stringify(entry.name)}`));
     seedBundledStepLibrary(entry.home);
     writeActiveFlow(dir, entry.id);
+    installBundledRunReviewers(dir, exampleConfigDir, entry.home);
   }
   mkdirSync(join(dir, V3_ART), { recursive: true });
   writeFileSync(join(dir, V3_ART, 'groomed-ticket.md'), '# groomed\n');
@@ -7633,6 +7672,7 @@ test('§28.4 D1+D2+D3 — the approved plan sources the impl-slice count, and th
   const repo = seedV3ChainRepo('agent-term-e2e-slicen-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const cfg = seedV3Config('agent-term-e2e-slicen-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
   // Slice 2's RED reports itself blocked, so its `auto` gate holds the step.
   seedV3GoalAgent(
@@ -7690,6 +7730,7 @@ test('§28.5.3 — a RED that splits its slice in the plan raises the slice coun
   const repo = seedV3ChainRepo('agent-term-e2e-redsplit-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redsplit-home-'));
   const cfg = seedV3Config('agent-term-e2e-redsplit-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redsplit-bin-', { realCommitOps: true });
   const splitPlan = `[ -f .agent-terminal/runs-red ] || printf %s '${b64(`# plan\n\n${exampleSlicePlan(2)}\n`)}' | base64 -d > ${V3_ART}/plan.md`;
   seedV3GoalAgent(
@@ -7736,6 +7777,7 @@ test('§28.4.1 — a RED that leaves the plan malformed keeps the slice count al
   const repo = seedV3ChainRepo('agent-term-e2e-redkeep-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redkeep-home-'));
   const cfg = seedV3Config('agent-term-e2e-redkeep-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redkeep-bin-', { realCommitOps: true });
   const malformedPlan = `printf %s '${b64('# plan\n\n## Impl-slices\n\n### Impl-slice 1 — no acceptance line\n')}' | base64 -d > ${V3_ART}/plan.md`;
   seedV3GoalAgent(
@@ -7779,6 +7821,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   const repo = seedV3ChainRepo('agent-term-e2e-backtored-', { startStep: 'infra' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
   const cfg = seedV3Config('agent-term-e2e-backtored-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
   seedV3GoalAgent(binDir, 'fake-agent', v3ImplGoals({ blocked: { green: 1 } })); // the `auto` GREEN gate holds for the operator
   app = await electron.launch({
@@ -7864,6 +7907,7 @@ test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN 
   const repo = seedV3ChainRepo('agent-term-e2e-redbrief-', { startStep: 'red' }); // the slice phases are all this test needs
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
   const cfg = seedV3Config('agent-term-e2e-redbrief-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });
   seedV3GoalAgent(binDir, 'fake-agent', v3ImplGoals({ blocked: { green: 1 } })); // the `auto` GREEN gate holds for the operator
   app = await electron.launch({
@@ -7925,6 +7969,7 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
   const repo = seedV3ChainRepo('agent-term-e2e-retbrief-', { startStep: 'infra', editFlow: returnToInfra });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-retbrief-home-'));
   const cfg = seedV3Config('agent-term-e2e-retbrief-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-retbrief-bin-', { realCommitOps: true });
   seedV3GoalAgent(binDir, 'fake-agent', v3ImplGoals(), {
     'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
@@ -7982,7 +8027,6 @@ test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step th
 function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
-  installBundledRunReviewers(dir);
   const at = join(dir, '.agent-terminal');
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
   writeFileSync(
@@ -7998,6 +8042,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
     `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-approve-loop\nstep: plan-approve\nturn_key: work-plan-approve\nstatus: complete\nverdict: clean\nround: 1\n`,
   );
   writeFileSync(join(at, 'loop', 'artifacts', 'plan.md'), `${exampleEpicPlan(subTickets)}\n`);
+  installBundledRunReviewers(dir, exampleConfigDir);
   return dir;
 }
 
@@ -8195,7 +8240,10 @@ test('§27.3 — once the operator resolves a blocked goal session in the sessio
     `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
     `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
     `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [
+    `    *"not a turn."*) printf ready > .agent-terminal/gate-question-ready ;;\n`,
+    `    *"Ship one export"*) ${resolved} ;;\n`,
+  ]);
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -8210,6 +8258,7 @@ test('§27.3 — once the operator resolves a blocked goal session in the sessio
   await passAutoGate(home, repo, 'groom-intent');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
 
+  await expect.poll(() => readIf(join(repo, '.agent-terminal/gate-question-ready'))).toBe('ready');
   await typeCommand('Ship one export. Carry on.');
   await passAutoGate(home, repo, 'groom');
   expect(readIf(appFlowState(repo))).toContain('step: groom-approve\n');
@@ -8277,6 +8326,7 @@ test('§27.3/#212 — feature-dev-v3 plans and implements in goal sessions that 
   const repo = seedV3ChainRepo('agent-term-e2e-implv3-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
   const cfg = seedV3Config('agent-term-e2e-implv3-cfg-');
+  installBundledRunReviewers(repo, cfg);
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-implv3-bin-', { realCommitOps: true });
   const implReport = (): string => readIf(join(repo, V3_ART, 'impl-report.md'));
   seedV3GoalAgent(

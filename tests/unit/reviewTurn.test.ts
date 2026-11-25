@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
+import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster, reviewerAgentFor } from '../../src/main/reviewTurn';
 import { phaseOutputRel } from '../../src/shared/phaseResult';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -88,7 +88,7 @@ describe('composeReviewAndFixPrompt — what it carries from its inputs (§27.5)
   it('names every roster persona by the sub-agent type that carries its charter, and never hands over a charter path', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const r of reviewRoster(def())) {
-      expect(p).toContain(`${r.loop}--${r.persona}`);
+      expect(p).toContain(reviewerAgentFor('claude-code', r));
       expect(p).not.toContain(r.charter);
     }
   });

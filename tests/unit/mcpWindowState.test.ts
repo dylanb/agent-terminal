@@ -55,6 +55,12 @@ describe("read_state's view of its window", () => {
     expect.soft({ window: state.window, terminateTodoCount: state.terminateTodoCount, startable: state.startable, stalledTurn: state.stalledTurn }).toEqual({ window: { id: 'window-7' }, terminateTodoCount: 3, startable: null, stalledTurn: null });
   });
 
+  it('offers no Terminate while a failed Restart reviewer installation awaits Retry or Cancel', () => {
+    const todos = distinctTodos(REPO, ['active']);
+    const view = flowView({ status: 'done', installationRetry: 'restart' });
+    expect(readWindowState(source({ view, todos })).terminateTodoCount).toBeNull();
+  });
+
   it("at an auto gate that halted for the operator: every reason that holds, worded as the gate panel shows it", () => {
     const loop = gateLoop({
       autoGate: {

@@ -27,7 +27,7 @@ it('reports a failed todo cleanup after the run reset and still clears captures'
   const lifecycle = createFlowLifecycle({
     flow, lock: createWorktreeLock({ lockRoot: fx.outsideDir('cleanup-locks'), holderLiveness: () => 'live-matching' }),
     recovery: { rebind: () => { throw new Error('unused'); } }, pendingNotices: { post: () => {} }, loopTurnActive: () => false,
-    forgetRunEntry: () => {}, endRun: () => {}, recordTerminate: () => {}, recordRollback: () => {}, releaseLoopTurn: () => {}, clearSliceBrief: () => {}, flowChanged: () => {},
+    forgetRunEntry: () => {}, endRun: () => {}, removeReviewers: () => [], recordTerminate: () => {}, recordRollback: () => {}, releaseLoopTurn: () => {}, clearSliceBrief: () => {}, flowChanged: () => {},
     clearTodos: key => { todos.clear(key); }, clearMonitor: () => { captures.length = 0; }, presentView: (_key, view) => view,
   });
   const result = toolResult({ kind: 'answered', value: terminatedAnswer(lifecycle.terminate(repo)) });

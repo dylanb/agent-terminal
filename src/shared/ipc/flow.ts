@@ -295,6 +295,7 @@ export interface FlowPrompt {
  *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
  *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
+  installationRetry?: 'start' | 'restart';
   stepName: string;
   /** Every step's name, in flow order (§24.2.3 T1), skipped and undecided ones included; the §22.3 rail
    *  shows the entries `stepRuns` lets it. `stepName` is `steps[position - 1]`. Empty on an `error` view. */

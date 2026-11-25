@@ -1,5 +1,6 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
@@ -20,6 +21,7 @@ import {
 import { createHeldRunRecovery, realHeldRunRecoveryDeps, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
 import * as gateModule from '../../src/main/activeFlowGate';
 import { readActiveFlow } from '../../src/main/activeFlowPointer';
+import { reconcileRunReviewers, removeRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
 import { createFlowLifecycle } from '../../src/main/flowLifecycle';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import { heldRunOf } from '../../src/main/runHoldRead';
@@ -85,6 +87,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
         if (opts.forgetThrows === true) throw new Error('the run registry is unwritable');
       },
       endRun: () => {},
+      removeReviewers: (k: string) => removeRunReviewers(k),
       recordTerminate: (k: string) => audit.recorder.recordTerminate(k),
       recordRollback: (k, before, after) => audit.recorder.recordTransition(k, 'rollback', before, after),
       clearTodos: (k: string) => todos.clear(k),
@@ -144,6 +147,31 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
   const presented = (view: FlowStateView): unknown => (view.loopActivity as unknown as { kind?: string } | undefined)?.kind;
 
   describe('terminate (the UI route)', () => {
+    it.skipIf(process.getuid?.() === 0)('failed cleanup refuses termination until the directory is repaired', () => {
+      const { wt, lifecycle, begin, manager } = rig(); begin();
+      const charter = join(wt, 'charter.md'); writeFileSync(charter, 'Review.');
+      reconcileRunReviewers(wt, reviewerCatalog([{ loop: 'custom', persona: 'review-result', charter, tools: ['Read'] }]));
+      const agents = runAgentsDir(wt).dir; chmodSync(agents, 0o500);
+      try {
+        const result = lifecycle.terminate(wt);
+        expect(result.outcome).toBe('refused');
+        expect(result.view.notice).toContain(agents);
+        expect(manager.state(wt).status).toBe('in_progress');
+      } finally { chmodSync(agents, 0o700); }
+      expect(lifecycle.terminate(wt).outcome).toBe('reset');
+      expect(readdirSync(agents)).toEqual([]);
+    });
+
+    it('termination removes installed reviewers and preserves unrelated agents', () => {
+      const { wt, lifecycle, begin } = rig(); begin();
+      const charter = join(wt, 'charter.md'); writeFileSync(charter, 'Review.');
+      reconcileRunReviewers(wt, reviewerCatalog([{ loop: 'custom', persona: 'review-result', charter, tools: ['Read'] }]));
+      const agents = runAgentsDir(wt).dir;
+      writeFileSync(join(agents, 'personal.md'), 'Keep');
+      expect(lifecycle.terminate(wt).outcome).toBe('reset');
+      expect(readdirSync(agents)).toEqual(['personal.md']);
+    });
+
     it('a begun run is reset: flow.terminated in the audit run, todos cleared, the back-to-RED brief cleared, the monitor cleared, and the strip told', () => {
       const { wt, audit, todos, effects, lifecycle, begin } = rig();
       begin();

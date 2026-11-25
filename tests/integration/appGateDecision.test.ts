@@ -109,7 +109,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   // §27.10 — a step that records an operator decision after its done-signal writes it to its section file only.
   describe('a report assembled from step sections', () => {
     const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
-    const withSections = { resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l' }) };
+    const withSections = { resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l', definitionFile: '/t/l/loop.yaml' }) };
 
     it('is rebuilt from its sections on approve, before any side-effect publishes it', async () => {
       const { deps, rec } = mkDeps(withSections);
@@ -590,6 +590,7 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion } },
     tierRoot: '/tmp/tier',
     defDir: '/tmp/tier/loop',
+    definitionFile: '/tmp/tier/loop/loop.yaml',
   });
 
   it('clears the brief on a refactor approve', async () => {
@@ -616,6 +617,7 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits' } },
     tierRoot: '/tmp/tier',
     defDir: '/tmp/tier/loop',
+    definitionFile: '/tmp/tier/loop/loop.yaml',
   });
 
   it('clears the brief on approving the return step when its loop is not a TDD phase', async () => {
@@ -789,7 +791,7 @@ describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
 // #137 AC7/AC8 — who decided, at the approve operation: every entry an approve writes, under each decider.
 describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9b.9, #137 AC7/AC8)', () => {
   const refactorRun: AppLoopRunState = { loop: 'refactor-loop', step: 'refactor', turnKey: 'consolidate-refactor', status: 'complete', round: 1, verdict: 'clean' };
-  const refactorDef = { ok: true as const, def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion: 'refactor' as const } }, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' };
+  const refactorDef = { ok: true as const, def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion: 'refactor' as const } }, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop', definitionFile: '/tmp/tier/loop/loop.yaml' };
   const throwing = (message: string) => () => {
     throw new Error(message);
   };
@@ -1539,7 +1541,7 @@ describe('runAppGateDecision — a failed approve at a human gate holds the gate
     const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
     const { deps, rec } = mkDeps({
       holds: true,
-      resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l' }),
+      resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l', definitionFile: '/t/l/loop.yaml' }),
       assembleReport: () => {
         throw new Error('the report section a/impl-report/red.md leads outside a/impl-report');
       },

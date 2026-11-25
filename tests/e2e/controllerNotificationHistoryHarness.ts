@@ -1,3 +1,4 @@
+import { installBundledRunReviewers } from '../helpers/e2eExampleConfig';
 import { expect } from '@playwright/test';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dump, load } from 'js-yaml';
@@ -38,6 +39,7 @@ export async function historyGate() {
     seedTrustedFlow(h.fixture.home, repo, 'history-flow', autoGateFlowYaml([
       { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' }, { id: 'verify', kind: 'manual' },
     ], 'history-flow'));
+    installBundledRunReviewers(repo, config, h.fixture.home);
     seedFakeAgentV2(binDir, {
       stepId: 'red', artifactRel: '.agent-terminal/loop/artifacts/red-result.json', work: 'red',
       roster: loopRoster('red-loop'),

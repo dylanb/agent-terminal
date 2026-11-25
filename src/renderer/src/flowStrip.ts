@@ -31,6 +31,8 @@ const CONTROL: Record<FlowStatus, { label: string; act: Act } | null> = {
   error: null,
 };
 
+const RETRIED_FROM: Record<NonNullable<FlowStateView['installationRetry']>, FlowStatus> = { start: 'not_started', restart: 'done' };
+
 type RailItem = { name: string; st: StationState; step?: number; tag?: string; current?: true } | { marker: string };
 
 const UNDECIDED_MARKER = 'next steps depend on the verdict';
@@ -194,6 +196,7 @@ function derivedText(state: FlowStateView): string | null {
 function structuralSig(state: FlowStateView, effectiveNotices: string[]): string {
   return JSON.stringify([
     state.status,
+    state.installationRetry,
     state.status === 'error' ? state.error ?? '' : '',
     state.steps,
     state.stepRuns,
@@ -491,13 +494,24 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(line);
     }
 
-    const control = CONTROL[state.status];
+    const control = state.installationRetry ? CONTROL[RETRIED_FROM[state.installationRetry]] : CONTROL[state.status];
     if (!control) return;
 
     // Undo takes the advance back to in-progress WITHOUT re-running the step's entry actions —
     // distinct from Restart, which re-runs them.
-    if (state.status === 'done') host.append(controlButton('Undo', 'undo', state.stepName));
-    host.append(controlButton(control.label, control.act, state.stepName));
+    if (state.status === 'done' && !state.installationRetry) host.append(controlButton('Undo', 'undo', state.stepName));
+    host.append(controlButton(state.installationRetry ? `Retry ${control.label}` : control.label, control.act, state.stepName));
+    if (state.installationRetry) {
+      const cancel = doc.createElement('button');
+      cancel.className = 'flow-terminate pill';
+      cancel.textContent = 'Cancel';
+      controls.bind(cancel, () => {
+        if (repoKey === null) return;
+        const key = repoKey;
+        return deps.terminate(key).then(afterTransition(key)).catch(onActFailed);
+      });
+      host.append(cancel);
+    }
 
     // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
     // is wired — absent (not in the accessibility tree) otherwise.

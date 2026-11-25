@@ -1693,7 +1693,7 @@ const COMMIT_GATE = { gate: [{ option: 'approve', sideEffects: [{ kind: 'commit'
 function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] } = {}): AppGateDecisionDeps {
   return {
     readRunState: () => GATE_RUN,
-    resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+    resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop', definitionFile: '/tmp/tier/loop/loop.yaml' }),
     refs: () => ({ pr: null, ticket: null, pickup: null }),
     runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),
@@ -3546,7 +3546,7 @@ describe('autoGate — an engine approve whose step report cannot be assembled (
       composeEngineApprove(
         () =>
           approveDeps({
-            resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+            resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop', definitionFile: '/tmp/tier/loop/loop.yaml' }),
             assembleReport: () => {
               throw new Error('EACCES: permission denied');
             },

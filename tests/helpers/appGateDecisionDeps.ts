@@ -46,7 +46,7 @@ export function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunSt
   const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], assembles: [], pushes: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
-    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop', definitionFile: '/tmp/tier/loop/loop.yaml' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,

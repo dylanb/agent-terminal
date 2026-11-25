@@ -17,22 +17,27 @@ function isAbsent(p: string): boolean {
 /** The symlink-free real path of `p`: symlinks in its longest existing prefix are resolved and a tail of
  *  not-yet-created segments is appended. Only a genuinely absent (ENOENT) segment is appended; a segment
  *  that exists but does not resolve — a dangling symlink — or one that is inaccessible or traversed as a
- *  non-directory yields null, since none can be reduced to a symlink-free path. Never throws. */
-export function realpathBounded(p: string): string | null {
+ *  non-directory is refused with its error, since none can be reduced to a symlink-free path. Never throws. */
+export function realpathBoundedResult(p: string): { ok: true; path: string } | { ok: false; error: unknown } {
   const abs = path.resolve(p);
   const tail: string[] = [];
   let cur = abs;
   for (;;) {
     try {
-      return path.join(realpathSync(cur), ...tail.reverse());
-    } catch {
+      return { ok: true, path: path.join(realpathSync(cur), ...tail.reverse()) };
+    } catch (error) {
       const parent = path.dirname(cur);
-      if (parent === cur) return abs;
-      if (!isAbsent(cur)) return null;
+      if (parent === cur) return { ok: true, path: abs };
+      if (!isAbsent(cur)) return { ok: false, error };
       tail.push(path.basename(cur));
       cur = parent;
     }
   }
+}
+
+export function realpathBounded(p: string): string | null {
+  const result = realpathBoundedResult(p);
+  return result.ok ? result.path : null;
 }
 
 /** A jail that lives INSIDE UNTRUSTED CONTENT (a checked-out repo working tree), where a link can be planted
@@ -61,15 +66,19 @@ export function resolveOwnedDirJail(dir: string): string | null {
  *  unreadable or is not a directory. The two call for opposite fixes, so a caller that reports a refusal to
  *  a human MUST distinguish them rather than blaming a link for a permission problem. */
 export type PathRefusal = 'escapes' | 'unresolvable';
-export type ConfinedPath = { ok: true; path: string } | { ok: false; cause: PathRefusal };
+export type ConfinedPath =
+  | { ok: true; path: string }
+  | { ok: false; cause: 'unresolvable'; error: unknown }
+  | { ok: false; cause: 'escapes' };
 
 /** `target`'s symlink-free real path when it stays inside `jail`, else the reason it was refused. `jail` must
  *  already be resolved — by `resolveJail` or `resolveOwnedDirJail`, whichever matches whose ground it sits on;
  *  callers use the returned path directly, not the original. Existence of `target` is the caller's concern.
  *  CWE-22, CWE-59, CWE-367. */
 export function confinedRealPathResult(jail: string, target: string): ConfinedPath {
-  const real = realpathBounded(path.resolve(target));
-  if (real === null) return { ok: false, cause: 'unresolvable' };
+  const resolved = realpathBoundedResult(path.resolve(target));
+  if (!resolved.ok) return { ok: false, cause: 'unresolvable', error: resolved.error };
+  const real = resolved.path;
   const prefix = jail.endsWith(path.sep) ? jail : jail + path.sep;
   return real === jail || real.startsWith(prefix) ? { ok: true, path: real } : { ok: false, cause: 'escapes' };
 }

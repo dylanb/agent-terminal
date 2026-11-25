@@ -1,3 +1,5 @@
+import { reviewerCatalog } from '../helpers/reviewerCatalog';
+import { resolvedReviewerName } from '../../src/main/resolvedReviewer';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,7 +10,7 @@ import { listLoopFolders } from '../../src/main/loopFolders';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
 import { CLAUDE_REVIEWER_AGENT, installedCodexReviewerProblem, installedReviewerProblem, isClaudeReviewerFile, planReviewerAgents, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName, type AgentsDir } from '../../src/main/reviewerAgents';
-import { ensureRunReviewers, runAgentsDir } from '../../src/main/runReviewers';
+import { reconcileRunReviewers, runAgentsDir, installedReviewerPath } from '../../src/main/runReviewers';
 import { parse as parseToml } from 'smol-toml';
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
@@ -149,7 +151,7 @@ describe('Install examples offers to remove only reviewer agents the app wrote',
 });
 
 describe('a run renders each reviewer as a sub-agent carrying its charter', () => {
-  it('names each <loop>--<persona>.md so, with front-matter tools matching its definition and its charter as the body', () => {
+  it('installs each resolved reviewer with matching front-matter tools and its charter as the body', () => {
     const run = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-run-'));
     try {
       const reviewers = listLoopFolders(BUNDLE_LOOPS).flatMap((folder) => {
@@ -157,10 +159,10 @@ describe('a run renders each reviewer as a sub-agent carrying its charter', () =
         if (!r.ok) throw new Error(r.reason);
         return reviewRoster(r.def);
       });
-      const res = ensureRunReviewers(run, reviewers, BUNDLE_LOOPS);
+      const res = reconcileRunReviewers(run, reviewerCatalog(reviewers));
       expect(res.problems).toEqual([]);
       for (const r of bundledReviewers(BUNDLE_LOOPS)) {
-        const name = `${r.loop}--${r.persona}`;
+        const name = resolvedReviewerName({ loop: r.loop, persona: r.persona, charter: r.charterPath, tools: r.tools ?? 'all' });
         const { front, body } = parseAgent(readFileSync(path.join(runAgentsDir(run).dir, `${name}.md`), 'utf8'));
         expect(front.name).toBe(name);
         expect(front.tools, `${name} tools`).toBe(r.tools?.join(', '));
@@ -172,7 +174,7 @@ describe('a run renders each reviewer as a sub-agent carrying its charter', () =
     }
   });
 
-  it('reports, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
+  it('installs the resolved charter even when another bundled flow has different content for that persona', () => {
     const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-bundle-'));
     const run = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-run-'));
     try {
@@ -180,9 +182,9 @@ describe('a run renders each reviewer as a sub-agent carrying its charter', () =
       expect(shared.length).toBeGreaterThan(0);
       writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
       const reviewer = { loop: shared[0].loop, persona: shared[0].persona, charter: shared[0].charterPath, tools: shared[0].tools ?? ('all' as const) };
-      const res = ensureRunReviewers(run, [reviewer], bundle);
-      expect(res.problems.join(' ')).toContain(`${shared[0].loop}--${shared[0].persona}`);
-      expect(existsSync(runAgentsDir(run).dir)).toBe(false);
+      const res = reconcileRunReviewers(run, reviewerCatalog([reviewer]));
+      expect(res.problems).toEqual([]);
+      expect(installedReviewerProblem(runAgentsDir(run), reviewer)).toBeNull();
     } finally {
       rmSync(bundle, { recursive: true, force: true });
       rmSync(run, { recursive: true, force: true });
@@ -278,7 +280,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     return reviewRoster(r.def);
   };
   const install = (): void => {
-    const res = ensureRunReviewers(home, greenRoster(), BUNDLE_LOOPS);
+    const res = reconcileRunReviewers(home, reviewerCatalog(greenRoster()));
     if (res.problems.length > 0) throw new Error(res.problems.join('; '));
   };
 
@@ -289,7 +291,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
 
   it('names the missing sub-agent when it was never installed', () => {
     const [reviewer] = greenRoster();
-    expect(installedReviewerProblem(agents(), reviewer)).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(installedReviewerProblem(agents(), reviewer)).toContain(reviewer.persona);
   });
 
   it('names the charter when the run resolved a different one than the sub-agent carries', () => {
@@ -298,7 +300,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     const edited = path.join(home, 'edited-principal.md');
     writeFileSync(edited, `${readFileSync(reviewer.charter, 'utf8')}\nAn operator edit.\n`);
     const problem = installedReviewerProblem(agents(), { ...reviewer, charter: edited });
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewer.persona);
     expect(problem).toContain(edited);
   });
 
@@ -306,17 +308,17 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     install();
     const [reviewer] = greenRoster();
     const problem = installedReviewerProblem(agents(), { ...reviewer, tools: ['Read'] });
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewer.persona);
     expect(problem).toMatch(/tools/i);
   });
 
   it('names the tools when the installed sub-agent limits a reviewer the run gives every tool', () => {
     install();
     const [reviewer] = greenRoster();
-    const limited = renderReviewerAgent({ loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') });
-    writeFileSync(path.join(agents().dir, `${reviewerAgentName(reviewer.loop, reviewer.persona)}.md`), limited);
+    const limited = renderReviewerAgent({ loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') }, resolvedReviewerName(reviewer));
+    writeFileSync(installedReviewerPath(home, reviewer), limited);
     const problem = installedReviewerProblem(agents(), reviewer);
-    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(reviewer.persona);
     expect(problem).toMatch(/tools/i);
   });
 });

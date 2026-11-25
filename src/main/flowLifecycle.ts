@@ -1,8 +1,9 @@
 // §18.7.2 / §18.7.4 / §25
 
+import { REVIEWERS_REMOVED_NOTICE } from './runReviewers';
 import type { FlowLike } from '../shared/audit';
 import type { FlowStateView, RebindChoice, RebindResult, StepMissingConsent } from '../shared/ipc';
-import type { FlowManager } from './flow';
+import type { FlowManager, TerminateResult } from './flow';
 import type { HeldRunRecovery } from './heldRunRecovery';
 import type { PendingNotices } from './pendingNotices';
 import type { LockedResult, WorktreeLock } from './worktreeLock';
@@ -24,6 +25,7 @@ export interface FlowLifecycleDeps {
   forgetRunEntry(repoKey: string): void;
   /** §27.9.1 — end the engine-held run: called on every reset of the run to not_started. */
   endRun(repoKey: string): void;
+  removeReviewers(repoKey: string): string[];
   recordTerminate(repoKey: string): void;
   recordRollback(repoKey: string, before: FlowLike, after: FlowLike): void;
   clearTodos(repoKey: string): void;
@@ -61,6 +63,17 @@ function bestEffort(effect: () => void): string | null {
   }
 }
 
+export function terminateWithReviewers(flow: Pick<FlowManager, 'terminate' | 'state'>, repoKey: string, removeReviewers: (repoKey: string) => string[]): TerminateResult {
+  const problems = removeReviewers(repoKey);
+  if (problems.length > 0) {
+    const reason = `Reviewer cleanup failed; repair the named problem and retry Terminate. ${problems.join('\n')}`;
+    return { outcome: 'refused', cause: 'failed', reason, view: { ...flow.state(repoKey), notice: reason } };
+  }
+  const result = flow.terminate(repoKey);
+  if (result.outcome === 'reset') result.view = { ...result.view, notice: [result.view.notice, REVIEWERS_REMOVED_NOTICE].filter(Boolean).join(' ') };
+  return result;
+}
+
 export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
   const afterTerminateReset = (repoKey: string): string[] => {
     const failures: string[] = [];
@@ -80,7 +93,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
   };
 
   const terminate = (repoKey: string): LifecycleTerminateResult => {
-    const locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.terminate(repoKey));
+    const locked = deps.lock.withWorktreeLock(repoKey, () => terminateWithReviewers(deps.flow, repoKey, deps.removeReviewers));
     if (!locked.ok) {
       const { reason } = locked;
       return { outcome: 'refused', cause: 'locked', reason, view: deps.presentView(repoKey, { ...deps.flow.state(repoKey), notice: reason }) };

@@ -27,7 +27,7 @@ function machine() {
   const home = temp('mcp-entry-home-'); const appHome = temp('mcp-entry-app-'); const repo = temp('mcp-entry-repo-');
   const config = seedIsolatedClaudeConfig('mcp-entry-config-'); roots.push(config);
   const { binDir, logFile } = seedFakeGhGit('mcp-entry-bin-'); roots.push(binDir);
-  installBundledRunReviewers(repo);
+  installBundledRunReviewers(repo, config, repo, ['plan-loop']);
   mkdirSync(join(repo, '.git')); mkdirSync(join(repo, '.agent-terminal/loop'), { recursive: true });
   writeFileSync(join(repo, '.git/HEAD'), 'ref: refs/heads/main\n');
   const hold = join(home, 'hold');

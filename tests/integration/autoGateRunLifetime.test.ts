@@ -265,6 +265,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     pendingNotices: createPendingNotices(),
     loopTurnActive: () => false,
     forgetRunEntry: () => {},
+    removeReviewers: () => [],
     endRun: composeLifecycleEndRun(gate),
     releaseLoopTurn: () => {},
     recordTerminate: (repoKey) => recorder.recordTerminate(repoKey),

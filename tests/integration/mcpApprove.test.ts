@@ -262,7 +262,7 @@ describe('what an approve result says happened', () => {
     const w = window({
       gate: {
         holds: true,
-        resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
+        resolveDef: () => ({ ok: true, def: withReport, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop', definitionFile: '/tmp/tier/loop/loop.yaml' }),
         assembleReport: () => {
           throw new Error('EACCES: permission denied');
         },

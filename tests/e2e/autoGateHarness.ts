@@ -67,7 +67,6 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   git('init', '-q');
-  installBundledRunReviewers(dir);
   git('symbolic-ref', 'HEAD', 'refs/heads/plan-loop/issue-176');
   git('config', 'user.email', 't@t');
   git('config', 'user.name', 'T');
@@ -86,6 +85,7 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   const inputs = opts.ticket === undefined ? '' : `inputs:\n  ticket: ${JSON.stringify(opts.ticket)}\n`;
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: ${firstStep}\nstatus: not_started\n${inputs}`);
   if (opts.localFlowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.localFlowYaml);
+  installBundledRunReviewers(dir, exampleConfigDir);
   git('add', '-A');
   git('commit', '-qm', 'baseline');
   return dir;
@@ -96,6 +96,7 @@ export function seedTrustedFlow(home: string, repo: string, id: string, yaml: st
   writeCatalogEntry(home, id, yaml);
   seedBundledStepLibrary(home);
   writeActiveFlow(repo, id);
+  installBundledRunReviewers(repo, exampleConfigDir, home);
 }
 
 export interface HeldHumanGate {

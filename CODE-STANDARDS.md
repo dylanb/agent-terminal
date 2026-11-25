@@ -218,6 +218,12 @@ lexical escape (CWE-22), a symlink the caller would follow out (CWE-59), and a l
 the read (CWE-367). It lives in `src/main/`, not `src/shared/`, because it needs `node:fs` and `src/shared/`
 must stay renderer-importable.
 
+An `unresolvable` refusal carries the `error` that stopped resolution (`realpathBoundedResult` does the same
+for a bare path). A caller that reports it to a human names the path, `errMsg(error)`, and the
+[repair advice](#recovery-advice-for-a-filesystem-failure--srcmainfilerepairadvicets-never-hand-written)
+for that path scoped `within` the same jail: an unreadable folder has a fix the operator can run, and
+"unresolvable" alone does not say which folder or why.
+
 ## Who can write a path — `src/main/ownerOnlyPath.ts`, never inline
 
 Code that trusts a location not to be swapped by another local user (a folder it reuses, a file the app will
@@ -242,6 +248,25 @@ module. `isErrno(e, code)` narrows `unknown` (a thrown non-`Error` fails closed)
 misspelled code compiles, never matches, and silently turns a handled failure into an escaping one.
 `errMsg(e)` is the same rule for the message. Inline casts grow back at every new filesystem callsite. An
 unused `ErrnoCode` member is a claim about the code that is not true — widen it only when a caller needs it.
+
+## Recovery advice for a filesystem failure — `src/main/fileRepairAdvice.ts`, never hand-written
+
+A filesystem failure shown to the operator gets its recovery steps from `repairAdvice(error, target, access,
+scope)`, never from inline chmod or "…, then Retry" text. The advice is a command the operator may paste,
+so its safety rules live in one place:
+
+- A full disk (`ENOSPC`) gets no command: free space, then Retry.
+- A permission failure names the first ancestor folder that blocks entry, else the target (or its nearest
+  existing parent), and offers `chmod` with the narrowest mode for the `access` needed, its path quoted
+  through `shellQuote` — only to the operator who owns that path, never with `sudo`. A path owned by someone
+  else, or an app running as root, gets instructions to ask the owner or an administrator, not a command.
+- A path derived from repo content passes `within(jail)` with the jail it was confined to, so the advice
+  never points outside it; an unconfinable path gets manual instructions instead of a command.
+- Any other error says to correct or restore the named file, then Retry.
+
+A message that hand-writes its own recovery is the one that will suggest an elevated or unquoted command, or
+a path outside the jail. A failure that is not about filesystem access — a malformed declaration, a git
+rule that un-ignores a file — states its own correction, because no errno decides it.
 
 ## Tree-walks that must distinguish absent from unreadable — `src/main/dirEntries.ts`
 
@@ -320,13 +345,23 @@ them — a per-file entry is redundant where the directory is already ignored, a
 and leaves a pre-existing one **byte-for-byte unchanged**.
 
 This generalizes: production never **silently** rewrites a user's tooling config — `.git/`, editor
-configs, shell rc files — to tidy its own state. The exemption is an **explicit, user-invoked install
-action** (§23.5; the §18.1 install-examples action and its destinations) or a run's own reviewer install
-(§27.4: one app-owned line, `/.claude/agents/*--*.md`, in the repository's `info/exclude`, and the reviewer
-files it hides, written when the operator starts or restarts a run, or a reviewed turn is checked), and it is an exemption from
-*silence*, not from care: it writes only where the user asked, asks before replacing a file it did not
-create, leaves a declined file byte-for-byte unchanged, and never deletes. Writing into a directory another
-tool owns — `~/.claude/skills`, `~/.claude/commands` — is permitted on exactly those terms and no others.
+configs, shell rc files — to tidy its own state. There are two exemptions, each on its own terms.
+
+**Installing into the user's global directories.** An **explicit, user-invoked install action** (§23.5;
+the §18.1 install-examples action and its destinations) writes files into the user's global directories for
+use — `~/.claude/skills`, `~/.claude/commands`, `~/.claude/agents`, the flow home, the Codex home. It is an
+exemption from *silence*, not from care: it writes only where the user asked, asks before replacing a file
+it did not create, leaves a declined file byte-for-byte unchanged, and never deletes. Writing into a
+directory another tool owns is permitted on exactly those terms and no others.
+
+**Installing a run's reviewers into the repository at flow start.** The terms above do **not** apply to a
+run's own reviewer install (§27.4), which pressing Start or Restart authorizes with no further approval. It
+writes only the run folder's `.claude/agents/agent-terminal--*.md` reviewer files and one app-owned line,
+`/.claude/agents/agent-terminal--*.md`, in the repository's `info/exclude`, at Start, at Restart, or when a
+reviewed turn is checked. It replaces any writable file at a required reviewer destination regardless of
+who wrote it, removes the generated reviewers it wrote that the flow no longer needs, and leaves every
+other file untouched. It never writes `.gitignore` or the user's global agents directory. When an install
+fails, the flow stays stopped until the operator fixes the cause and retries.
 
 ## IPC payloads carry resource identity; the receiver never re-derives it from ambient state
 

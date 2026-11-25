@@ -62,7 +62,7 @@ function machine(opts: { agent?: { work?: FakeWorkMode; verdicts?: string[]; rev
   writeFileSync(join(config, '.claude.json'), JSON.stringify(USER_STATE, null, 2));
   writeFileSync(join(config, 'settings.json'), JSON.stringify(USER_SETTINGS, null, 2));
   const repo = temp('agent-term-e2e-mcp-repo-');
-  installBundledRunReviewers(repo);
+  installBundledRunReviewers(repo, config, repo, ['plan-loop']);
   mkdirSync(join(repo, '.git'));
   if (opts.gitignore !== false) writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   const { binDir, logFile: ghLog } = seedFakeGhGit('agent-term-e2e-mcp-bin-');
@@ -851,6 +851,7 @@ test('an approve typed at a halted auto gate showing a failed effect is a human 
     'name: v2-auto-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    gate_authority: auto\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
   );
   ownPlanLoop(m.config);
+  installBundledRunReviewers(m.repo, m.config, m.appHome);
   const runStateFile = join(m.repo, '.agent-terminal', 'loop', 'run-state.yaml');
   const flowStateFile = join(m.repo, '.agent-terminal', 'flow-state.yaml');
   const autoHalts = (): (string[] | null)[] =>

@@ -1,3 +1,4 @@
+import { reviewerAgentFor, reviewRoster } from '../../src/main/reviewTurn';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,7 +19,7 @@ const goalDef = (): LoopDefV2 => {
 const engineFor = (kind: AgentKind, problem: (agent: string) => string | null = () => null) =>
   makeEngine(undefined, undefined, undefined, {
     hostedAgentKind: () => kind,
-    ensureReviewersRunnable: (_repo, rs, k) => rs.map((r) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`)).filter((p): p is string => p !== null),
+    unrunnableReviewers: (_repo, rs, k) => rs.map((r) => (k === kind ? problem(r.persona) : `asked about ${k}, not ${kind}`)).filter((p): p is string => p !== null),
   });
 const goalPrompt = (): string => {
   const cmd = h.injected.find((p) => p.startsWith('/goal '));
@@ -61,14 +62,14 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
     const engine = engineFor('claude-code');
     driveToReviewInjected(engine);
 
-    expect(reviewPrompt()).toContain('subagent_type: plan-loop--review-plan-principal');
+    for (const reviewer of reviewRoster(fileDef())) expect(reviewPrompt()).toContain(`subagent_type: ${reviewerAgentFor('claude-code', reviewer)}`);
   });
 
   it('names the reviewers for the same agent it checked them against, within one turn', () => {
     const kinds: AgentKind[] = ['claude-code', 'codex', 'codex', 'codex'];
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgentKind: () => kinds.shift() ?? 'codex',
-      ensureReviewersRunnable: (_repo, rs, k) => (k === 'codex' ? rs.map((r) => `no Codex agent for ${r.persona} is installed`) : []),
+      unrunnableReviewers: (_repo, rs, k) => (k === 'codex' ? rs.map((r) => `no Codex agent for ${r.persona} is installed`) : []),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
@@ -94,7 +95,7 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4)',
   it('with no agent at the prompt it says so, not that reviewers are missing', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
       hostedAgent: () => 'absent',
-      ensureReviewersRunnable: (_repo, rs) => rs.map((r) => `no sub-agent ${r.persona} is installed`),
+      unrunnableReviewers: (_repo, rs) => rs.map((r) => `no sub-agent ${r.persona} is installed`),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);

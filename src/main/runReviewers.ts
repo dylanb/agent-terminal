@@ -1,7 +1,7 @@
 // §27.4.
 
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPathResult, realpathBounded, resolveJail, resolveOwnedDirJail } from './confinedPath';
@@ -11,11 +11,20 @@ import type { AgentKind } from '../shared/agentKind';
 import type { FlowStepDef } from './flow';
 import { reviewerHome } from './reviewerPlacement';
 import type { LoopDefV2Result } from './loopDefV2';
-import { reviewRoster, type RosterEntry } from './reviewTurn';
-import { CLAUDE_REVIEWER_AGENT, installedCodexReviewerProblem, installedReviewerProblem, isAppWrittenAgent, planReviewerAgents, reviewerAgentFile, type AgentsDir, type InstalledReviewer, type PlannedReviewerAgent } from './reviewerAgents';
+import { reviewRoster } from './reviewTurn';
+import { CLAUDE_REVIEWER_AGENT, installedCodexReviewerProblem, installedReviewerProblem, renderReviewerAgent, isAppWrittenAgent, isClaudeReviewerFile, type AgentsDir, type InstalledReviewer } from './reviewerAgents';
+
+import { isResolvedReviewerFile, resolvedReviewerFile, resolvedReviewerName, RUN_REVIEWER_FILE_GLOB } from './resolvedReviewer';
+import { bindsNoSurvivingEngine, DEFAULT_LOOP_NAMESPACE } from '../shared/loopNamespace';
+import { repairAdvice, within } from './fileRepairAdvice';
+import { readBoundedNoFollow } from './boundedRead';
+import { readDirEntries } from './dirEntries';
 
 const RUN_AGENTS_SEGMENTS = ['.claude', 'agents'] as const;
-const EXCLUDE_LINE = `/${RUN_AGENTS_SEGMENTS.join('/')}/${reviewerAgentFile(CLAUDE_REVIEWER_AGENT, '*', '*')}`;
+const RUN_REVIEWER_PATTERN = `${RUN_AGENTS_SEGMENTS.join('/')}/${RUN_REVIEWER_FILE_GLOB}`;
+const EXCLUDE_LINE = `/${RUN_REVIEWER_PATTERN}`;
+
+export const REVIEWERS_REMOVED_NOTICE = 'Run reviewers removed. Restart the agent session to unload its previously loaded reviewers.';
 
 export interface EnsureRunReviewersResult {
   wrote: string[];
@@ -26,6 +35,15 @@ export function runAgentsDir(runFolder: string): AgentsDir {
   return { dir: path.join(runFolder, ...RUN_AGENTS_SEGMENTS), jail: resolveJail(runFolder, ...RUN_AGENTS_SEGMENTS) };
 }
 
+export function installedReviewerPath(runFolder: string, reviewer: InstalledReviewer): string {
+  return path.join(runAgentsDir(runFolder).dir, resolvedReviewerFile(reviewer));
+}
+
+/** Generated reviewers from this scheme, and from the earlier `<loop>--<persona>` scheme the run folder may still hold. */
+function isGeneratedReviewerFile(name: string): boolean {
+  return isResolvedReviewerFile(name) || isClaudeReviewerFile(name);
+}
+
 /** A file whose time cannot be read counts as newer, so the turn is refused rather than run unloaded. */
 function writtenAtOrAfter(file: string, instant: number): boolean {
   try {
@@ -33,21 +51,6 @@ function writtenAtOrAfter(file: string, instant: number): boolean {
   } catch {
     return true;
   }
-}
-
-function charterProblem(reviewer: InstalledReviewer, shipped: string): string | null {
-  let ours: Buffer;
-  try {
-    ours = readFileSync(reviewer.charter);
-  } catch (e) {
-    return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
-  }
-  try {
-    if (ours.equals(readFileSync(shipped))) return null;
-  } catch (e) {
-    return `cannot read the app's charter ${shipped}: ${errMsg(e)}`;
-  }
-  return `the ${reviewer.persona} reviewer of ${reviewer.loop} resolves the charter ${reviewer.charter}, not the one the app ships: run Install examples to update your loops (an edited or overridden charter cannot run its reviewer)`;
 }
 
 function isFileAt(file: string): boolean {
@@ -80,13 +83,14 @@ function commonGitDir(runFolder: string): { ok: true; dir: string | null } | { o
     isDir = st.isDirectory();
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { ok: true, dir: null };
-    return { ok: false, problem: `cannot read ${dotGit}: ${errMsg(e)}` };
+    return { ok: false, problem: `cannot read ${dotGit}: ${errMsg(e)}. ${repairAdvice(e, dotGit, 'read', within(resolveJail(runFolder)))}` };
   }
   if (isDir) return { ok: true, dir: dotGit };
+  let gitDir: string | null = null;
   try {
     const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'));
     if (m === null) return { ok: false, problem: `${dotGit} names no git folder` };
-    const gitDir = path.resolve(runFolder, m[1]);
+    gitDir = path.resolve(runFolder, m[1]);
     if (!isFileAt(path.join(gitDir, 'HEAD'))) return { ok: false, problem: `${dotGit} points at ${gitDir}, which is not a git folder` };
     const backLink = readOrNull(path.join(gitDir, 'gitdir'));
     if (backLink !== null && realpathBounded(path.resolve(gitDir, backLink.toString('utf8').trim())) !== realpathSync(dotGit)) {
@@ -101,7 +105,9 @@ function commonGitDir(runFolder: string): { ok: true; dir: string | null } | { o
     }
     return { ok: true, dir: common };
   } catch (e) {
-    return { ok: false, problem: `cannot read the git folder ${dotGit} points at: ${errMsg(e)}` };
+    const file = e instanceof Error && 'path' in e && typeof e.path === 'string' ? e.path : dotGit;
+    const jail = file === dotGit || gitDir === null ? resolveJail(runFolder) : resolveOwnedDirJail(gitDir);
+    return { ok: false, problem: `cannot inspect Git metadata ${file}: ${errMsg(e)}. ${repairAdvice(e, file, 'read', within(jail))}` };
   }
 }
 
@@ -137,7 +143,7 @@ function ensureExcluded(runFolder: string): string | null {
     }
     return null;
   } catch (e) {
-    return `cannot add the reviewers to ${exclude}: ${errMsg(e)}`;
+    return `cannot add the reviewers to ${exclude}: ${errMsg(e)}. ${repairAdvice(e, exclude, 'read-write')}`;
   }
 }
 
@@ -163,7 +169,7 @@ function gitWouldSee(runFolder: string, rels: readonly string[]): string | null 
     const rule = line.slice(0, tab);
     const pattern = rule.split(':').slice(2).join(':');
     if (rule === '::') return `git would not ignore ${line.slice(tab + 1)}: no rule hides it, so it could be committed`;
-    if (pattern.startsWith('!')) return `git would not ignore ${line.slice(tab + 1)}, because ${rule} un-ignores it: narrow that rule so it leaves .claude/agents/*--*.md ignored, then Retry`;
+    if (pattern.startsWith('!')) return `git would not ignore ${line.slice(tab + 1)}, because ${rule} un-ignores it: narrow that rule so it leaves ${RUN_REVIEWER_PATTERN} ignored, then Retry`;
   }
   return null;
 }
@@ -176,102 +182,162 @@ function ensureRealDirs(runFolder: string): string | null {
     try {
       if (!lstatSync(dir).isDirectory()) return `${dir} is not a real folder`;
     } catch (e) {
-      if (!isErrno(e, 'ENOENT')) return `cannot read ${dir}: ${errMsg(e)}`;
+      if (!isErrno(e, 'ENOENT')) return `cannot read ${dir}: ${errMsg(e)}. ${repairAdvice(e, dir, 'change-folder')}`;
       try {
         mkdirSync(dir);
       } catch (err) {
-        return `cannot create ${dir}: ${errMsg(err)}`;
+        return `cannot create ${dir}: ${errMsg(err)}. ${repairAdvice(err, dir, 'change-folder')}`;
       }
     }
   }
   return null;
 }
 
-export function ensureRunReviewers(runFolder: string, reviewers: readonly InstalledReviewer[], bundleDir: string): EnsureRunReviewersResult {
-  const result: EnsureRunReviewersResult = { wrote: [], problems: [] };
-  if (reviewers.length === 0) return result;
-  const agents = runAgentsDir(runFolder);
-  if (agents.jail === null) return { wrote: [], problems: [`the run folder ${runFolder} cannot be resolved`] };
-  let bundled: Map<string, PlannedReviewerAgent>;
+const MAX_REVIEWER_BYTES = 16 * 1024 * 1024;
+
+function readCharter(file: string): string {
+  const read = readBoundedNoFollow(file, MAX_REVIEWER_BYTES, 'keep');
+  if (!read.ok) throw read.error ?? new Error(`${file}: ${read.cause === 'absent' ? 'missing file' : read.cause}`);
+  if (read.text.trim().length === 0) throw new Error('the charter is empty');
+  return read.text;
+}
+
+function obsoleteReviewers(agents: AgentsDir & { jail: string }, wanted: ReadonlySet<string>): { files: string[]; problems: string[] } {
+  const files: string[] = [];
+  const problems: string[] = [];
+  const dir = confinedRealPathResult(agents.jail, agents.dir);
+  if (!dir.ok) {
+    return { files, problems: [dir.cause === 'escapes'
+      ? `${agents.dir} is not a real folder; restore the reviewer directory, then Retry.`
+      : `Cannot inspect reviewers in ${agents.dir}: ${errMsg(dir.error)}. ${repairAdvice(dir.error, agents.dir, 'change-folder')}`] };
+  }
   try {
-    bundled = new Map(planReviewerAgents(bundleDir, CLAUDE_REVIEWER_AGENT).map((a) => [a.rel, a]));
-  } catch (e) {
-    return { wrote: [], problems: [`the app's bundled reviewers cannot be rendered: ${errMsg(e)}`] };
+    for (const { name } of readDirEntries(dir.path)) {
+      if (!isGeneratedReviewerFile(name) || wanted.has(name)) continue;
+      const file = path.join(agents.dir, name);
+      const read = readBoundedNoFollow(path.join(dir.path, name), MAX_REVIEWER_BYTES * 2);
+      if (!read.ok) {
+        problems.push(read.error
+          ? `Cannot inspect obsolete reviewer ${file}: ${errMsg(read.error)}. ${repairAdvice(read.error, file, 'read', within(agents.jail))}`
+          : `Cannot inspect obsolete reviewer ${file}: ${read.cause}. Restore or remove that reviewer file, then Retry.`);
+      } else if (isAppWrittenAgent(read.text)) files.push(file);
+    }
+  } catch (error) {
+    problems.push(`Cannot inspect reviewers in ${agents.dir}: ${errMsg(error)}. ${repairAdvice(error, agents.dir, 'change-folder')}`);
   }
-  const wanted = new Map<string, PlannedReviewerAgent>();
+  return { files, problems };
+}
+
+export type DeclaredReviewer = InstalledReviewer & { definitionFile: string };
+
+export interface ReviewerCatalog {
+  reviewers: readonly DeclaredReviewer[];
+  problems: readonly string[];
+}
+
+/** Installs every reviewer of `catalog` and removes the generated reviewers it no longer names. */
+export function reconcileRunReviewers(runFolder: string, { reviewers, problems }: ReviewerCatalog): EnsureRunReviewersResult {
+  const result: EnsureRunReviewersResult = { wrote: [], problems: [...problems] };
+  if (problems.length > 0 && reviewers.length === 0) return result;
+  const runAgents = runAgentsDir(runFolder);
+  const jail = runAgents.jail;
+  if (jail === null) return { wrote: [], problems: [`the run folder ${runFolder} cannot be resolved`] };
+  const agents = { dir: runAgents.dir, jail };
+  const wanted = new Map<string, Buffer>();
   for (const reviewer of reviewers) {
-    const rel = reviewerAgentFile(CLAUDE_REVIEWER_AGENT, reviewer.loop, reviewer.persona);
-    const entry = bundled.get(rel);
-    if (entry === undefined) {
-      result.problems.push(`the app does not ship the reviewer ${reviewer.persona} of ${reviewer.loop}`);
+    let charter: string;
+    try {
+      charter = readCharter(reviewer.charter);
+    } catch (e) {
+      result.problems.push(`cannot read the charter ${reviewer.charter} for reviewer ${reviewer.persona} of ${reviewer.loop}: ${errMsg(e)}. ${repairAdvice(e, reviewer.charter, 'read')}`);
       continue;
     }
-    const charter = charterProblem(reviewer, entry.src);
-    if (charter !== null) {
-      result.problems.push(charter);
-      continue;
+    try {
+      wanted.set(resolvedReviewerFile(reviewer), Buffer.from(renderReviewerAgent({ ...reviewer, charter }, resolvedReviewerName(reviewer))));
+    } catch (e) {
+      result.problems.push(`cannot render reviewer ${reviewer.persona} of ${reviewer.loop}: ${errMsg(e)}. Correct that reviewer's declaration in ${reviewer.definitionFile}, then Retry.`);
     }
-    wanted.set(rel, entry);
   }
-  if (wanted.size === 0) return result;
-  const excludeProblem = ensureExcluded(runFolder);
-  if (excludeProblem !== null) return { wrote: [], problems: [...result.problems, excludeProblem] };
+  if (result.problems.length > 0) return result;
+  const affected = reviewers.map((reviewer) => `${reviewer.persona} of ${reviewer.loop}`).join(', ');
+  const obsolete = obsoleteReviewers(agents, new Set(wanted.keys()));
+  result.problems.push(...obsolete.problems.map((problem) => (affected === '' ? problem : `${affected}: ${problem}`)));
+  if (result.problems.length > 0) return result;
+  if (wanted.size === 0 && obsolete.files.length === 0) return result;
+  const excludeProblem = wanted.size === 0 ? null : ensureExcluded(runFolder);
+  if (excludeProblem !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${excludeProblem}. Correct the exclusion and Retry.`] };
   const dirProblem = ensureRealDirs(runFolder);
-  if (dirProblem !== null) return { wrote: [], problems: [...result.problems, dirProblem] };
-  const pending: { rel: string; file: string; real: string; bytes: Buffer }[] = [];
-  for (const [rel, entry] of wanted) {
+  if (dirProblem !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${dirProblem}. Correct the destination and Retry.`] };
+  const container = confinedRealPathResult(agents.jail, agents.dir);
+  if (!container.ok) return { wrote: [], problems: [...result.problems, `${affected}: ${agents.dir} is not a real folder inside ${runFolder}. Correct the destination and Retry.`] };
+  const pending: { rel: string; file: string; bytes: Buffer }[] = [];
+  for (const [rel, bytes] of wanted) {
     const file = path.join(agents.dir, rel);
     const real = confinedRealPathResult(agents.jail, file);
     if (!real.ok) {
-      result.problems.push(`the sub-agent file ${file} is not inside ${agents.dir}`);
+      result.problems.push(real.cause === 'escapes'
+        ? `${affected}: the sub-agent file ${file} is not inside ${agents.dir}. Correct the destination reference or link, then Retry.`
+        : `${affected}: cannot resolve ${file}: ${errMsg(real.error)}. ${repairAdvice(real.error, file, 'read-write', within(agents.jail))}`);
       continue;
     }
     try {
-      const bytes = entry.bytes();
-      const current = readOrNull(real.path);
-      if (current !== null && current.equals(bytes)) continue;
-      if (current !== null && !isAppWrittenAgent(current.toString('utf8'))) {
-        result.problems.push(`${file} was not written by the app, so it is left as it is: move it away so the app can install its reviewer there`);
+      const st = lstatSync(real.path);
+      if (!st.isFile()) {
+        result.problems.push(`${affected}: ${file} is not a regular file. Replace it with a regular reviewer file or remove the obstruction, then Retry.`);
         continue;
       }
-      pending.push({ rel, file, real: real.path, bytes });
+      const read = readBoundedNoFollow(real.path, MAX_REVIEWER_BYTES * 2);
+      // Retirement changes the loaded roster too: rewrite retained files so the existing session-age
+      // check requires a restart, even when their contents have not changed.
+      if (read.ok && Buffer.from(read.text).equals(bytes) && obsolete.files.length === 0) continue;
     } catch (e) {
-      result.problems.push(`cannot write ${file}: ${errMsg(e)}`);
+      if (!isErrno(e, 'ENOENT')) {
+        result.problems.push(`${affected}: cannot inspect ${file}: ${errMsg(e)}. ${repairAdvice(e, file, 'read-write')}`);
+        continue;
+      }
     }
+    pending.push({ rel, file, bytes });
   }
-  if (pending.length === 0) return result;
-  const visible = gitWouldSee(runFolder, pending.map((p) => [...RUN_AGENTS_SEGMENTS, p.rel].join('/')));
-  if (visible !== null) return { wrote: [], problems: [...result.problems, visible] };
-  for (const { file, real, bytes } of pending) {
+  if (result.problems.length > 0) return result;
+  const visible = pending.length === 0 ? null : gitWouldSee(runFolder, pending.map((p) => [...RUN_AGENTS_SEGMENTS, p.rel].join('/')));
+  if (visible !== null) return { wrote: [], problems: [...result.problems, `${affected}: ${visible}`] };
+  // Written by name inside the confined folder, so a destination that is a link is replaced, never followed.
+  for (const { rel, file, bytes } of pending) {
     try {
-      if (!atomicWriteFileSync(real, bytes, { mode: 0o644 })) {
+      if (!atomicWriteFileSync(path.join(container.path, rel), bytes, { mode: 0o644 })) {
         result.problems.push(`cannot write ${file}: its folder is not a real folder`);
         continue;
       }
       result.wrote.push(file);
     } catch (e) {
-      result.problems.push(`cannot write ${file}: ${errMsg(e)}`);
+      result.problems.push(`${affected}: cannot write ${file}: ${errMsg(e)}. ${repairAdvice(e, path.dirname(file), 'change-folder')}`);
+    }
+  }
+  if (result.problems.length === 0) for (const file of obsolete.files) {
+    // Confined again at removal, so a folder swapped since the scan is refused; unlink never follows the leaf.
+    const dir = confinedRealPathResult(agents.jail, agents.dir);
+    if (!dir.ok) { result.problems.push(`${agents.dir} is not a real folder; restore the reviewer directory, then Retry.`); break; }
+    try {
+      unlinkSync(path.join(dir.path, path.basename(file)));
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) result.problems.push(`Cannot remove obsolete reviewer ${file}: ${errMsg(error)}. ${repairAdvice(error, path.dirname(file), 'change-folder')}`);
     }
   }
   return result;
 }
 
-/** A session loads sub-agents only when it starts, so a reviewer file written at or after `sessionStartedAt`
- *  (or just now) is one the running session has not loaded. */
-export function runReviewerProblems(runFolder: string, reviewers: readonly InstalledReviewer[], bundleDir: string, sessionStartedAt: number | null): string[] {
-  const ensured = ensureRunReviewers(runFolder, reviewers, bundleDir);
+export function removeRunReviewers(runFolder: string): string[] {
+  return reconcileRunReviewers(runFolder, { reviewers: [], problems: [] }).problems;
+}
+
+/** Why each reviewer cannot run in the current session; writes nothing. A session loads sub-agents only when it
+ *  starts, so a reviewer file written at or after `sessionStartedAt` is one the running session has not loaded. */
+export function runReviewersLoadedProblems(runFolder: string, reviewers: readonly InstalledReviewer[], sessionStartedAt: number | null): string[] {
   const agents = runAgentsDir(runFolder);
   const unrunnable = reviewers.map((r) => installedReviewerProblem(agents, r)).filter((p): p is string => p !== null);
-  const problems = [...ensured.problems, ...unrunnable];
-  if (problems.length > 0) return problems;
-  const newer =
-    ensured.wrote.length > 0
-      ? ensured.wrote
-      : sessionStartedAt === null
-        ? []
-        : reviewers
-            .map((r) => path.join(agents.dir, reviewerAgentFile(CLAUDE_REVIEWER_AGENT, r.loop, r.persona)))
-            .filter((file) => writtenAtOrAfter(file, sessionStartedAt));
+  if (unrunnable.length > 0) return unrunnable;
+  if (sessionStartedAt === null) return [];
+  const newer = reviewers.map((r) => installedReviewerPath(runFolder, r)).filter((file) => writtenAtOrAfter(file, sessionStartedAt));
   if (newer.length === 0) return [];
   return [`the reviewers ${newer.map((f) => path.basename(f, CLAUDE_REVIEWER_AGENT.extension)).join(', ')} were installed in ${agents.dir} after your agent session started, so it has not loaded them: restart it in ${runFolder}`];
 }
@@ -281,36 +347,35 @@ export function reviewerInstallNotice(result: EnsureRunReviewersResult, runningA
   if (result.wrote.length > 0 && runningAgent === 'claude-code') {
     parts.push('Restart your agent session in the run folder (for example claude --continue) before the first review: its reviewers were installed after the session started.');
   }
-  const n = result.problems.length;
-  if (n > 0) {
-    const first = result.problems[0].replace(/\.$/, '');
-    parts.push(
-      n === 1
-        ? `A reviewer could not be installed in this run folder, so its review turn will stop: ${first}.`
-        : `${n} reviewer problems in this run folder, so those review turns will stop and say what to fix. The first: ${first}.`,
-    );
+  if (result.problems.length > 0) {
+    parts.push(`Reviewer installation failed; the flow must stay stopped until repaired:\n${result.problems.join('\n')}`);
   }
   return parts.length === 0 ? null : parts.join(' ');
 }
 
-export function flowReviewers(steps: readonly Pick<FlowStepDef, 'kind' | 'loop'>[], resolve: (loop: string) => LoopDefV2Result): RosterEntry[] {
-  return steps.flatMap((step) => {
-    if (step.kind !== 'loop' || step.loop === undefined) return [];
+export function flowReviewers(steps: readonly Pick<FlowStepDef, 'kind' | 'loop' | 'loopNamespace'>[], resolve: (loop: string) => LoopDefV2Result): ReviewerCatalog {
+  const problems: string[] = [];
+  const reviewers = steps.flatMap((step) => {
+    if (step.kind !== 'loop' || step.loop === undefined || bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) return [];
     const def = resolve(step.loop);
-    return def.ok ? reviewRoster(def.def) : [];
+    if (!def.ok) {
+      problems.push(`Cannot resolve reviewers for ${step.loop}: ${def.reason}. Correct the reported problem and Retry.`);
+    }
+    const source = def.ok ? { catalog: def.def, definitionFile: def.definitionFile } : def.reviewerDiagnostics && { catalog: def.reviewerDiagnostics, definitionFile: def.reviewerDiagnostics.definitionFile };
+    return source === undefined ? [] : reviewRoster(source.catalog).map((reviewer) => ({ ...reviewer, definitionFile: source.definitionFile }));
   });
+  return { reviewers, problems };
 }
 
 export interface ReviewerCheckDeps {
-  bundleDir: string;
   codexAgentsDir: string | null;
   sessionStartedAt: () => number | null;
 }
 
-export function ensureReviewersRunnable(kind: AgentKind, runFolder: string, reviewers: readonly InstalledReviewer[], deps: ReviewerCheckDeps): string[] {
+export function unrunnableReviewers(kind: AgentKind, runFolder: string, reviewers: readonly InstalledReviewer[], deps: ReviewerCheckDeps): string[] {
   switch (reviewerHome(kind)) {
     case 'run-folder':
-      return runReviewerProblems(runFolder, reviewers, deps.bundleDir, deps.sessionStartedAt());
+      return runReviewersLoadedProblems(runFolder, reviewers, deps.sessionStartedAt());
     case 'codex-home':
       return reviewers.map((r) => installedCodexReviewerProblem(deps.codexAgentsDir, r)).filter((p): p is string => p !== null);
   }
